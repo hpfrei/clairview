@@ -267,6 +267,7 @@ function handleMessage(msg) {
     case 'chat:output':
     case 'chat:error':
     case 'chat:status':
+    case 'chat:tabs':
     case 'ask:question':
     case 'ask:answered':
     case 'ask:timeout':
@@ -288,6 +289,21 @@ function handleMessage(msg) {
     case 'profile:list':
       window.capabilitiesModule?.handleMessage(msg);
       window.chatModule?.updateProfiles(msg.profiles);
+      break;
+
+    // Workflows
+    case 'workflow:list':
+    case 'workflow:loaded':
+    case 'workflow:generated':
+    case 'workflow:compile:progress':
+    case 'workflow:compiled':
+    case 'workflow:error':
+    case 'workflow:run:started':
+    case 'workflow:step:start':
+    case 'workflow:step:progress':
+    case 'workflow:step:complete':
+    case 'workflow:run:complete':
+      window.workflowModule?.handleMessage(msg);
       break;
 
     // MCP
@@ -360,7 +376,7 @@ document.getElementById('headerTabs').addEventListener('click', e => {
   document.querySelectorAll('.header-tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
 
-  const views = ['view-dashboard', 'view-claude', 'view-capabilities'];
+  const views = ['view-dashboard', 'view-claude', 'view-capabilities', 'view-workflows'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;

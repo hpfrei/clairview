@@ -24,6 +24,7 @@
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab active" data-view="claude">Claude</button>
         <button class="header-tab" data-view="capabilities">Profiles</button>
+        <button class="header-tab" data-view="workflows">Workflows</button>
       </nav>
     </div>
     <div class="header-center">
@@ -44,6 +45,11 @@
     <aside id="timeline">
       <div id="timeline-header">
         <span>Timeline</span>
+        <select id="timelineFilter" class="timeline-filter" title="Filter interactions">
+          <option value="all">All</option>
+          <option value="api">API only</option>
+          <option value="mcp">MCP only</option>
+        </select>
       </div>
       <div id="timeline-list"></div>
     </aside>
@@ -58,6 +64,10 @@
 
   <!-- ===== CLAUDE VIEW ===== -->
   <div id="view-claude">
+    <div class="chat-tab-strip" id="chatTabStrip">
+      <button class="chat-tab active" data-tab-id="tab-1">Tab 1</button>
+      <button class="chat-tab-new" id="chatTabNew" title="New tab">+</button>
+    </div>
     <div class="chat-container">
       <div class="chat-messages" id="chatMessages">
         <div class="chat-welcome">
@@ -1998,6 +2008,93 @@ jq -r '.tool_input.command' |
       </div>
     </div>
 
+  <!-- ===== WORKFLOWS VIEW ===== -->
+  <div id="view-workflows" class="hidden" style="display:none">
+    <div class="ref-container">
+      <div class="ref-intro">
+        <strong>Workflows</strong> automate multi-step AI tasks. Each step runs a full
+        <code>claude -p</code> session with its own profile.
+      </div>
+      <div class="cap-section-header">
+        <span>Workflows in <code>capabilities/workflows/</code></span>
+        <button class="cap-new-btn" id="wfNewBtn">+ New</button>
+      </div>
+      <div class="wf-error-bar hidden" id="wfErrorBar"></div>
+      <div class="cap-list" id="wfList"></div>
+    </div>
+  </div>
+
+  <!-- Workflow Edit Modal -->
+  <div class="cap-modal-backdrop hidden" id="wfModal">
+    <div class="cap-modal cap-modal-wide">
+      <div class="cap-modal-header">
+        <h3 id="wfModalTitle">New Workflow</h3>
+        <button class="cap-modal-close" id="wfModalClose">&times;</button>
+      </div>
+      <div class="cap-modal-body">
+        <div class="pm-field-row">
+          <label>Name: <input type="text" id="wfName" placeholder="my-workflow"></label>
+          <label>Working Directory: <input type="text" id="wfCwd" placeholder="/home/user/project"></label>
+        </div>
+        <div class="pm-field-row">
+          <label class="pm-wide">Description:
+            <input type="text" id="wfDesc" placeholder="Describe what this workflow should do (also used as the generate prompt)">
+          </label>
+        </div>
+        <!-- Tab bar -->
+        <div class="wf-modal-tabbar">
+          <button class="wf-modal-tab active" id="wfTabSource">Source JSON</button>
+          <button class="wf-modal-tab disabled" id="wfTabCompiled">Compiled JS</button>
+          <div style="flex:1"></div>
+          <button class="cap-new-btn wf-compile-btn" id="wfCompileBtn">Compile</button>
+        </div>
+        <!-- Code editor (shared textarea, content swapped by tab) -->
+        <textarea id="wfTextarea" class="cap-modal-code" spellcheck="false" rows="18"></textarea>
+        <!-- Redo bar (only after generate) -->
+        <div id="wfRedoBar" class="hidden" style="display:flex; gap:8px; margin-top:8px">
+          <input type="text" id="wfRedoInput" placeholder="What should be different..."
+            style="flex:1; background:var(--bg); border:1px solid var(--border); color:var(--text);
+                   border-radius:4px; padding:4px 8px; font-size:12px">
+          <button class="cap-new-btn" id="wfRedoBtn">Redo</button>
+        </div>
+        <!-- Log area -->
+        <div id="wfLog" class="wf-modal-log hidden"></div>
+      </div>
+      <div class="cap-modal-footer">
+        <button class="cap-cancel-btn" id="wfModalCancel">Cancel</button>
+        <button class="cap-save-btn" id="wfGenerateBtn" style="background:var(--cyan); border-color:var(--cyan)">Generate</button>
+        <button class="cap-save-btn" id="wfSaveOnly" style="background:var(--bg-hover); color:var(--text); border-color:var(--border)">Save Draft</button>
+        <button class="cap-save-btn" id="wfSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Workflow Run Modal -->
+  <div class="cap-modal-backdrop hidden" id="wfRunModal">
+    <div class="cap-modal cap-modal-wide">
+      <div class="cap-modal-header">
+        <h3 id="wfRunTitle">Test Workflow</h3>
+        <div style="display:flex; gap:8px; align-items:center">
+          <span id="wfRunStatus" class="ref-tag tag-ro">ready</span>
+          <button class="cap-modal-close" id="wfRunClose">&times;</button>
+        </div>
+      </div>
+      <div class="cap-modal-body">
+        <div id="wfRunInputs" class="pm-form-group"></div>
+        <div id="wfRunSteps" class="pm-form-group hidden">
+          <h4>Steps</h4>
+          <div id="wfRunStepList" class="cap-list"></div>
+        </div>
+      </div>
+      <div class="cap-modal-footer">
+        <button class="cap-cancel-btn" id="wfRunCancel">Close</button>
+        <button class="cap-save-btn wf-run-btn" id="wfRunStart">Run</button>
+        <button class="cap-del-btn wf-stop-btn hidden" id="wfRunStop"
+          style="padding:6px 20px; border-radius:4px">Stop</button>
+      </div>
+    </div>
+  </div>
+
   <div id="mcp-modal-root"></div>
   <script src="core.js"></script>
   <script src="inspector.js"></script>
@@ -2005,5 +2102,6 @@ jq -r '.tool_input.command' |
   <script src="capabilities.js"></script>
   <script src="tasks.js"></script>
   <script src="mcp.js"></script>
+  <script src="workflows.js"></script>
 </body>
 </html>

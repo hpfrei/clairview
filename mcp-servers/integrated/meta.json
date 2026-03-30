@@ -1,0 +1,74 @@
+{
+  "name": "claude-doc-tools",
+  "version": "1.0.0",
+  "scope": "project",
+  "env": {},
+  "secrets": {},
+  "tools": [
+    {
+      "slug": "workflow-list",
+      "name": "workflow_list",
+      "description": "List all available workflows with their status (draft, compiled, needs-compile)",
+      "enabled": true,
+      "file": "workflow-list.js",
+      "params": [],
+      "handlerBody": "const http = await import('http');\n  const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';\n  const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';\n  \n  return new Promise((resolve) => {\n    const req = http.request({\n      hostname: '127.0.0.1', port: dashPort, path: '/login',\n      method: 'POST',\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': 'token=' + token }\n    }, () => {});\n    req.end();\n    \n    // Use WebSocket to query\n    const { WebSocket } = await import('ws');\n    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });\n    const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Timeout waiting for workflow list' }] }); }, 5000);\n    ws.on('message', (data) => {\n      const msg = JSON.parse(data.toString());\n      if (msg.type === 'workflow:list') {\n        clearTimeout(timeout);\n        ws.close();\n        resolve({ content: [{ type: 'text', text: JSON.stringify(msg.workflows, null, 2) }] });\n      }\n    });\n    ws.on('open', () => ws.send(JSON.stringify({ type: 'workflow:list' })));\n    ws.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });\n  });"
+    },
+    {
+      "slug": "workflow-run",
+      "name": "workflow_run",
+      "description": "Execute a compiled workflow by name with the given inputs. Returns the run ID. Each step runs a full claude -p session.",
+      "enabled": true,
+      "file": "workflow-run.js",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "description": "Name of the workflow to run",
+          "required": true
+        },
+        {
+          "name": "inputs",
+          "type": "object",
+          "description": "Input values for the workflow (key-value pairs)",
+          "required": false
+        }
+      ],
+      "handlerBody": "const { WebSocket } = await import('ws');\n  const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';\n  const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';\n  \n  return new Promise((resolve) => {\n    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });\n    const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Timeout starting workflow' }] }); }, 10000);\n    \n    ws.on('message', (data) => {\n      const msg = JSON.parse(data.toString());\n      if (msg.type === 'workflow:run:started') {\n        clearTimeout(timeout);\n        // Wait for completion\n        const runTimeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Run ' + msg.runId + ' started but timed out waiting for completion (still running in background)' }] }); }, 300000);\n        ws.on('message', (d2) => {\n          const m2 = JSON.parse(d2.toString());\n          if (m2.type === 'workflow:run:complete' && m2.runId === msg.runId) {\n            clearTimeout(runTimeout);\n            ws.close();\n            resolve({ content: [{ type: 'text', text: 'Workflow completed. Status: ' + m2.status + ', Run ID: ' + msg.runId }] });\n          }\n        });\n      } else if (msg.type === 'workflow:error') {\n        clearTimeout(timeout);\n        ws.close();\n        resolve({ content: [{ type: 'text', text: 'Error: ' + (msg.error || 'Unknown') }] });\n      }\n    });\n    ws.on('open', () => ws.send(JSON.stringify({ type: 'workflow:run', name, inputs: inputs || {} })));\n    ws.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });\n  });"
+    },
+    {
+      "slug": "workflow-status",
+      "name": "workflow_status",
+      "description": "Get the current status of a running workflow, including which step is active and outputs so far",
+      "enabled": true,
+      "file": "workflow-status.js",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "string",
+          "description": "The run ID returned by workflow_run",
+          "required": true
+        }
+      ],
+      "handlerBody": "const { WebSocket } = await import('ws');\n  const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';\n  const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';\n  \n  return new Promise((resolve) => {\n    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });\n    const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Timeout getting status' }] }); }, 5000);\n    ws.on('message', (data) => {\n      const msg = JSON.parse(data.toString());\n      if (msg.type === 'workflow:run:status') {\n        clearTimeout(timeout);\n        ws.close();\n        resolve({ content: [{ type: 'text', text: JSON.stringify(msg, null, 2) }] });\n      } else if (msg.type === 'workflow:error') {\n        clearTimeout(timeout);\n        ws.close();\n        resolve({ content: [{ type: 'text', text: 'Error: ' + (msg.error || 'Unknown') }] });\n      }\n    });\n    ws.on('open', () => ws.send(JSON.stringify({ type: 'workflow:run:status', runId: run_id })));\n    ws.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });\n  });"
+    },
+    {
+      "slug": "workflow-cancel",
+      "name": "workflow_cancel",
+      "description": "Cancel a running workflow",
+      "enabled": true,
+      "file": "workflow-cancel.js",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "string",
+          "description": "The run ID to cancel",
+          "required": true
+        }
+      ],
+      "handlerBody": "const { WebSocket } = await import('ws');\n  const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';\n  const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';\n  \n  return new Promise((resolve) => {\n    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });\n    const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Cancel sent' }] }); }, 3000);\n    ws.on('open', () => {\n      ws.send(JSON.stringify({ type: 'workflow:run:cancel', runId: run_id }));\n      clearTimeout(timeout);\n      setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Cancel request sent for run ' + run_id }] }); }, 500);\n    });\n    ws.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });\n  });"
+    }
+  ],
+  "createdAt": "2026-03-27T17:49:40.118Z",
+  "updatedAt": "2026-03-29T11:42:22.771Z"
+}

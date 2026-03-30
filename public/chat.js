@@ -1,18 +1,35 @@
 // ============================================================
-// CHAT MODULE — Claude chat, ask-user-question, toolbar
+// CHAT MODULE — Tab-aware Claude chat, ask-user-question, toolbar
 // ============================================================
 (function chatModule() {
   const { state, escHtml, sendWs } = window.dashboard;
 
-  // --- DOM refs ---
+  // --- Tab state ---
+  const tabs = new Map(); // tabId → { container, currentEl, status }
+  let activeTabId = 'tab-1';
+
+  // --- DOM refs (shared) ---
+  const chatContainer = document.querySelector('#view-claude .chat-container');
   const chatMessages = document.getElementById('chatMessages');
   const chatInput = document.getElementById('chatInput');
   const chatSendBtn = document.getElementById('chatSendBtn');
   const chatStopBtn = document.getElementById('chatStopBtn');
   const welcomeHTML = chatMessages?.querySelector('.chat-welcome')?.outerHTML || '';
   const chatStatusEl = document.getElementById('chatStatus');
+  const tabStrip = document.getElementById('chatTabStrip');
+  const tabNewBtn = document.getElementById('chatTabNew');
+
+  // Register default tab
+  if (chatMessages) {
+    tabs.set('tab-1', { container: chatMessages, currentEl: null, status: 'idle' });
+  }
 
   let chatAutoScroll = true;
+
+  function getActiveMessages() {
+    const tab = tabs.get(activeTabId);
+    return tab?.container || chatMessages;
+  }
 
   chatMessages?.addEventListener('scroll', () => {
     const el = chatMessages;
@@ -20,9 +37,85 @@
   });
 
   function chatScrollToBottom() {
-    if (chatAutoScroll && chatMessages) {
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+    const el = getActiveMessages();
+    if (chatAutoScroll && el) {
+      el.scrollTop = el.scrollHeight;
     }
+  }
+
+  // --- Tab strip ---
+
+  function renderTabStrip(tabList) {
+    if (!tabStrip) return;
+    // Remove existing tab buttons (keep the + button)
+    tabStrip.querySelectorAll('.chat-tab').forEach(b => b.remove());
+    const list = tabList || Array.from(tabs.keys());
+    for (const tabId of list) {
+      const btn = document.createElement('button');
+      btn.className = 'chat-tab' + (tabId === activeTabId ? ' active' : '');
+      btn.dataset.tabId = tabId;
+      const label = tabId.startsWith('wf-') ? tabId : tabId.replace('tab-', 'Tab ');
+      btn.innerHTML = escHtml(label);
+      if (tabId !== 'tab-1') {
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'chat-tab-close';
+        closeBtn.textContent = '\u00d7';
+        closeBtn.title = 'Close tab';
+        btn.appendChild(closeBtn);
+      }
+      tabStrip.insertBefore(btn, tabNewBtn);
+    }
+  }
+
+  tabStrip?.addEventListener('click', (e) => {
+    const closeBtn = e.target.closest('.chat-tab-close');
+    if (closeBtn) {
+      e.stopPropagation();
+      const tab = closeBtn.closest('.chat-tab');
+      const tabId = tab?.dataset.tabId;
+      if (tabId && tabId !== 'tab-1') {
+        sendWs({ type: 'chat:closeTab', tabId });
+        tabs.delete(tabId);
+        if (activeTabId === tabId) switchTab('tab-1');
+        renderTabStrip();
+      }
+      return;
+    }
+    const tabBtn = e.target.closest('.chat-tab');
+    if (tabBtn?.dataset.tabId) {
+      switchTab(tabBtn.dataset.tabId);
+    }
+  });
+
+  tabNewBtn?.addEventListener('click', () => {
+    sendWs({ type: 'chat:newTab' });
+  });
+
+  function switchTab(tabId) {
+    activeTabId = tabId;
+    // Ensure tab exists locally
+    if (!tabs.has(tabId)) {
+      const container = document.createElement('div');
+      container.className = 'chat-messages';
+      container.innerHTML = welcomeHTML;
+      tabs.set(tabId, { container, currentEl: null, status: 'idle' });
+    }
+    // Swap visible container
+    const active = tabs.get(tabId);
+    if (chatContainer && active) {
+      const existing = chatContainer.querySelector('.chat-messages');
+      if (existing && existing !== active.container) {
+        chatContainer.replaceChild(active.container, existing);
+      }
+    }
+    // Update status display
+    updateChatStatus(active.status);
+    // Update tab strip active state
+    tabStrip?.querySelectorAll('.chat-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.tabId === tabId);
+    });
+    // Sync shared state
+    state.chatCurrentEl = active.currentEl;
   }
 
   // --- Send / input ---
@@ -32,9 +125,11 @@
     if (!prompt) return;
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
 
-    appendChatBubble(prompt, 'user');
+    appendChatBubble(prompt, 'user', activeTabId);
+    const tab = tabs.get(activeTabId);
+    if (tab) tab.currentEl = null;
     state.chatCurrentEl = null;
-    sendWs({ type: 'chat:send', prompt });
+    sendWs({ type: 'chat:send', tabId: activeTabId, prompt });
     chatInput.value = '';
     chatInput.style.height = 'auto';
   }
@@ -54,73 +149,95 @@
 
   chatStopBtn?.addEventListener('click', () => {
     if (state.ws?.readyState === WebSocket.OPEN) {
-      sendWs({ type: 'chat:stop' });
+      sendWs({ type: 'chat:stop', tabId: activeTabId });
     }
   });
 
   // --- Bubbles ---
 
-  function appendChatBubble(text, role) {
-    if (!chatMessages) return;
-    const welcome = chatMessages.querySelector('.chat-welcome');
+  function appendChatBubble(text, role, tabId) {
+    const tab = tabs.get(tabId || activeTabId);
+    const container = tab?.container || chatMessages;
+    if (!container) return;
+    const welcome = container.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
 
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble chat-${role}`;
     bubble.textContent = text;
-    chatMessages.appendChild(bubble);
-    chatScrollToBottom();
+    container.appendChild(bubble);
+    if ((tabId || activeTabId) === activeTabId) chatScrollToBottom();
     return bubble;
   }
 
-  function appendChatText(text, role) {
-    if (!chatMessages) return;
-    if (role === 'assistant' && state.chatCurrentEl) {
-      state.chatCurrentEl.textContent += text;
+  function appendChatText(text, role, tabId) {
+    const tid = tabId || activeTabId;
+    const tab = tabs.get(tid);
+    if (!tab) return;
+    if (role === 'assistant' && tab.currentEl) {
+      tab.currentEl.textContent += text;
     } else {
-      state.chatCurrentEl = appendChatBubble(text, role);
+      tab.currentEl = appendChatBubble(text, role, tid);
     }
-    chatScrollToBottom();
+    if (tid === activeTabId) {
+      state.chatCurrentEl = tab.currentEl;
+      chatScrollToBottom();
+    }
   }
 
   // --- Stream event handling ---
 
-  function handleChatEvent(event) {
-    if (!chatMessages) return;
+  function handleChatEvent(event, tabId) {
+    const tid = tabId || activeTabId;
+    const tab = tabs.get(tid);
+    if (!tab) return;
+    const container = tab.container;
+    if (!container) return;
 
     if (event.type === 'content_block_delta') {
       const text = event.delta?.text || '';
       if (text) {
-        if (!state.chatCurrentEl) {
-          state.chatCurrentEl = appendChatBubble('', 'assistant');
+        if (!tab.currentEl) {
+          tab.currentEl = appendChatBubble('', 'assistant', tid);
         }
-        state.chatCurrentEl.textContent += text;
-        chatScrollToBottom();
+        tab.currentEl.textContent += text;
+        if (tid === activeTabId) {
+          state.chatCurrentEl = tab.currentEl;
+          chatScrollToBottom();
+        }
       }
     } else if (event.type === 'result') {
       if (event.result) {
-        if (!state.chatCurrentEl) {
-          state.chatCurrentEl = appendChatBubble('', 'assistant');
+        if (!tab.currentEl) {
+          tab.currentEl = appendChatBubble('', 'assistant', tid);
         }
-        state.chatCurrentEl.textContent = event.result;
-        chatScrollToBottom();
+        tab.currentEl.textContent = event.result;
+        if (tid === activeTabId) chatScrollToBottom();
       }
-      state.chatCurrentEl = null;
+      tab.currentEl = null;
+      if (tid === activeTabId) state.chatCurrentEl = null;
     } else if (event.type === 'message_stop') {
-      state.chatCurrentEl = null;
+      tab.currentEl = null;
+      if (tid === activeTabId) state.chatCurrentEl = null;
     }
   }
 
-  function updateChatStatus(status) {
-    if (chatStatusEl) {
-      chatStatusEl.textContent = status;
-      chatStatusEl.className = `chat-status ${status}`;
-    }
-    if (chatStopBtn) {
-      chatStopBtn.classList.toggle('hidden', status !== 'running');
-    }
-    if (chatSendBtn) {
-      chatSendBtn.disabled = status === 'running';
+  function updateChatStatus(status, tabId) {
+    const tid = tabId || activeTabId;
+    const tab = tabs.get(tid);
+    if (tab) tab.status = status;
+    // Only update DOM if this is the active tab
+    if (tid === activeTabId) {
+      if (chatStatusEl) {
+        chatStatusEl.textContent = status;
+        chatStatusEl.className = `chat-status ${status}`;
+      }
+      if (chatStopBtn) {
+        chatStopBtn.classList.toggle('hidden', status !== 'running');
+      }
+      if (chatSendBtn) {
+        chatSendBtn.disabled = status === 'running';
+      }
     }
   }
 
@@ -152,7 +269,7 @@
   chatCwdSetBtn?.addEventListener('click', () => {
     const cwd = chatCwdInput?.value?.trim();
     if (!cwd) return;
-    sendWs({ type: 'chat:setCwd', cwd });
+    sendWs({ type: 'chat:setCwd', tabId: activeTabId, cwd });
     chatCwdInput.classList.add('hidden');
     chatCwdSetBtn.classList.add('hidden');
     chatCwdLabel.classList.remove('hidden');
@@ -172,7 +289,7 @@
   chatProfileSelect?.addEventListener('change', (e) => {
     const name = e.target.value;
     if (!name) return;
-    sendWs({ type: 'chat:switchProfile', name });
+    sendWs({ type: 'chat:switchProfile', tabId: activeTabId, name });
   });
 
   function renderChatProfileSelect() {
@@ -222,17 +339,21 @@
   // ASK USER QUESTION
   // ============================================================
 
-  function showAskQuestion(toolUseId, questions) {
-    if (!chatMessages) return;
+  function showAskQuestion(toolUseId, questions, tabId) {
+    const tid = tabId || activeTabId;
+    const tab = tabs.get(tid);
+    const container = tab?.container || chatMessages;
+    if (!container) return;
 
-    const welcome = chatMessages.querySelector('.chat-welcome');
+    const welcome = container.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
 
-    // Auto-switch to Claude tab
+    // Auto-switch to Claude tab and correct chat tab
     const claudeTab = document.querySelector('[data-view="claude"]');
     if (claudeTab && !claudeTab.classList.contains('active')) {
       claudeTab.click();
     }
+    if (tid !== activeTabId) switchTab(tid);
 
     const bubble = document.createElement('div');
     bubble.className = 'chat-bubble chat-question';
@@ -333,8 +454,8 @@
       });
     }
 
-    chatMessages.appendChild(bubble);
-    chatScrollToBottom();
+    container.appendChild(bubble);
+    if (tid === activeTabId) chatScrollToBottom();
   }
 
   function sendQuestionAnswer(toolUseId, answer) {
@@ -344,28 +465,34 @@
   }
 
   function markQuestionAnswered(toolUseId) {
-    const bubble = chatMessages?.querySelector(`.chat-question[data-tool-use-id="${toolUseId}"]`);
-    if (bubble) {
-      bubble.classList.add('answered');
+    // Search all tabs for the question bubble
+    for (const tab of tabs.values()) {
+      const bubble = tab.container?.querySelector(`.chat-question[data-tool-use-id="${toolUseId}"]`);
+      if (bubble) { bubble.classList.add('answered'); return; }
     }
   }
 
   function markQuestionTimeout(toolUseId) {
-    const bubble = chatMessages?.querySelector(`.chat-question[data-tool-use-id="${toolUseId}"]`);
-    if (bubble) {
-      bubble.classList.add('timed-out');
-      const notice = document.createElement('div');
-      notice.className = 'chat-question-timeout';
-      notice.textContent = 'Timed out - error forwarded as-is';
-      bubble.appendChild(notice);
+    for (const tab of tabs.values()) {
+      const bubble = tab.container?.querySelector(`.chat-question[data-tool-use-id="${toolUseId}"]`);
+      if (bubble) {
+        bubble.classList.add('timed-out');
+        const notice = document.createElement('div');
+        notice.className = 'chat-question-timeout';
+        notice.textContent = 'Timed out - error forwarded as-is';
+        bubble.appendChild(notice);
+        return;
+      }
     }
   }
 
   // --- Session reset ---
 
   function resetChatView() {
-    if (chatMessages) {
-      chatMessages.innerHTML = welcomeHTML;
+    const tab = tabs.get(activeTabId);
+    if (tab?.container) {
+      tab.container.innerHTML = welcomeHTML;
+      tab.currentEl = null;
     }
     state.chatCurrentEl = null;
     updateChatStatus('idle');
@@ -374,24 +501,36 @@
   // --- Message router ---
 
   function handleMessage(msg) {
+    const tabId = msg.tabId || activeTabId;
+    // Auto-create tab if unknown (e.g., workflow-spawned)
+    if (tabId && !tabs.has(tabId) && msg.type !== 'chat:tabs') {
+      const container = document.createElement('div');
+      container.className = 'chat-messages';
+      tabs.set(tabId, { container, currentEl: null, status: 'idle' });
+      renderTabStrip();
+    }
+
     switch (msg.type) {
       case 'chat:event':
-        handleChatEvent(msg.event);
+        handleChatEvent(msg.event, tabId);
         break;
       case 'chat:output':
-        appendChatText(msg.text, msg.role || 'assistant');
+        appendChatText(msg.text, msg.role || 'assistant', tabId);
         break;
       case 'chat:error':
-        appendChatBubble(msg.text || 'Unknown error', 'error');
+        appendChatBubble(msg.text || 'Unknown error', 'error', tabId);
         break;
       case 'chat:status':
-        updateChatStatus(msg.status);
+        updateChatStatus(msg.status, tabId);
         break;
       case 'chat:settings':
         updateChatSettings(msg);
         break;
+      case 'chat:tabs':
+        handleTabList(msg.tabs || []);
+        break;
       case 'ask:question':
-        showAskQuestion(msg.toolUseId, msg.questions);
+        showAskQuestion(msg.toolUseId, msg.questions, tabId);
         break;
       case 'ask:answered':
         markQuestionAnswered(msg.toolUseId);
@@ -405,11 +544,24 @@
     }
   }
 
+  function handleTabList(tabList) {
+    // Sync local tab map with server's tab list
+    for (const t of tabList) {
+      if (!tabs.has(t.tabId)) {
+        const container = document.createElement('div');
+        container.className = 'chat-messages';
+        container.innerHTML = welcomeHTML;
+        tabs.set(t.tabId, { container, currentEl: null, status: t.status });
+      }
+    }
+    renderTabStrip(tabList.map(t => t.tabId));
+  }
+
   function updateProfiles(profiles) {
     state.profiles = profiles;
     renderChatProfileSelect();
   }
 
   // --- Export ---
-  window.chatModule = { handleMessage, updateProfiles };
+  window.chatModule = { handleMessage, updateProfiles, tabs, switchTab };
 })();

@@ -162,6 +162,16 @@ aside#timeline {
   background: color-mix(in srgb, var(--red) 15%, transparent);
 }
 
+.timeline-filter {
+  font-size: 10px;
+  padding: 2px 4px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
 #timeline-list {
   display: flex;
   flex-direction: column;
@@ -530,8 +540,57 @@ footer {
 #view-claude {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+
+/* Tab strip */
+.chat-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-tab {
+  padding: 4px 12px;
+  font-size: 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-tab.active {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--accent);
+  border-bottom: 1px solid var(--bg-hover);
+  margin-bottom: -1px;
+}
+.chat-tab-close {
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.4;
+  cursor: pointer;
+}
+.chat-tab-close:hover { opacity: 1; color: var(--red); }
+.chat-tab-new {
+  padding: 4px 10px;
+  font-size: 13px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+}
+.chat-tab-new:hover { color: var(--accent); background: var(--bg-surface); }
 
 .chat-container {
   flex: 1;
@@ -2318,6 +2377,152 @@ footer {
 .mm-key-missing { color: var(--red); }
 
 /* Responsive */
+/* ============================================================
+   WORKFLOW STYLES
+   ============================================================ */
+
+/* Generate bar */
+.wf-generate-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.wf-generate-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: none;
+}
+.wf-generate-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Step progress */
+.wf-step-row { display: flex; align-items: center; gap: 8px; }
+.wf-step-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.wf-step-icon.pending { color: var(--text-dim); }
+.wf-step-icon.running { color: var(--accent); animation: pulse 2s infinite; }
+.wf-step-icon.done    { color: var(--green); }
+.wf-step-icon.failed  { color: var(--red); }
+.wf-step-icon.skipped { color: var(--text-dim); }
+
+.wf-step-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Step output */
+.wf-modal-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+
+.wf-modal-tab {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.wf-modal-tab:hover:not(.disabled) {
+  color: var(--text);
+}
+.wf-modal-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.wf-modal-tab.disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.wf-modal-tabbar .wf-compile-btn {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 10px;
+}
+.wf-modal-tabbar .wf-compile-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.wf-modal-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 10px;
+  color: var(--text-dim);
+}
+.wf-modal-log.log-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+.wf-modal-log.log-success {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.wf-error-bar {
+  background: color-mix(in srgb, var(--red) 12%, var(--bg));
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--red);
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wf-run-output {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 8px 28px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 @media (max-width: 600px) {
   .ref-brief { display: none; }
   .ref-stats { gap: 16px; }

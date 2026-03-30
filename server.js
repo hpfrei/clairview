@@ -6,9 +6,10 @@ const path = require('path');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
-const ClaudeSession = require('./src/claude-session');
+const ClaudeSessionManager = require('./src/claude-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
+const workflowHandler = require('./src/workflow-handler');
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const DASHBOARD_PORT = parseInt(process.argv[2] || process.env.DASHBOARD_PORT || '3457');
@@ -23,13 +24,13 @@ const store = new InteractionStore(MAX_HISTORY);
 // --- Proxy server (port 3456) ---
 const proxyApp = express();
 let broadcaster = { broadcast() {} };
-let claudeSession = null; // forward reference, assigned below
+let sessionManager = null; // forward reference, assigned below
 
 // getActiveModelDef: returns the model definition if the active profile uses a non-Anthropic model
 function getActiveModelDef() {
-  if (!claudeSession?.capabilities?.modelDef) return null;
-  const cwd = claudeSession.cwd || process.cwd();
-  return caps.loadModel(cwd, claudeSession.capabilities.modelDef) || null;
+  if (!sessionManager?.capabilities?.modelDef) return null;
+  const cwd = sessionManager.cwd || process.cwd();
+  return caps.loadModel(cwd, sessionManager.capabilities.modelDef) || null;
 }
 
 const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getActiveModelDef);
@@ -71,12 +72,12 @@ dashboardApp.use((req, res, next) => {
 dashboardApp.use(express.static(path.join(__dirname, 'public')));
 const dashboardServer = http.createServer(dashboardApp);
 
-// Claude session (spawns claude -p through the proxy)
-claudeSession = new ClaudeSession(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
+// Session manager (spawns claude -p instances through the proxy)
+sessionManager = new ClaudeSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
 // WebSocket server on dashboard (with auth)
 const wss = new WebSocketServer({ noServer: true });
-broadcaster = new DashboardBroadcaster(wss, store, claudeSession);
+broadcaster = new DashboardBroadcaster(wss, store, sessionManager);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   const token = getTokenFromCookies(req.headers.cookie);
@@ -90,16 +91,22 @@ dashboardServer.on('upgrade', (req, socket, head) => {
   });
 });
 
-// Fix circular ref: point session's broadcaster at the real one
-claudeSession.broadcaster = broadcaster;
+// Fix circular ref: point all sessions' broadcasters at the real one
+for (const [tabId, session] of sessionManager.sessions) {
+  session.broadcaster = { broadcast(msg) { if (msg.type && (msg.type.startsWith('chat:') || msg.type.startsWith('ask:'))) msg.tabId = tabId; broadcaster.broadcast(msg); } };
+}
+sessionManager.broadcaster = broadcaster;
 
 // Initialize MCP Server Manager
-mcp.init({ broadcaster, store, claudeSession, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
+mcp.init({ broadcaster, store, claudeSession: sessionManager, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
+
+// Initialize Workflow Handler
+workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT });
 
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
   dashboardServer.listen(DASHBOARD_PORT, () => {
-    claudeSession.setReady();
+    sessionManager.setReady();
     console.log('');
     console.log('  Claude Code API Proxy running.');
     console.log('');

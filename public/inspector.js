@@ -3,6 +3,16 @@
   const { state, escHtml, highlightJSON, renderJSON, jsonBlock, formatDuration, truncate,
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
 
+  // --- Timeline filter ---
+  let activeTimelineFilter = 'all';
+  const timelineFilter = document.getElementById('timelineFilter');
+  if (timelineFilter) {
+    timelineFilter.addEventListener('change', () => {
+      activeTimelineFilter = timelineFilter.value;
+      renderTimeline();
+    });
+  }
+
   // --- Tool call extraction ---
   function extractToolCalls(interaction) {
     const calls = [];
@@ -290,6 +300,9 @@
   function renderTimeline() {
     timelineList.innerHTML = '';
     state.interactions.forEach((interaction, idx) => {
+      // Apply filter
+      if (activeTimelineFilter === 'mcp' && !interaction.isMcp) return;
+      if (activeTimelineFilter === 'api' && interaction.isMcp) return;
       appendTurnToTimeline(interaction, idx);
     });
   }
