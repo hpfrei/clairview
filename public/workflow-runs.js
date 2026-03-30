@@ -3,7 +3,7 @@
 // ============================================================
 (function workflowRunModule() {
   'use strict';
-  const { state, sendWs, escHtml } = window.dashboard;
+  const { state, sendWs, escHtml, inlineMd, setupCwdToolbar } = window.dashboard;
 
   // --- Tab state ---
   const tabs = new Map();
@@ -12,7 +12,7 @@
   let workflows = [];
 
   function defaultCwd() {
-    return state.capabilities?.cwd || '';
+    return state.outputsDir || state.capabilities?.cwd || '';
   }
 
   function createTabState(tabId) {
@@ -105,39 +105,13 @@
   }
 
   // --- CWD toolbar ---
-  cwdBtn?.addEventListener('click', () => {
-    const editing = !cwdInput.classList.contains('hidden');
-    if (editing) {
-      cwdInput.classList.add('hidden');
-      cwdSetBtn.classList.add('hidden');
-      cwdLabel.classList.remove('hidden');
-    } else {
-      cwdInput.value = cwdLabel.textContent || '';
-      cwdLabel.classList.add('hidden');
-      cwdInput.classList.remove('hidden');
-      cwdSetBtn.classList.remove('hidden');
-      cwdInput.focus();
-    }
-  });
-
-  cwdSetBtn?.addEventListener('click', () => {
-    const dir = cwdInput?.value?.trim();
-    if (!dir) return;
-    const tab = tabs.get(activeTabId);
-    if (tab) tab.cwd = dir;
-    if (cwdLabel) cwdLabel.textContent = dir;
-    cwdInput.classList.add('hidden');
-    cwdSetBtn.classList.add('hidden');
-    cwdLabel.classList.remove('hidden');
-  });
-
-  cwdInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); cwdSetBtn?.click(); }
-    else if (e.key === 'Escape') {
-      cwdInput.classList.add('hidden');
-      cwdSetBtn.classList.add('hidden');
-      cwdLabel.classList.remove('hidden');
-    }
+  setupCwdToolbar({
+    editBtn: cwdBtn, label: cwdLabel, input: cwdInput, setBtn: cwdSetBtn,
+    onSave: (dir) => {
+      const tab = tabs.get(activeTabId);
+      if (tab) tab.cwd = dir;
+      if (cwdLabel) cwdLabel.textContent = dir;
+    },
   });
 
   // --- Phase rendering ---
@@ -406,7 +380,6 @@
   }
 
   function renderEscalation(pq) {
-    const inlineMd = (text) => typeof marked !== 'undefined' ? marked.parseInline(text || '') : escHtml(text || '');
     let html = '<div class="wfrun-escalation">';
     for (let qi = 0; qi < (pq.questions || []).length; qi++) {
       const q = pq.questions[qi];
@@ -430,7 +403,6 @@
   }
 
   function renderAnsweredQuestion(aq) {
-    const inlineMd = (text) => typeof marked !== 'undefined' ? marked.parseInline(text || '') : escHtml(text || '');
     let html = '<div class="wfrun-escalation wfrun-answered">';
     for (let qi = 0; qi < (aq.questions || []).length; qi++) {
       const q = aq.questions[qi];
@@ -575,14 +547,12 @@
   }
 
   function handleSettings(msg) {
-    if (msg.cwd) {
-      // Set cwd on tabs that don't have one yet
+    const dir = defaultCwd();
+    if (dir) {
       for (const [, tab] of tabs) {
-        if (!tab.cwd) {
-          tab.cwd = msg.cwd;
-        }
+        if (!tab.cwd) tab.cwd = dir;
       }
-      if (cwdLabel && !cwdLabel.textContent) cwdLabel.textContent = msg.cwd;
+      if (cwdLabel && !cwdLabel.textContent) cwdLabel.textContent = dir;
     }
   }
 

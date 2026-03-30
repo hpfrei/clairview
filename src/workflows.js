@@ -5,10 +5,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const crypto = require('crypto');
 const caps = require('./capabilities');
 const { setQuestionContext, clearQuestionContext } = require('./proxy');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, ensureDir } = require('./utils');
+
+const PROJECT_ROOT = path.dirname(__dirname);
 
 const WORKFLOWS_DIR = 'capabilities/workflows';
 
@@ -18,10 +20,6 @@ const WORKFLOWS_DIR = 'capabilities/workflows';
 
 function workflowsDir(cwd) {
   return path.join(cwd || process.cwd(), WORKFLOWS_DIR);
-}
-
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 function listWorkflows(cwd) {
@@ -432,62 +430,13 @@ function evaluateCondition(condition, ctx) {
  */
 function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId, tabId }) {
   return new Promise((resolve, reject) => {
-    // Build args for claude -p
-    const args = ['-p', '--verbose', '--output-format', 'stream-json'];
+    const profile = (stepDef.profile && caps.loadProfile(PROJECT_ROOT, stepDef.profile)) || caps.loadActiveProfile(PROJECT_ROOT);
+    const args = buildClaudeArgs(profile);
 
-    // Apply profile if specified
-    const profileName = stepDef.profile;
-    let profile = null;
-    if (profileName) {
-      profile = caps.loadProfile(cwd, profileName);
-    }
-    if (!profile) {
-      profile = caps.loadActiveProfile(cwd);
-    }
-
-    if (profile) {
-      if (profile.permissionMode && profile.permissionMode !== 'default') {
-        args.push('--permission-mode', profile.permissionMode);
-      }
-      if (profile.disabledTools?.length > 0) {
-        args.push('--disallowedTools', ...profile.disabledTools);
-      }
-      if (profile.model) {
-        args.push('--model', profile.model);
-      }
-      if (profile.effort) {
-        args.push('--effort', profile.effort);
-      }
-      if (profile.disableSlashCommands) {
-        args.push('--disable-slash-commands');
-      }
-      if (profile.maxTurns) {
-        args.push('--max-turns', String(profile.maxTurns));
-      }
-      if (profile.maxBudgetUsd) {
-        args.push('--max-budget-usd', String(profile.maxBudgetUsd));
-      }
-      if (profile.appendSystemPrompt) {
-        args.push('--append-system-prompt', profile.appendSystemPrompt);
-      }
-      if (profile.systemPrompt) {
-        args.push('--system-prompt', profile.systemPrompt);
-      }
-    }
-
-    // Set question context so proxy tags ask:question with workflow info
     if (tabId) setQuestionContext({ tabId, runId, stepId });
 
-    const proc = spawn('claude', args, {
-      cwd,
-      env: {
-        ...process.env,
-        ANTHROPIC_BASE_URL: `http://localhost:${proxyPort}`,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    const proc = spawnClaude(args, { cwd, proxyPort });
 
-    // Track proc on run for cancellation
     const run = activeRuns.get(runId);
     if (run) run.currentProc = proc;
 
@@ -503,7 +452,6 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
           text: `\n[timeout] Step exceeded ${timeoutMs}ms limit — killing process`,
         });
         try { proc.kill('SIGTERM'); } catch {}
-        // Force kill after 3s if SIGTERM didn't work
         setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
       }, timeoutMs);
     }
@@ -511,39 +459,22 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     proc.stdin.write(prompt);
     proc.stdin.end();
 
-    let buffer = '';
     let result = null;
-
-    proc.stdout.on('data', (chunk) => {
-      buffer += chunk.toString('utf-8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          // Broadcast progress
-          if (event.type === 'content_block_delta' && event.delta?.text) {
-            broadcaster.broadcast({
-              type: 'workflow:step:progress',
-              runId, tabId: tabId || undefined,
-              stepId,
-              text: event.delta.text,
-            });
-          }
-          if (event.type === 'result' && event.result) {
-            result = event.result;
-          }
-        } catch {}
+    const parser = createStreamJsonParser((event) => {
+      if (event.type === 'content_block_delta' && event.delta?.text) {
+        broadcaster.broadcast({
+          type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId,
+          text: event.delta.text,
+        });
       }
+      if (event.type === 'result' && event.result) result = event.result;
     });
+
+    proc.stdout.on('data', (chunk) => parser.write(chunk));
 
     proc.stderr.on('data', (chunk) => {
       broadcaster.broadcast({
-        type: 'workflow:step:progress',
-        runId, tabId: tabId || undefined,
-        stepId,
+        type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId,
         text: `[stderr] ${chunk.toString('utf-8')}`,
       });
     });
@@ -552,14 +483,7 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
       if (run) run.currentProc = null;
       if (tabId) clearQuestionContext();
       if (timeoutTimer) clearTimeout(timeoutTimer);
-
-      // Flush buffer
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer);
-          if (event.type === 'result' && event.result) result = event.result;
-        } catch {}
-      }
+      parser.flush();
 
       if (timedOut) {
         reject(new Error(`Step "${stepId}" timed out after ${timeoutMs}ms`));
@@ -690,18 +614,9 @@ Rules:
 - Choose the most appropriate profile for each step based on what it needs to do
 - Always include a final summary step`;
 
-    const args = ['-p', '--verbose', '--output-format', 'stream-json'];
+    const args = buildClaudeArgs(null);
+    const proc = spawnClaude(args, { cwd, proxyPort });
 
-    const proc = spawn('claude', args, {
-      cwd,
-      env: {
-        ...process.env,
-        ANTHROPIC_BASE_URL: `http://localhost:${proxyPort}`,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Timeout: kill after 2 minutes
     const genTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
@@ -710,36 +625,18 @@ Rules:
     proc.stdin.write(prompt);
     proc.stdin.end();
 
-    let buffer = '';
-    let stderrBuf = '';
     let result = null;
-
-    proc.stdout.on('data', (chunk) => {
-      buffer += chunk.toString('utf-8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'result' && event.result) result = event.result;
-        } catch {}
-      }
+    let stderrBuf = '';
+    const parser = createStreamJsonParser((event) => {
+      if (event.type === 'result' && event.result) result = event.result;
     });
 
-    proc.stderr.on('data', (chunk) => {
-      stderrBuf += chunk.toString('utf-8');
-    });
+    proc.stdout.on('data', (chunk) => parser.write(chunk));
+    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
 
     proc.on('close', (code) => {
       clearTimeout(genTimeout);
-
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer);
-          if (event.type === 'result' && event.result) result = event.result;
-        } catch {}
-      }
+      parser.flush();
 
       if (!result) {
         const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
@@ -747,12 +644,10 @@ Rules:
         return;
       }
 
-      // Extract JSON from result
       try {
         const jsonMatch = result.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          const workflow = JSON.parse(jsonMatch[0]);
-          resolve(workflow);
+          resolve(JSON.parse(jsonMatch[0]));
         } else {
           reject(new Error('No JSON found in generation output'));
         }
@@ -845,18 +740,9 @@ Rules:
   - LaTeX math via $inline$ or $$display$$ for equations
   - Standard \`\`\`language for code snippets`;
 
-    const args = ['-p', '--verbose', '--output-format', 'stream-json'];
+    const args = buildClaudeArgs(null);
+    const proc = spawnClaude(args, { cwd, proxyPort });
 
-    const proc = spawn('claude', args, {
-      cwd,
-      env: {
-        ...process.env,
-        ANTHROPIC_BASE_URL: `http://localhost:${proxyPort}`,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Timeout: kill after 2 minutes
     const compileTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
@@ -865,32 +751,20 @@ Rules:
     proc.stdin.write(prompt);
     proc.stdin.end();
 
-    let buffer = '';
     let stderrBuf = '';
-
-    proc.stdout.on('data', (chunk) => {
-      buffer += chunk.toString('utf-8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'content_block_delta' && event.delta?.text && broadcaster) {
-            broadcaster.broadcast({ type: 'workflow:compile:progress', name, text: event.delta.text });
-          }
-        } catch {}
+    const parser = createStreamJsonParser((event) => {
+      if (event.type === 'content_block_delta' && event.delta?.text && broadcaster) {
+        broadcaster.broadcast({ type: 'workflow:compile:progress', name, text: event.delta.text });
       }
     });
 
-    proc.stderr.on('data', (chunk) => {
-      stderrBuf += chunk.toString('utf-8');
-    });
+    proc.stdout.on('data', (chunk) => parser.write(chunk));
+    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
 
     proc.on('close', (code) => {
       clearTimeout(compileTimeout);
+      parser.flush();
 
-      // Read the compiled file from disk — claude -p writes it directly
       try {
         if (fs.existsSync(compiledPath)) {
           const compiledSource = fs.readFileSync(compiledPath, 'utf8');

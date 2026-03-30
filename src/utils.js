@@ -1,7 +1,125 @@
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
 let counter = 0;
 
 function generateId() {
   return `req_${Date.now().toString(36)}_${(counter++).toString(36)}`;
+}
+
+// --- Shared claude spawn utilities ---
+
+/**
+ * Build CLI args from a profile/capabilities object.
+ * Returns the base args array (caller adds --resume, --mcp-config, etc.).
+ */
+function buildClaudeArgs(profile) {
+  const args = ['-p', '--verbose', '--output-format', 'stream-json'];
+  if (!profile) return args;
+  if (profile.permissionMode && profile.permissionMode !== 'default') {
+    args.push('--permission-mode', profile.permissionMode);
+  }
+  if (profile.disabledTools?.length > 0) {
+    args.push('--disallowedTools', ...profile.disabledTools);
+  }
+  if (profile.model) args.push('--model', profile.model);
+  if (profile.effort) args.push('--effort', profile.effort);
+  if (profile.disableSlashCommands) args.push('--disable-slash-commands');
+  if (profile.maxTurns) args.push('--max-turns', String(profile.maxTurns));
+  if (profile.maxBudgetUsd) args.push('--max-budget-usd', String(profile.maxBudgetUsd));
+  if (profile.appendSystemPrompt) args.push('--append-system-prompt', profile.appendSystemPrompt);
+  if (profile.systemPrompt) args.push('--system-prompt', profile.systemPrompt);
+  return args;
+}
+
+/**
+ * Spawn `claude` with the proxy URL injected into the environment.
+ */
+function spawnClaude(args, { cwd, proxyPort }) {
+  return spawn('claude', args, {
+    cwd,
+    env: { ...process.env, ANTHROPIC_BASE_URL: `http://localhost:${proxyPort}` },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+/**
+ * Create a stream-json line parser.
+ * Buffers chunks, splits on newlines, JSON.parses each complete line.
+ * Calls onEvent(event) for valid JSON, onRaw(line) for non-JSON lines.
+ * Returns { write(chunk), flush() → lastEvent? }.
+ */
+function createStreamJsonParser(onEvent, onRaw) {
+  let buffer = '';
+  return {
+    write(chunk) {
+      buffer += chunk.toString('utf-8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          onEvent(JSON.parse(line));
+        } catch {
+          if (onRaw) onRaw(line);
+        }
+      }
+    },
+    flush() {
+      if (!buffer.trim()) return null;
+      const remaining = buffer;
+      buffer = '';
+      try {
+        const event = JSON.parse(remaining);
+        onEvent(event);
+        return event;
+      } catch {
+        if (onRaw) onRaw(remaining);
+        return null;
+      }
+    },
+  };
+}
+
+// --- Output directory sandboxing ---
+
+const OUTPUTS_DIR = path.join(path.dirname(__dirname), 'outputs');
+
+/**
+ * Resolve a user-provided path into the outputs sandbox.
+ * Any path (absolute or relative) is treated as relative to OUTPUTS_DIR.
+ * Path traversal (../) is stripped. The resolved directory is created if needed.
+ * Returns the absolute path inside outputs/.
+ */
+function resolveOutputDir(userPath) {
+  const clean = (userPath || '').replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
+  // path.resolve against outputs dir; strip leading / so it's treated as relative
+  const stripped = clean.replace(/^[/\\]+/, '');
+  const resolved = stripped ? path.join(OUTPUTS_DIR, stripped) : OUTPUTS_DIR;
+  // Final containment check
+  if (!resolved.startsWith(OUTPUTS_DIR)) return OUTPUTS_DIR;
+  ensureDir(resolved);
+  return resolved;
+}
+
+// --- File I/O utilities ---
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function readJSON(filePath, defaultValue = null) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return defaultValue;
+  }
+}
+
+function writeJSON(filePath, data) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
 const FORWARD_REQUEST_HEADERS = [
@@ -75,4 +193,12 @@ module.exports = {
   filterRequestHeaders,
   filterResponseHeaders,
   sanitizeForDashboard,
+  buildClaudeArgs,
+  spawnClaude,
+  createStreamJsonParser,
+  OUTPUTS_DIR,
+  resolveOutputDir,
+  ensureDir,
+  readJSON,
+  writeJSON,
 };

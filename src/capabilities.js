@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { ensureDir } = require('./utils');
 
 const KNOWN_TOOLS = [
   'Read', 'Write', 'Edit', 'NotebookEdit',
@@ -127,7 +128,7 @@ function loadActiveProfile(baseDir) {
       const migrated = validateProfile({ ...old, name: old.name || 'custom', label: old.label || 'Custom (migrated)' });
       if (!BUILTIN_PROFILES[migrated.name]) {
         const dir = profilesDir(baseDir);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        ensureDir(dir);
         fs.writeFileSync(profileFilePath(baseDir, migrated.name), JSON.stringify(migrated, null, 2));
         setActiveProfile(baseDir, migrated.name);
       } else {
@@ -157,7 +158,7 @@ function saveProfile(baseDir, profile) {
   // Cannot overwrite builtin names
   if (BUILTIN_PROFILES[validated.name]) return false;
   const dir = profilesDir(baseDir);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(profileFilePath(baseDir, validated.name), JSON.stringify(validated, null, 2));
   return true;
 }
@@ -182,7 +183,7 @@ function deleteProfile(baseDir, name) {
 function setActiveProfile(baseDir, name) {
   if (!BUILTIN_PROFILES[name] && !isValidName(name)) return false;
   const dir = path.join(baseDir, 'capabilities');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(activeFilePath(baseDir), JSON.stringify({ active: name }, null, 2));
 }
 
@@ -215,45 +216,47 @@ function validateProfile(p) {
   };
 }
 
-// --- Command CRUD ---
+// --- Generic Markdown entity CRUD factory ---
 
-function commandsDir(cwd) {
-  return path.join(cwd, '.claude', 'commands');
+function createMarkdownCrud(subdir) {
+  const getDir = (cwd) => path.join(cwd, '.claude', subdir);
+  return {
+    dir: getDir,
+    list(cwd) {
+      const dir = getDir(cwd);
+      if (!fs.existsSync(dir)) return [];
+      return fs.readdirSync(dir)
+        .filter(f => f.endsWith('.md'))
+        .map(f => {
+          const name = f.replace(/\.md$/, '');
+          const content = fs.readFileSync(path.join(dir, f), 'utf-8');
+          const desc = (extractFrontmatterField(content, 'description') || '').split('\n')[0].trim();
+          return { name, description: desc, content };
+        });
+    },
+    read(cwd, name) {
+      const file = path.join(getDir(cwd), `${name}.md`);
+      if (!fs.existsSync(file)) return null;
+      return fs.readFileSync(file, 'utf-8');
+    },
+    save(cwd, name, content) {
+      if (!isValidName(name)) return false;
+      const dir = getDir(cwd);
+      ensureDir(dir);
+      fs.writeFileSync(path.join(dir, `${name}.md`), content);
+      return true;
+    },
+    delete(cwd, name) {
+      const file = path.join(getDir(cwd), `${name}.md`);
+      if (!fs.existsSync(file)) return false;
+      fs.unlinkSync(file);
+      return true;
+    },
+  };
 }
 
-function listCommands(cwd) {
-  const dir = commandsDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => {
-      const name = f.replace(/\.md$/, '');
-      const content = fs.readFileSync(path.join(dir, f), 'utf-8');
-      const desc = extractFrontmatterField(content, 'description') || '';
-      return { name, description: desc, content };
-    });
-}
-
-function readCommand(cwd, name) {
-  const file = path.join(commandsDir(cwd), `${name}.md`);
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, 'utf-8');
-}
-
-function saveCommand(cwd, name, content) {
-  if (!isValidName(name)) return false;
-  const dir = commandsDir(cwd);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${name}.md`), content);
-  return true;
-}
-
-function deleteCommand(cwd, name) {
-  const file = path.join(commandsDir(cwd), `${name}.md`);
-  if (!fs.existsSync(file)) return false;
-  fs.unlinkSync(file);
-  return true;
-}
+const commandsCrud = createMarkdownCrud('commands');
+const agentsCrud = createMarkdownCrud('agents');
 
 // --- Skill CRUD (.claude/skills/<name>/SKILL.md) ---
 
@@ -285,7 +288,7 @@ function readSkill(cwd, name) {
 function saveSkill(cwd, name, content, extraFiles) {
   if (!isValidName(name)) return false;
   const dir = path.join(skillsDir(cwd), name);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(path.join(dir, 'SKILL.md'), content);
   // Write extra files (templates, scripts, etc.)
   if (Array.isArray(extraFiles)) {
@@ -296,7 +299,7 @@ function saveSkill(cwd, name, content, extraFiles) {
       const filePath = path.resolve(dir, clean);
       if (!filePath.startsWith(dir + path.sep) && filePath !== dir) continue;
       const fileDir = path.dirname(filePath);
-      if (!fs.existsSync(fileDir)) fs.mkdirSync(fileDir, { recursive: true });
+      ensureDir(fileDir);
       fs.writeFileSync(filePath, f.content);
     }
   }
@@ -316,45 +319,7 @@ function deleteSkill(cwd, name) {
   return true;
 }
 
-// --- Agent CRUD ---
-
-function agentsDir(cwd) {
-  return path.join(cwd, '.claude', 'agents');
-}
-
-function listAgents(cwd) {
-  const dir = agentsDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => {
-      const name = f.replace(/\.md$/, '');
-      const content = fs.readFileSync(path.join(dir, f), 'utf-8');
-      const desc = extractFrontmatterField(content, 'description') || '';
-      return { name, description: desc.split('\n')[0].trim(), content };
-    });
-}
-
-function readAgent(cwd, name) {
-  const file = path.join(agentsDir(cwd), `${name}.md`);
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, 'utf-8');
-}
-
-function saveAgent(cwd, name, content) {
-  if (!isValidName(name)) return false;
-  const dir = agentsDir(cwd);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${name}.md`), content);
-  return true;
-}
-
-function deleteAgent(cwd, name) {
-  const file = path.join(agentsDir(cwd), `${name}.md`);
-  if (!fs.existsSync(file)) return false;
-  fs.unlinkSync(file);
-  return true;
-}
+// --- Agent CRUD (uses shared factory) ---
 
 // --- Hook CRUD ---
 
@@ -372,7 +337,7 @@ function readSettingsLocal(cwd) {
 
 function writeSettingsLocal(cwd, settings) {
   const dir = path.join(cwd, '.claude');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(settingsLocalPath(cwd), JSON.stringify(settings, null, 2));
 }
 
@@ -499,6 +464,25 @@ function modelsFilePath(baseDir) {
   return path.join(baseDir, 'capabilities', 'models.json');
 }
 
+function secretsFilePath(baseDir) {
+  return path.join(baseDir, 'capabilities', 'secrets.json');
+}
+
+function readSecrets(baseDir) {
+  const file = secretsFilePath(baseDir);
+  try {
+    if (!fs.existsSync(file)) return { providerKeys: {}, modelKeys: {} };
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch {
+    return { providerKeys: {}, modelKeys: {} };
+  }
+}
+
+function writeSecrets(baseDir, secrets) {
+  ensureDir(path.join(baseDir, 'capabilities'));
+  fs.writeFileSync(secretsFilePath(baseDir), JSON.stringify(secrets, null, 2));
+}
+
 // Detect provider key from apiBaseUrl domain (used in migration)
 function detectProviderKey(apiBaseUrl) {
   if (!apiBaseUrl) return 'custom';
@@ -570,16 +554,41 @@ function readModelsFile(baseDir) {
       // Old flat format — migrate
       const migrated = migrateFromFlatArray(raw);
       const dir = path.join(baseDir, 'capabilities');
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      ensureDir(dir);
       fs.writeFileSync(file, JSON.stringify(migrated, null, 2));
       return migrated;
     }
 
-    // New format
-    return {
+    // New format — migrate any inline apiKeys to secrets file
+    const result = {
       providers: raw.providers && typeof raw.providers === 'object' ? raw.providers : {},
       models: Array.isArray(raw.models) ? raw.models : [],
     };
+    let dirty = false;
+    const secrets = readSecrets(baseDir);
+    // Move provider-level keys to secrets
+    for (const [key, p] of Object.entries(result.providers)) {
+      if (p.apiKey) {
+        if (!secrets.providerKeys[key]) secrets.providerKeys[key] = p.apiKey;
+        delete p.apiKey;
+        dirty = true;
+      }
+    }
+    // Move model-level keys to secrets
+    for (const m of result.models) {
+      if (m.apiKey) {
+        if (!secrets.modelKeys[m.name]) secrets.modelKeys[m.name] = m.apiKey;
+        delete m.apiKey;
+        dirty = true;
+      }
+    }
+    if (dirty) {
+      writeSecrets(baseDir, secrets);
+      const dir = path.join(baseDir, 'capabilities');
+      ensureDir(dir);
+      fs.writeFileSync(file, JSON.stringify(result, null, 2));
+    }
+    return result;
   } catch {
     return empty;
   }
@@ -587,14 +596,19 @@ function readModelsFile(baseDir) {
 
 function writeModelsFile(baseDir, data) {
   const dir = path.join(baseDir, 'capabilities');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(modelsFilePath(baseDir), JSON.stringify(data, null, 2));
 }
 
 // Merge provider-level fields onto a model to produce a fully resolved object
-function resolveModel(model, providers) {
+function resolveModel(model, providers, secrets) {
   const prov = providers[model.providerKey] || {};
+  const secs = secrets || { providerKeys: {}, modelKeys: {} };
   const systemPrompt = model.systemPrompt || getDefaultSystemPrompt(model.reasoning);
+  // API key resolution: model-level secret > provider-level secret > legacy inline key
+  const apiKey = secs.modelKeys?.[model.name]
+    || secs.providerKeys?.[model.providerKey]
+    || model.apiKey || prov.apiKey || '';
   return {
     name: model.name,
     label: model.label || model.name,
@@ -603,7 +617,7 @@ function resolveModel(model, providers) {
     provider: model.provider || 'openai',
     modelId: model.modelId || '',
     apiBaseUrl: model.apiBaseUrl || prov.apiBaseUrl || '',
-    apiKey: model.apiKey || prov.apiKey || '',
+    apiKey,
     systemPromptMode: model.systemPromptMode || 'replace',
     systemPrompt,
     toolOverrides: model.toolOverrides || {},
@@ -615,7 +629,8 @@ function resolveModel(model, providers) {
 
 function listModels(baseDir) {
   const data = readModelsFile(baseDir);
-  return data.models.map(m => resolveModel(m, data.providers));
+  const secrets = readSecrets(baseDir);
+  return data.models.map(m => resolveModel(m, data.providers, secrets));
 }
 
 function loadModel(baseDir, name) {
@@ -626,6 +641,14 @@ function loadModel(baseDir, name) {
 function saveModel(baseDir, model) {
   const validated = validateModel(model);
   if (!validated.name) return false;
+  // Extract API key to secrets file (never store in models.json)
+  const apiKey = validated.apiKey || '';
+  delete validated.apiKey;
+  if (apiKey) {
+    const secrets = readSecrets(baseDir);
+    secrets.modelKeys[validated.name] = apiKey;
+    writeSecrets(baseDir, secrets);
+  }
   const data = readModelsFile(baseDir);
   const idx = data.models.findIndex(m => m.name === validated.name);
   if (idx >= 0) {
@@ -643,6 +666,12 @@ function deleteModel(baseDir, name) {
   if (idx < 0) return false;
   data.models.splice(idx, 1);
   writeModelsFile(baseDir, data);
+  // Clean up secrets
+  const secrets = readSecrets(baseDir);
+  if (secrets.modelKeys[name]) {
+    delete secrets.modelKeys[name];
+    writeSecrets(baseDir, secrets);
+  }
   return true;
 }
 
@@ -677,11 +706,12 @@ function validateModel(m) {
 
 function listProviders(baseDir) {
   const data = readModelsFile(baseDir);
+  const secrets = readSecrets(baseDir);
   return Object.entries(data.providers).map(([key, p]) => ({
     key,
     label: p.label || key,
     apiBaseUrl: p.apiBaseUrl || '',
-    apiKey: p.apiKey || '',
+    apiKey: secrets.providerKeys?.[key] || p.apiKey || '',
   }));
 }
 
@@ -691,9 +721,14 @@ function saveProvider(baseDir, key, provider) {
   data.providers[key] = {
     label: typeof provider.label === 'string' ? provider.label : key,
     apiBaseUrl: typeof provider.apiBaseUrl === 'string' ? provider.apiBaseUrl : '',
-    apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : '',
   };
   writeModelsFile(baseDir, data);
+  // Store API key in secrets file (never in models.json)
+  if (typeof provider.apiKey === 'string' && provider.apiKey) {
+    const secrets = readSecrets(baseDir);
+    secrets.providerKeys[key] = provider.apiKey;
+    writeSecrets(baseDir, secrets);
+  }
   return true;
 }
 
@@ -704,6 +739,12 @@ function deleteProvider(baseDir, key) {
   if (inUse) return false;
   delete data.providers[key];
   writeModelsFile(baseDir, data);
+  // Clean up secrets
+  const secrets = readSecrets(baseDir);
+  if (secrets.providerKeys[key]) {
+    delete secrets.providerKeys[key];
+    writeSecrets(baseDir, secrets);
+  }
   return true;
 }
 
@@ -754,18 +795,18 @@ module.exports = {
   setActiveProfile,
   duplicateProfile,
   validateProfile,
-  listCommands,
-  readCommand,
-  saveCommand,
-  deleteCommand,
+  listCommands: commandsCrud.list,
+  readCommand: commandsCrud.read,
+  saveCommand: commandsCrud.save,
+  deleteCommand: commandsCrud.delete,
   listSkills,
   readSkill,
   saveSkill,
   deleteSkill,
-  listAgents,
-  readAgent,
-  saveAgent,
-  deleteAgent,
+  listAgents: agentsCrud.list,
+  readAgent: agentsCrud.read,
+  saveAgent: agentsCrud.save,
+  deleteAgent: agentsCrud.delete,
   listHooks,
   saveHook,
   deleteHook,

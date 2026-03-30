@@ -1,0 +1,18 @@
+{
+  "name": "test",
+  "label": "test",
+  "description": "testing claude-doc features",
+  "builtin": false,
+  "model": "haiku",
+  "effort": null,
+  "permissionMode": "default",
+  "disabledTools": [],
+  "disableSlashCommands": false,
+  "maxTurns": null,
+  "maxBudgetUsd": null,
+  "appendSystemPrompt": null,
+  "systemPrompt": null,
+  "mcpServers": [
+    "test-tool"
+  ]
+}

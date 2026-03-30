@@ -648,17 +648,17 @@ Available templates in this skill directory:
       const section = document.createElement('div');
       section.className = 'provider-group';
 
-      const keyStatus = prov.apiKey ? '\u2705' : '\u274C';
+      const hasKey = !!prov.apiKey;
       const keyId = `provKey_${prov.key}`;
       section.innerHTML = `
         <div class="provider-header">
           <span class="provider-label">${escHtml(prov.label)}</span>
-          <span class="provider-url">${escHtml(prov.apiBaseUrl || '(no URL)')}</span>
+          <span class="provider-url">${escHtml(prov.apiBaseUrl || '')}</span>
           <span class="provider-key-area">
-            <input type="password" id="${keyId}" class="provider-key-input" value="${escHtml(prov.apiKey || '')}" placeholder="API key..." autocomplete="off">
-            <button type="button" class="provider-key-toggle" data-target="${keyId}" title="Show/hide">&#128065;</button>
-            <button type="button" class="provider-key-save" data-provider="${escHtml(prov.key)}" title="Save key">Save</button>
-            <span class="provider-key-status">${keyStatus}</span>
+            <input type="password" id="${keyId}" class="provider-key-input" value="${escHtml(prov.apiKey || '')}" placeholder="Paste API key..." autocomplete="off">
+            <button type="button" class="provider-key-toggle" data-target="${keyId}" title="Show/hide key">&#128065;</button>
+            <button type="button" class="provider-key-save" data-provider="${escHtml(prov.key)}" title="Save key">${hasKey ? 'Update' : 'Set key'}</button>
+            <span class="provider-key-status ${hasKey ? 'mm-key-ok' : 'mm-key-missing'}">${hasKey ? 'connected' : 'no key'}</span>
           </span>
         </div>
         <div class="provider-models"></div>`;
@@ -666,13 +666,19 @@ Available templates in this skill directory:
       const modelsContainer = section.querySelector('.provider-models');
       const provModels = state.models.filter(m => m.providerKey === prov.key);
       for (const model of provModels) {
+        const ctx = model.contextWindow ? Math.round(model.contextWindow / 1000) + 'K' : '';
+        const out = model.maxOutputTokens ? Math.round(model.maxOutputTokens / 1000) + 'K' : '';
+        const specs = [ctx ? ctx + ' ctx' : '', out ? out + ' out' : ''].filter(Boolean).join(', ');
         const item = document.createElement('div');
         item.className = 'cap-list-item';
         item.innerHTML = `<span class="cap-item-name">${escHtml(model.label || model.name)}</span>
-          <span class="cap-item-desc">${escHtml(model.modelId || '')}${model.reasoning ? ' <span class="cap-model-reasoning">reasoning</span>' : ''}</span>
+          <span class="cap-item-desc">
+            <code>${escHtml(model.modelId || '')}</code>
+            ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
+            ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
+          </span>
           <span class="cap-list-actions">
             <button class="cap-edit-btn" data-name="${escHtml(model.name)}" data-kind="model" title="Edit">&#9998;</button>
-            <button class="cap-dup-btn" data-name="${escHtml(model.name)}" data-kind="model" title="Duplicate">&#10697;</button>
           </span>`;
         modelsContainer.appendChild(item);
       }
@@ -733,12 +739,7 @@ Available templates in this skill directory:
     if (textarea) textarea.classList.toggle('hidden', e.target.checked);
   });
 
-  function openModelModal(model, mode) {
-    const title = document.getElementById('modelModalTitle');
-    if (mode === 'new') title.textContent = 'New Model';
-    else if (mode === 'duplicate') title.textContent = 'Duplicate Model';
-    else title.textContent = `Edit Model: ${model.name}`;
-
+  function populateModelForm(model, mode) {
     const nameInput = document.getElementById('mmName');
     nameInput.value = mode === 'duplicate' ? '' : (model.name || '');
     nameInput.readOnly = mode === 'edit';
@@ -748,6 +749,14 @@ Available templates in this skill directory:
     document.getElementById('mmProvider').value = model.provider || 'openai';
     document.getElementById('mmModelId').value = model.modelId || '';
     document.getElementById('mmSystemPromptMode').value = model.systemPromptMode || 'replace';
+
+    // Reasoning + numeric fields
+    const reasoningCb = document.getElementById('mmReasoning');
+    if (reasoningCb) reasoningCb.checked = !!model.reasoning;
+    const ctxInput = document.getElementById('mmContextWindow');
+    if (ctxInput) ctxInput.value = model.contextWindow || '';
+    const maxOutInput = document.getElementById('mmMaxOutputTokens');
+    if (maxOutInput) maxOutInput.value = model.maxOutputTokens || '';
 
     // Provider key dropdown
     populateProviderKeyDropdown(model.providerKey || 'openai');
@@ -772,8 +781,18 @@ Available templates in this skill directory:
       model.toolOverrides && Object.keys(model.toolOverrides).length > 0
         ? JSON.stringify(model.toolOverrides, null, 2)
         : '';
+  }
 
-    state.editingModel = mode === 'edit' ? model.name : (mode === 'new' ? '__new__' : '__dup__');
+  function openModelModal(model) {
+    const title = document.getElementById('modelModalTitle');
+    title.textContent = `Edit Model: ${model.label || model.name}`;
+
+    // Hide catalog (not used in edit-only mode)
+    const catalog = document.getElementById('mmCatalog');
+    if (catalog) catalog.classList.add('hidden');
+
+    populateModelForm(model, 'edit');
+    state.editingModel = model.name;
     document.getElementById('modelModal')?.classList.remove('hidden');
   }
 
@@ -788,13 +807,7 @@ Available templates in this skill directory:
     if (input) input.type = input.type === 'password' ? 'text' : 'password';
   });
 
-  document.getElementById('capNewModel')?.addEventListener('click', () => {
-    openModelModal({
-      name: '', label: '', description: '', provider: 'openai',
-      providerKey: 'openai', modelId: '',
-      systemPromptMode: 'replace', toolOverrides: {},
-    }, 'new');
-  });
+  // Models are pre-populated from models.json — no create button needed
 
   document.getElementById('capModelSave')?.addEventListener('click', () => {
     const name = document.getElementById('mmName')?.value?.trim();
@@ -813,6 +826,9 @@ Available templates in this skill directory:
     const providerKey = document.getElementById('mmProviderKey')?.value || 'openai';
     const useDefault = document.getElementById('mmUseDefaultPrompt')?.checked;
 
+    const ctxVal = parseInt(document.getElementById('mmContextWindow')?.value);
+    const maxOutVal = parseInt(document.getElementById('mmMaxOutputTokens')?.value);
+
     const model = {
       name,
       label: document.getElementById('mmLabel')?.value?.trim() || name,
@@ -822,6 +838,9 @@ Available templates in this skill directory:
       modelId: document.getElementById('mmModelId')?.value?.trim() || '',
       systemPromptMode: document.getElementById('mmSystemPromptMode')?.value || 'replace',
       toolOverrides,
+      reasoning: !!document.getElementById('mmReasoning')?.checked,
+      contextWindow: ctxVal > 0 ? ctxVal : null,
+      maxOutputTokens: maxOutVal > 0 ? maxOutVal : null,
     };
 
     // Only send custom system prompt if user opted out of default
@@ -873,15 +892,6 @@ Available templates in this skill directory:
 
     const dupBtn = e.target.closest('.cap-dup-btn');
 
-    if (dupBtn) {
-      const kind = dupBtn.dataset.kind;
-      if (kind === 'model') {
-        const name = dupBtn.dataset.name;
-        const model = state.models.find(m => m.name === name);
-        if (model) openModelModal(model, 'duplicate');
-      }
-    }
-
     if (editBtn) {
       const kind = editBtn.dataset.kind;
       if (kind === 'skill') {
@@ -921,7 +931,7 @@ Available templates in this skill directory:
       } else if (kind === 'model') {
         const name = editBtn.dataset.name;
         const model = state.models.find(m => m.name === name);
-        if (model) openModelModal(model, 'edit');
+        if (model) openModelModal(model);
       }
     }
 
@@ -979,17 +989,7 @@ Available templates in this skill directory:
   }
 
   function handleSettings(msg) {
-    // State is already updated by chat module; just render
-    if (msg.capabilities) {
-      state.capabilities = msg.capabilities;
-      state.activeProfileName = msg.capabilities.name;
-    }
-    if (msg.profiles) state.profiles = msg.profiles;
-    if (msg.knownTools) state.knownTools = msg.knownTools;
-    if (msg.knownSkills) state.knownSkills = msg.knownSkills;
-    if (msg.hookEvents) state.hookEvents = msg.hookEvents;
-    if (msg.matcherEvents) state.matcherEvents = msg.matcherEvents;
-    if (msg.mcpServers) state.mcpServers = msg.mcpServers;
+    // State sync handled by core.js syncSettings(); just re-render here
     if (msg.capabilities || msg.profiles) {
       renderCapabilitiesToolbar();
       renderSkillsPanel();

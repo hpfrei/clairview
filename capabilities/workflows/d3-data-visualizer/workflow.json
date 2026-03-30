@@ -1,0 +1,39 @@
+{
+  "name": "d3-data-visualizer",
+  "description": "Asks the user what data to analyse, designs the optimal visualization approach, then generates a self-contained HTML file using D3.js from CDN with embedded HTML, CSS, and JavaScript.",
+  "inputs": {},
+  "steps": {
+    "gather-requirements": {
+      "profile": "safe",
+      "do": "Use the AskUserQuestion tool to ask the user what data or topic they would like to analyse and visualize. Ask them to describe the dataset, its structure, and any specific questions they want answered. Also ask if they have a preference for chart type (bar, line, scatter, treemap, force graph, etc.) or if they want you to recommend one. Collect all relevant details.",
+      "produces": "A clear description of the data to analyse, its structure, the user's goals, and any visualization preferences."
+    },
+    "design-visualization": {
+      "profile": "safe",
+      "do": "Based on the user's requirements from the previous step, think deeply about the most useful and effective way to present this data. Consider: what chart type best reveals the patterns in this data? Should it be interactive (tooltips, zoom, filtering)? What color scheme communicates the data clearly? What axes, labels, legends, and annotations are needed? What D3.js features (scales, transitions, axes, layouts) will be used? Write a detailed visualization design plan including layout, interactivity, color palette, and D3 components to use.",
+      "produces": "A detailed visualization design plan specifying chart type, layout, interactivity features, color scheme, D3.js modules/methods to use, and rationale for design choices.",
+      "context": [
+        "gather-requirements"
+      ]
+    },
+    "implement-html": {
+      "profile": "full",
+      "do": "Implement the visualization as a single self-contained HTML file named 'visualization.html' in the current working directory. The file must include all HTML, CSS, and JavaScript inline (no external files except D3.js loaded from CDN: https://d3js.org/d3.v7.min.js). Follow the design plan from the previous step. Ensure the visualization is responsive, visually polished, and includes proper labels, legends, and tooltips where appropriate. If the data was described conceptually, generate realistic sample data embedded in the JavaScript. Use modern CSS for styling (flexbox/grid, custom properties, clean typography). Add a title and brief description above the chart. Test that the file is valid HTML by reviewing it after writing.",
+      "produces": "A complete, self-contained HTML file (visualization.html) with embedded CSS and JS that renders an interactive D3.js visualization.",
+      "context": [
+        "gather-requirements",
+        "design-visualization"
+      ]
+    },
+    "summary": {
+      "profile": "safe",
+      "do": "Provide a concise summary to the user: what visualization was created, what design choices were made and why, how to open and use the file (just open visualization.html in a browser), and any interactive features they should try. Mention the file path.",
+      "produces": "A user-friendly summary of the completed visualization with usage instructions.",
+      "context": [
+        "gather-requirements",
+        "design-visualization",
+        "implement-html"
+      ]
+    }
+  }
+}

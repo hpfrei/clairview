@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { readJSON, writeJSON, ensureDir } = require('../utils');
 
 // --- Integrated MCP server directory ---
 
@@ -10,7 +11,7 @@ let serversDir = null;
 function getServersDir() {
   if (!serversDir) {
     serversDir = path.join(path.dirname(path.dirname(__dirname)), 'mcp-servers');
-    if (!fs.existsSync(serversDir)) fs.mkdirSync(serversDir, { recursive: true });
+    ensureDir(serversDir);
   }
   return serversDir;
 }
@@ -24,9 +25,7 @@ function metaPath() {
 }
 
 function readMeta() {
-  try {
-    return JSON.parse(fs.readFileSync(metaPath(), 'utf8'));
-  } catch { return null; }
+  return readJSON(metaPath());
 }
 
 function writeMeta(meta) {
@@ -180,7 +179,7 @@ function toggleTool(slug, enabled) {
 function writeToolFile(tool) {
   const dir = serverDir();
   const toolsDir = path.join(dir, 'tools');
-  if (!fs.existsSync(toolsDir)) fs.mkdirSync(toolsDir, { recursive: true });
+  ensureDir(toolsDir);
 
   const params = (tool.params || []).map(p => {
     let zod;
@@ -294,7 +293,7 @@ function writeFile(filePath, content) {
   if (!safe) return { error: 'Invalid path.' };
   const full = path.join(serverDir(), safe);
   const dir = path.dirname(full);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   fs.writeFileSync(full, content);
   return { ok: true, path: safe };
 }

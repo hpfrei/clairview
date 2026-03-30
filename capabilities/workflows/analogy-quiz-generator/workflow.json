@@ -1,0 +1,59 @@
+{
+  "name": "analogy-quiz-generator",
+  "description": "Generates a quiz question by finding an analogy for a user-provided topic, mapping a situation into that analogy space, and formulating a question whose correct answer reveals a truth about the original topic. Uses interactive prompts to gather the topic and deliver the quiz.",
+  "inputs": {},
+  "steps": {
+    "gather-topic": {
+      "profile": "safe",
+      "do": "Use the AskUserQuestion tool to ask the user what topic they'd like to be quizzed on. The question should be friendly and open-ended, e.g. 'What topic would you like a quiz question about? It can be anything — science, history, programming, philosophy, etc.' Return the user's chosen topic as your output.",
+      "produces": "The user's chosen topic as a plain string"
+    },
+    "find-analogy": {
+      "profile": "safe",
+      "do": "Given the user's topic from the previous step, brainstorm and select one vivid, unexpected analogy domain that maps well onto the core concepts of that topic. For example, if the topic is 'TCP/IP networking', an analogy domain might be 'a postal service system'. Choose an analogy that is concrete, relatable, and structurally rich enough to support a quiz question. Output the analogy domain and a brief explanation of how it maps to the original topic (at least 3 mapping points between the analogy and the real topic).",
+      "produces": "The chosen analogy domain and a structural mapping (3+ correspondence points) between the analogy and the original topic",
+      "context": [
+        "gather-topic"
+      ]
+    },
+    "map-situation": {
+      "profile": "safe",
+      "do": "Using the analogy domain and mapping from the previous step, construct a specific scenario or situation described entirely within the analogy space. This scenario should encode a non-obvious truth or important principle about the original topic. The situation should be detailed enough to reason about but should NOT mention the original topic directly — it should be told purely in analogy terms. For example, if the analogy is 'postal service' for 'TCP/IP', describe a situation like 'A postmaster guarantees every letter arrives in order by requiring the recipient to send back a signed receipt for each letter before the next one is sent.'",
+      "produces": "A concrete scenario described in the analogy domain that encodes a truth about the original topic",
+      "context": [
+        "gather-topic",
+        "find-analogy"
+      ]
+    },
+    "formulate-question": {
+      "profile": "safe",
+      "do": "Using the analogy scenario from the previous step, formulate a multiple-choice quiz question (4 options, exactly one correct). The question should present the analogy scenario and ask what principle or truth about the ORIGINAL topic it illustrates. The correct answer should reveal a genuine insight about the original topic. The three wrong answers should be plausible but incorrect. Output the question text, the four options labeled A-D, and indicate which is correct along with a brief explanation of why.",
+      "produces": "A complete multiple-choice question with 4 options, the correct answer marked, and an explanation",
+      "context": [
+        "gather-topic",
+        "find-analogy",
+        "map-situation"
+      ]
+    },
+    "deliver-quiz": {
+      "profile": "safe",
+      "do": "Use the AskUserQuestion tool to present the quiz question to the user. Show the analogy scenario and the question text, then provide the four answer options (A, B, C, D) as selectable choices. Do NOT reveal the correct answer yet. Return the user's selected answer.",
+      "produces": "The user's selected answer (A, B, C, or D)",
+      "context": [
+        "formulate-question"
+      ]
+    },
+    "reveal-and-summarize": {
+      "profile": "safe",
+      "do": "Compare the user's answer to the correct answer from the formulate-question step. Use the AskUserQuestion tool to present the result: tell them whether they got it right or wrong, reveal the correct answer, and provide the full explanation. Explain how the analogy maps back to the original topic, what truth it illustrates, and why the correct answer is correct. Make it educational and encouraging regardless of whether they answered correctly. End by asking if they'd like another question on a different topic.",
+      "produces": "A summary revealing the correct answer, the explanation of the analogy mapping, and encouragement",
+      "context": [
+        "gather-topic",
+        "find-analogy",
+        "map-situation",
+        "formulate-question",
+        "deliver-quiz"
+      ]
+    }
+  }
+}

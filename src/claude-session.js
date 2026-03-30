@@ -1,8 +1,10 @@
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, resolveOutputDir, OUTPUTS_DIR } = require('./utils');
+
+const PROJECT_ROOT = path.dirname(__dirname);
 
 class ClaudeSession {
   constructor(proxyPort, broadcaster, store, opts = {}) {
@@ -11,10 +13,10 @@ class ClaudeSession {
     this.store = store;
     this.proc = null;
     this.buffer = '';
-    this.cwd = process.env.PROJECT_DIR || process.cwd();
+    this.cwd = resolveOutputDir('');
     this.sessionId = null;
     this.ready = false;
-    this.capabilities = caps.loadActiveProfile(process.cwd());
+    this.capabilities = caps.loadActiveProfile(PROJECT_ROOT);
     this._mcpConfigFile = null; // temp file for --mcp-config
     this._authToken = opts.authToken || '';
     this._dashboardPort = opts.dashboardPort || 3457;
@@ -29,10 +31,7 @@ class ClaudeSession {
   }
 
   setCwd(dir) {
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-      return false;
-    }
-    this.cwd = dir;
+    this.cwd = resolveOutputDir(dir);
     this._broadcastSettings();
     return true;
   }
@@ -41,19 +40,19 @@ class ClaudeSession {
     this.capabilities = caps.validateProfile(profile);
     // Save custom profiles to disk; builtins are not saved
     if (!caps.BUILTIN_PROFILES[this.capabilities.name]) {
-      caps.saveProfile(process.cwd(), this.capabilities);
+      caps.saveProfile(PROJECT_ROOT, this.capabilities);
     }
-    caps.setActiveProfile(process.cwd(), this.capabilities.name);
+    caps.setActiveProfile(PROJECT_ROOT, this.capabilities.name);
     if (this.running) this.kill();
     this._broadcastSettings();
     return true;
   }
 
   switchProfile(name) {
-    const profile = caps.loadProfile(process.cwd(), name);
+    const profile = caps.loadProfile(PROJECT_ROOT, name);
     if (!profile) return false;
     this.capabilities = profile;
-    caps.setActiveProfile(process.cwd(), name);
+    caps.setActiveProfile(PROJECT_ROOT, name);
     if (this.running) this.kill();
     this._broadcastSettings();
     return true;
@@ -63,6 +62,7 @@ class ClaudeSession {
     this.broadcaster.broadcast({
       type: 'chat:settings',
       cwd: this.cwd,
+      outputsDir: OUTPUTS_DIR,
       capabilities: this.capabilities,
     });
   }
@@ -142,119 +142,46 @@ class ClaudeSession {
       this.kill();
     }
 
-    this.buffer = '';
     this.broadcaster.broadcast({ type: 'chat:status', status: 'running' });
 
-    const args = ['-p', '--verbose', '--output-format', 'stream-json'];
-    if (this.sessionId) {
-      args.push('--resume', this.sessionId);
-    }
-    // Profile-based capability flags
-    const c = this.capabilities;
-    if (c.permissionMode && c.permissionMode !== 'default') {
-      args.push('--permission-mode', c.permissionMode);
-    }
-    if (c.disabledTools && c.disabledTools.length > 0) {
-      args.push('--disallowedTools', ...c.disabledTools);
-    }
-    if (c.model) {
-      args.push('--model', c.model);
-    }
-    if (c.effort) {
-      args.push('--effort', c.effort);
-    }
-    if (c.disableSlashCommands) {
-      args.push('--disable-slash-commands');
-    }
-    if (c.maxTurns) {
-      args.push('--max-turns', String(c.maxTurns));
-    }
-    if (c.maxBudgetUsd) {
-      args.push('--max-budget-usd', String(c.maxBudgetUsd));
-    }
-    if (c.appendSystemPrompt) {
-      args.push('--append-system-prompt', c.appendSystemPrompt);
-    }
-    if (c.systemPrompt) {
-      args.push('--system-prompt', c.systemPrompt);
-    }
+    const args = buildClaudeArgs(this.capabilities);
+    if (this.sessionId) args.push('--resume', this.sessionId);
 
     // MCP server config injection
     this._cleanupMcpConfig();
     const mcpConfigFile = this._buildMcpConfig();
-    if (mcpConfigFile) {
-      args.push('--mcp-config', mcpConfigFile);
-    }
+    if (mcpConfigFile) args.push('--mcp-config', mcpConfigFile);
 
-    this.proc = spawn('claude', args, {
-      cwd: this.cwd,
-      env: {
-        ...process.env,
-        ANTHROPIC_BASE_URL: `http://localhost:${this.proxyPort}`,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    this.proc = spawnClaude(args, { cwd: this.cwd, proxyPort: this.proxyPort });
 
-    // Send prompt to stdin and close it
     this.proc.stdin.write(prompt);
     this.proc.stdin.end();
 
-    this.proc.stdout.on('data', (chunk) => {
-      const text = chunk.toString('utf-8');
-      this.buffer += text;
-
-      // stream-json outputs one JSON object per line
-      const lines = this.buffer.split('\n');
-      this.buffer = lines.pop(); // keep incomplete line
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.session_id && !this.sessionId) {
-            this.sessionId = event.session_id;
-            console.log(`[session] Captured session ${this.sessionId}`);
-            this.store.saveSessionMeta(this.sessionId);
-          }
-          this.broadcaster.broadcast({ type: 'chat:event', event });
-          // 'result' is the last meaningful event from claude -p; signal idle immediately
-          if (event.type === 'result') {
-            this.broadcaster.broadcast({ type: 'chat:status', status: 'idle', exitCode: null });
-          }
-        } catch {
-          // Not valid JSON, send as raw text
-          this.broadcaster.broadcast({ type: 'chat:output', text: line });
+    const parser = createStreamJsonParser(
+      (event) => {
+        if (event.session_id && !this.sessionId) {
+          this.sessionId = event.session_id;
+          console.log(`[session] Captured session ${this.sessionId}`);
+          this.store.saveSessionMeta(this.sessionId);
         }
-      }
-    });
+        this.broadcaster.broadcast({ type: 'chat:event', event });
+        if (event.type === 'result') {
+          this.broadcaster.broadcast({ type: 'chat:status', status: 'idle', exitCode: null });
+        }
+      },
+      (line) => this.broadcaster.broadcast({ type: 'chat:output', text: line }),
+    );
+
+    this.proc.stdout.on('data', (chunk) => parser.write(chunk));
 
     this.proc.stderr.on('data', (chunk) => {
-      const text = chunk.toString('utf-8');
-      this.broadcaster.broadcast({ type: 'chat:error', text });
+      this.broadcaster.broadcast({ type: 'chat:error', text: chunk.toString('utf-8') });
     });
 
     this.proc.on('close', (code) => {
-      // Flush remaining buffer
-      if (this.buffer.trim()) {
-        try {
-          const event = JSON.parse(this.buffer);
-          if (event.session_id && !this.sessionId) {
-            this.sessionId = event.session_id;
-            console.log(`[session] Captured session ${this.sessionId}`);
-            this.store.saveSessionMeta(this.sessionId);
-          }
-          this.broadcaster.broadcast({ type: 'chat:event', event });
-        } catch {
-          this.broadcaster.broadcast({ type: 'chat:output', text: this.buffer });
-        }
-        this.buffer = '';
-      }
+      parser.flush();
       this._cleanupMcpConfig();
-      this.broadcaster.broadcast({
-        type: 'chat:status',
-        status: 'idle',
-        exitCode: code,
-      });
+      this.broadcaster.broadcast({ type: 'chat:status', status: 'idle', exitCode: code });
       this.proc = null;
     });
 

@@ -1,0 +1,154 @@
+{
+  "providers": {
+    "openai": {
+      "label": "OpenAI",
+      "apiBaseUrl": "https://api.openai.com/v1"
+    },
+    "google": {
+      "label": "Google Gemini",
+      "apiBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    "deepseek": {
+      "label": "DeepSeek",
+      "apiBaseUrl": "https://api.deepseek.com"
+    },
+    "moonshot": {
+      "label": "Kimi / Moonshot",
+      "apiBaseUrl": "https://api.moonshot.ai/v1"
+    }
+  },
+  "models": [
+    {
+      "name": "gpt-5.4",
+      "label": "GPT-5.4",
+      "description": "OpenAI's flagship model (1M context, frontier coding and reasoning)",
+      "providerKey": "openai",
+      "provider": "openai",
+      "modelId": "gpt-5.4",
+      "systemPromptMode": "replace",
+      "reasoning": false,
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000
+    },
+    {
+      "name": "gpt-5.4-pro",
+      "label": "GPT-5.4 Pro",
+      "description": "Maximum performance for the most complex tasks",
+      "providerKey": "openai",
+      "provider": "openai",
+      "modelId": "gpt-5.4-pro",
+      "systemPromptMode": "replace",
+      "reasoning": false,
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000
+    },
+    {
+      "name": "gpt-5.4-mini",
+      "label": "GPT-5.4 Mini",
+      "description": "Fast and efficient for high-volume workloads",
+      "providerKey": "openai",
+      "provider": "openai",
+      "modelId": "gpt-5.4-mini",
+      "systemPromptMode": "replace",
+      "reasoning": false,
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000
+    },
+    {
+      "name": "gpt-5.4-nano",
+      "label": "GPT-5.4 Nano",
+      "description": "Cheapest and fastest — classification, extraction, sub-agents",
+      "providerKey": "openai",
+      "provider": "openai",
+      "modelId": "gpt-5.4-nano",
+      "systemPromptMode": "replace",
+      "reasoning": false,
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000
+    },
+    {
+      "name": "gemini-3.1-pro",
+      "label": "Gemini 3.1 Pro",
+      "description": "Google's most capable reasoning model for complex agentic workflows (1M context)",
+      "providerKey": "google",
+      "provider": "openai",
+      "modelId": "gemini-3.1-pro-preview",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536
+    },
+    {
+      "name": "gemini-3-flash",
+      "label": "Gemini 3 Flash",
+      "description": "Pro-level intelligence at Flash speed and pricing (1M context)",
+      "providerKey": "google",
+      "provider": "openai",
+      "modelId": "gemini-3-flash-preview",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536
+    },
+    {
+      "name": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "description": "Stable production model with integrated thinking (1M context, depreciating June 2026)",
+      "providerKey": "google",
+      "provider": "openai",
+      "modelId": "gemini-2.5-flash",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536
+    },
+    {
+      "name": "deepseek-v3",
+      "label": "DeepSeek V3.2",
+      "description": "DeepSeek's general-purpose model, non-thinking mode (128K context)",
+      "providerKey": "deepseek",
+      "provider": "openai",
+      "modelId": "deepseek-chat",
+      "systemPromptMode": "replace",
+      "reasoning": false,
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192
+    },
+    {
+      "name": "deepseek-r1",
+      "label": "DeepSeek R1 (V3.2 Thinking)",
+      "description": "DeepSeek reasoning model with chain-of-thought (128K context)",
+      "providerKey": "deepseek",
+      "provider": "openai",
+      "modelId": "deepseek-reasoner",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 128000,
+      "maxOutputTokens": 64000
+    },
+    {
+      "name": "kimi-k2.5",
+      "label": "Kimi K2.5",
+      "description": "Moonshot's flagship multimodal model with thinking (256K context)",
+      "providerKey": "moonshot",
+      "provider": "openai",
+      "modelId": "kimi-k2.5",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 262144,
+      "maxOutputTokens": 65535
+    },
+    {
+      "name": "kimi-k2-thinking",
+      "label": "Kimi K2 Thinking",
+      "description": "Multi-step reasoning with tool calls (256K context)",
+      "providerKey": "moonshot",
+      "provider": "openai",
+      "modelId": "kimi-k2-thinking",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "contextWindow": 262144,
+      "maxOutputTokens": 65535
+    }
+  ]
+}

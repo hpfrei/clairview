@@ -2,7 +2,7 @@
 // CHAT MODULE — Tab-aware Claude chat, ask-user-question, toolbar
 // ============================================================
 (function chatModule() {
-  const { state, escHtml, sendWs } = window.dashboard;
+  const { state, escHtml, inlineMd, sendWs, setupCwdToolbar } = window.dashboard;
 
   // --- Tab state ---
   const tabs = new Map(); // tabId → { container, currentEl, status }
@@ -260,39 +260,9 @@
   const chatCwdSetBtn = document.getElementById('chatCwdSetBtn');
   const chatProfileSelect = document.getElementById('chatProfileSelect');
 
-  chatCwdBtn?.addEventListener('click', () => {
-    const editing = !chatCwdInput.classList.contains('hidden');
-    if (editing) {
-      chatCwdInput.classList.add('hidden');
-      chatCwdSetBtn.classList.add('hidden');
-      chatCwdLabel.classList.remove('hidden');
-    } else {
-      chatCwdInput.value = chatCwdLabel.textContent || '';
-      chatCwdLabel.classList.add('hidden');
-      chatCwdInput.classList.remove('hidden');
-      chatCwdSetBtn.classList.remove('hidden');
-      chatCwdInput.focus();
-    }
-  });
-
-  chatCwdSetBtn?.addEventListener('click', () => {
-    const cwd = chatCwdInput?.value?.trim();
-    if (!cwd) return;
-    sendWs({ type: 'chat:setCwd', tabId: activeTabId, cwd });
-    chatCwdInput.classList.add('hidden');
-    chatCwdSetBtn.classList.add('hidden');
-    chatCwdLabel.classList.remove('hidden');
-  });
-
-  chatCwdInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      chatCwdSetBtn?.click();
-    } else if (e.key === 'Escape') {
-      chatCwdInput.classList.add('hidden');
-      chatCwdSetBtn.classList.add('hidden');
-      chatCwdLabel.classList.remove('hidden');
-    }
+  setupCwdToolbar({
+    editBtn: chatCwdBtn, label: chatCwdLabel, input: chatCwdInput, setBtn: chatCwdSetBtn,
+    onSave: (cwd) => sendWs({ type: 'chat:setCwd', tabId: activeTabId, cwd }),
   });
 
   chatProfileSelect?.addEventListener('change', (e) => {
@@ -325,19 +295,10 @@
   }
 
   function updateChatSettings(msg) {
+    // State sync handled by core.js syncSettings(); just update UI here
     if (msg.cwd) {
       if (chatCwdLabel) chatCwdLabel.textContent = msg.cwd;
       if (chatCwdInput) chatCwdInput.placeholder = msg.cwd;
-    }
-    if (msg.profiles) state.profiles = msg.profiles;
-    if (msg.knownTools) state.knownTools = msg.knownTools;
-    if (msg.knownSkills) state.knownSkills = msg.knownSkills;
-    if (msg.hookEvents) state.hookEvents = msg.hookEvents;
-    if (msg.matcherEvents) state.matcherEvents = msg.matcherEvents;
-    if (msg.mcpServers) state.mcpServers = msg.mcpServers;
-    if (msg.capabilities) {
-      state.capabilities = msg.capabilities;
-      state.activeProfileName = msg.capabilities.name;
     }
     if (msg.capabilities || msg.profiles) {
       renderChatProfileSelect();
@@ -374,8 +335,6 @@
       const isMulti = !!q.multiSelect;
 
       if (qi > 0) html += `<div class="chat-question-divider"></div>`;
-      const inlineMd = (text) => typeof marked !== 'undefined' ? marked.parseInline(text || '') : escHtml(text || '');
-
       if (q.header) {
         html += `<div class="chat-question-header">${escHtml(q.header)}</div>`;
       }

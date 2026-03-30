@@ -473,8 +473,9 @@ function logMcpCall(toolName, input, result, durationMs, source) {
   };
 
   store.add(interaction);
-  broadcaster.broadcast({ type: 'interaction:start', interaction: interaction });
-  broadcaster.broadcast({ type: 'interaction:complete', interaction: interaction });
+  store.save(interaction.id);
+  broadcaster.broadcast({ type: 'interaction:start', interaction });
+  broadcaster.broadcast({ type: 'interaction:complete', interaction });
 }
 
 // Called by the bridge when a tool is executed by Claude Code

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { readJSON } = require('../utils');
 
 function resolveConfigPath(scope, projectDir) {
   if (scope === 'project' && projectDir) {
@@ -10,11 +11,7 @@ function resolveConfigPath(scope, projectDir) {
 }
 
 function readConfig(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return {};
-  }
+  return readJSON(filePath, {});
 }
 
 function writeConfig(filePath, data) {

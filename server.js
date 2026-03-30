@@ -10,6 +10,7 @@ const ClaudeSessionManager = require('./src/claude-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 const workflowHandler = require('./src/workflow-handler');
+const { OUTPUTS_DIR, ensureDir } = require('./src/utils');
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const DASHBOARD_PORT = parseInt(process.argv[2] || process.env.DASHBOARD_PORT || '3457');
@@ -29,8 +30,7 @@ let sessionManager = null; // forward reference, assigned below
 // getActiveModelDef: returns the model definition if the active profile uses a non-Anthropic model
 function getActiveModelDef() {
   if (!sessionManager?.capabilities?.modelDef) return null;
-  const cwd = sessionManager.cwd || process.cwd();
-  return caps.loadModel(cwd, sessionManager.capabilities.modelDef) || null;
+  return caps.loadModel(__dirname, sessionManager.capabilities.modelDef) || null;
 }
 
 const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getActiveModelDef);
@@ -70,6 +70,11 @@ dashboardApp.use((req, res, next) => {
 });
 
 dashboardApp.use(express.static(path.join(__dirname, 'public')));
+
+// Serve workflow/chat outputs at /outputs (directory auto-created)
+ensureDir(OUTPUTS_DIR);
+dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
+
 const dashboardServer = http.createServer(dashboardApp);
 
 // Session manager (spawns claude -p instances through the proxy)

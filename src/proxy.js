@@ -64,7 +64,8 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster) {
     if (tb && tb.name === 'AskUserQuestion') {
       try {
         const input = JSON.parse(tb.inputJson);
-        pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null });
+        // Capture workflow context now (not later) to avoid race conditions with parallel steps
+        pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null, ctx: _questionContext ? { ..._questionContext } : null });
       } catch {}
     }
     activeToolBlocks.delete(event.data?.index);
@@ -107,8 +108,8 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
               pending.reject = reject;
             });
 
-            // Broadcast question to dashboard (include workflow context if set)
-            const qCtx = _questionContext || {};
+            // Use context captured when the question was recorded (not global)
+            const qCtx = pending.ctx || {};
             console.log(`[proxy] Broadcasting ask:question ${toolUseId}, questionContext:`, qCtx.tabId ? `tabId=${qCtx.tabId}` : 'none (chat)');
             broadcaster.broadcast({
               type: 'ask:question',
@@ -133,12 +134,10 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
                 content: JSON.stringify(answer),
               };
 
-              const aCtx = _questionContext || {};
-              broadcaster.broadcast({ type: 'ask:answered', toolUseId, ...(aCtx.tabId ? { tabId: aCtx.tabId } : {}) });
+              broadcaster.broadcast({ type: 'ask:answered', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
             } catch {
               // Timeout or error - forward original error as-is
-              const tCtx = _questionContext || {};
-              broadcaster.broadcast({ type: 'ask:timeout', toolUseId, ...(tCtx.tabId ? { tabId: tCtx.tabId } : {}) });
+              broadcaster.broadcast({ type: 'ask:timeout', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
             }
 
             pendingQuestions.delete(toolUseId);
@@ -362,57 +361,11 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
 
         res.writeHead(upstream.status, responseHeaders);
 
-        // Track AskUserQuestion tool_use blocks per-request
         const activeToolBlocks = new Map();
 
         const passthrough = new SSEPassthrough((event) => {
           interaction.response.sseEvents.push(event);
-
-          if (event.eventType === 'message_start') {
-            interaction.timing.ttfb = Date.now() - interaction.timing.startedAt;
-            if (event.data?.message?.usage) {
-              interaction.usage = { ...event.data.message.usage };
-            }
-          }
-          if (event.eventType === 'message_delta' && event.data?.usage) {
-            interaction.usage = { ...interaction.usage, ...event.data.usage };
-          }
-          if (event.eventType === 'message_stop') {
-            interaction.timing.duration = Date.now() - interaction.timing.startedAt;
-            interaction.status = 'complete';
-          }
-
-          // --- Track AskUserQuestion tool_use blocks ---
-          if (event.eventType === 'content_block_start' && event.data?.content_block?.type === 'tool_use') {
-            const cb = event.data.content_block;
-            activeToolBlocks.set(event.data.index, {
-              id: cb.id,
-              name: cb.name,
-              inputJson: '',
-            });
-          }
-          if (event.eventType === 'content_block_delta' && event.data?.delta?.type === 'input_json_delta') {
-            const tb = activeToolBlocks.get(event.data.index);
-            if (tb) tb.inputJson += event.data.delta.partial_json || '';
-          }
-          if (event.eventType === 'content_block_stop') {
-            const tb = activeToolBlocks.get(event.data?.index);
-            if (tb && tb.name === 'AskUserQuestion') {
-              try {
-                const input = JSON.parse(tb.inputJson);
-                pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null });
-                console.log(`[proxy] Recorded AskUserQuestion ${tb.id} with ${input.questions?.length || 0} questions`);
-              } catch {}
-            }
-            activeToolBlocks.delete(event.data?.index);
-          }
-
-          broadcaster.broadcast({
-            type: 'sse_event',
-            interactionId: interaction.id,
-            event,
-          });
-
+          trackSSEEvent(event, interaction, activeToolBlocks, broadcaster);
         });
 
         const nodeStream = Readable.fromWeb(upstream.body);

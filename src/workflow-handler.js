@@ -3,9 +3,13 @@
 // Follows src/mcp/index.js pattern: init(), onConnect(), handleMessage()
 // ============================================================
 
+const path = require('path');
 const workflows = require('./workflows');
 const caps = require('./capabilities');
 const mcpServers = require('./mcp/servers');
+const { resolveOutputDir } = require('./utils');
+
+const PROJECT_ROOT = path.dirname(__dirname);
 
 let broadcaster = null;
 let sessionManager = null;
@@ -19,16 +23,15 @@ function init(options) {
 }
 
 function onConnect(ws) {
-  const cwd = sessionManager?.cwd || process.cwd();
   ws.send(JSON.stringify({
     type: 'workflow:list',
-    workflows: workflows.listWorkflows(cwd),
+    workflows: workflows.listWorkflows(PROJECT_ROOT),
   }));
 }
 
 async function handleMessage(ws, msg, bc) {
   const send = (data) => ws.send(JSON.stringify(data));
-  const cwd = sessionManager?.cwd || process.cwd();
+  const cwd = PROJECT_ROOT;
 
   try {
     switch (msg.type) {
@@ -105,8 +108,8 @@ async function handleMessage(ws, msg, bc) {
 
       case 'workflow:run':
         try {
-          // Prefer explicit cwd from message, fall back to session default
-          const runCwd = msg.cwd || cwd;
+          // Resolve CWD into outputs sandbox (creates dir if needed)
+          const runCwd = resolveOutputDir(msg.cwd || '');
           // Run async — don't await, let it broadcast progress
           workflows.runWorkflow(msg.name, msg.inputs || {}, {
             sessionManager,

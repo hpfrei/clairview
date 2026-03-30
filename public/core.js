@@ -40,6 +40,7 @@ const state = {
   providers: [],
   editingModel: null,
   mcpServers: [],
+  outputsDir: '',
   // Tasks
   tasks: {},
   todos: [],
@@ -91,6 +92,10 @@ function renderMarkdownDebounced(text, targetEl) {
     _renderTimers.delete(targetEl);
     renderMarkdown(targetEl._rawText, targetEl);
   }, 200));
+}
+
+function inlineMd(text) {
+  return typeof marked !== 'undefined' ? marked.parseInline(text || '') : escHtml(text || '');
 }
 
 function highlightJSON(obj) {
@@ -231,11 +236,63 @@ const newSessionBtn = document.getElementById('newSessionBtn');
 const deleteSessionBtn = document.getElementById('deleteSessionBtn');
 const switchSessionBtn = document.getElementById('switchSessionBtn');
 
+// Centralized settings state sync — called once, modules just re-render
+function syncSettings(msg) {
+  if (msg.capabilities) {
+    state.capabilities = msg.capabilities;
+    state.activeProfileName = msg.capabilities.name;
+  }
+  if (msg.profiles) state.profiles = msg.profiles;
+  if (msg.knownTools) state.knownTools = msg.knownTools;
+  if (msg.knownSkills) state.knownSkills = msg.knownSkills;
+  if (msg.hookEvents) state.hookEvents = msg.hookEvents;
+  if (msg.matcherEvents) state.matcherEvents = msg.matcherEvents;
+  if (msg.mcpServers) state.mcpServers = msg.mcpServers;
+  if (msg.outputsDir) state.outputsDir = msg.outputsDir;
+}
+
+// Reusable CWD edit-in-place toolbar setup
+function setupCwdToolbar({ editBtn, label, input, setBtn, onSave }) {
+  editBtn?.addEventListener('click', () => {
+    const editing = !input.classList.contains('hidden');
+    if (editing) {
+      input.classList.add('hidden');
+      setBtn.classList.add('hidden');
+      label.classList.remove('hidden');
+    } else {
+      input.value = label.textContent || '';
+      label.classList.add('hidden');
+      input.classList.remove('hidden');
+      setBtn.classList.remove('hidden');
+      input.focus();
+    }
+  });
+  setBtn?.addEventListener('click', () => {
+    const val = input?.value?.trim();
+    if (!val) return;
+    onSave(val);
+    input.classList.add('hidden');
+    setBtn.classList.add('hidden');
+    label.classList.remove('hidden');
+  });
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); setBtn?.click(); }
+    else if (e.key === 'Escape') {
+      input.classList.add('hidden');
+      setBtn.classList.add('hidden');
+      label.classList.remove('hidden');
+    }
+  });
+}
+
 // --- Expose API for modules ---
 window.dashboard = {
   state,
   sendWs(msg) { if (state.ws) state.ws.send(JSON.stringify(msg)); },
   escHtml,
+  inlineMd,
+  syncSettings,
+  setupCwdToolbar,
   highlightJSON,
   renderJSON,
   jsonBlock,
@@ -320,6 +377,7 @@ function handleMessage(msg) {
       }
       break;
     case 'chat:settings':
+      syncSettings(msg);
       window.chatModule?.handleMessage(msg);
       window.capabilitiesModule?.handleSettings(msg);
       window.workflowRunModule?.handleSettings?.(msg);

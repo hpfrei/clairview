@@ -970,14 +970,12 @@
       <!-- ===================== MODELS ===================== -->
       <div class="ref-panel" id="ref-models">
         <div class="ref-intro">
-          <strong>Models</strong> are grouped by API provider. Set the API key once per provider — all models under that provider share it.
-          The proxy translates requests from Anthropic format to OpenAI-compatible format and streams responses back.
-          <br><br>
-          <strong>API keys</strong> are stored locally in <code>capabilities/models.json</code> (gitignored). Set them here or edit the file directly.
+          <strong>Models</strong> are grouped by provider. Set the API key per provider to enable all its models.
+          Select a model in any profile's <code>modelDef</code> field to route requests through that provider instead of Anthropic.
+          <br>API keys are stored locally and never committed to git.
         </div>
         <div class="cap-section-header">
           <span>Providers &amp; Models</span>
-          <button class="cap-new-btn" id="capNewModel">+ New Model</button>
         </div>
         <div id="capModelList"></div>
       </div><!-- /ref-models -->
@@ -1400,8 +1398,8 @@ jq -r '.tool_input.command' |
               <div class="pm-form-group">
                 <h4>Identity</h4>
                 <div class="pm-field-row">
-                  <label>Name: <input type="text" id="mmName" placeholder="gpt-4o" pattern="[a-z][a-z0-9._-]*"></label>
-                  <label>Label: <input type="text" id="mmLabel" placeholder="GPT-4o"></label>
+                  <label>Name: <input type="text" id="mmName" placeholder="gpt-5.4" pattern="[a-z][a-z0-9._-]*"></label>
+                  <label>Label: <input type="text" id="mmLabel" placeholder="GPT-5.4"></label>
                 </div>
                 <div class="pm-field-row">
                   <label class="pm-wide">Description: <input type="text" id="mmDescription" placeholder="Model description..."></label>
@@ -1409,7 +1407,7 @@ jq -r '.tool_input.command' |
               </div>
 
               <div class="pm-form-group">
-                <h4>Provider</h4>
+                <h4>Provider &amp; Model</h4>
                 <div class="pm-field-row">
                   <label>Provider group:
                     <select id="mmProviderKey"></select>
@@ -1421,7 +1419,14 @@ jq -r '.tool_input.command' |
                   </label>
                 </div>
                 <div class="pm-field-row">
-                  <label>Model ID: <input type="text" id="mmModelId" placeholder="gpt-4o"></label>
+                  <label>Model ID: <input type="text" id="mmModelId" placeholder="gpt-5.4"></label>
+                </div>
+                <div class="pm-field-row">
+                  <label><input type="checkbox" id="mmReasoning"> Reasoning model (chain-of-thought)</label>
+                </div>
+                <div class="pm-field-row">
+                  <label>Context window: <input type="number" id="mmContextWindow" placeholder="1000000" min="0"></label>
+                  <label>Max output tokens: <input type="number" id="mmMaxOutputTokens" placeholder="128000" min="0"></label>
                 </div>
                 <div class="pm-field-row mm-custom-fields hidden" id="mmCustomFields">
                   <label class="pm-wide">API Base URL: <input type="text" id="mmApiBaseUrl" placeholder="https://api.openai.com/v1"></label>
@@ -1466,10 +1471,10 @@ jq -r '.tool_input.command' |
 
 # API key and base URL come from the
 # provider group — set them once in
-# the Models tab.</pre>
+# the Models panel.</pre>
 
               <h4>Provider group</h4>
-              <p class="cap-modal-hint">Models inherit their API key and base URL from the selected <strong>provider group</strong>. Custom provider models can override both.</p>
+              <p class="cap-modal-hint">Models inherit their API key and base URL from the selected <strong>provider group</strong>. Set the key once per provider — all models share it. Custom providers can override both.</p>
 
               <h4>System prompt mode</h4>
               <pre class="cap-modal-pre"># replace — swap Claude's 27K prompt
