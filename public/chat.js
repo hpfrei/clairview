@@ -164,7 +164,13 @@
 
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble chat-${role}`;
-    bubble.textContent = text;
+    if (role === 'assistant') {
+      bubble.classList.add('markdown-body');
+      bubble._rawText = text;
+      if (text) window.dashboard.renderMarkdown(text, bubble);
+    } else {
+      bubble.textContent = text;
+    }
     container.appendChild(bubble);
     if ((tabId || activeTabId) === activeTabId) chatScrollToBottom();
     return bubble;
@@ -175,7 +181,8 @@
     const tab = tabs.get(tid);
     if (!tab) return;
     if (role === 'assistant' && tab.currentEl) {
-      tab.currentEl.textContent += text;
+      tab.currentEl._rawText = (tab.currentEl._rawText || '') + text;
+      window.dashboard.renderMarkdownDebounced(tab.currentEl._rawText, tab.currentEl);
     } else {
       tab.currentEl = appendChatBubble(text, role, tid);
     }
@@ -200,7 +207,8 @@
         if (!tab.currentEl) {
           tab.currentEl = appendChatBubble('', 'assistant', tid);
         }
-        tab.currentEl.textContent += text;
+        tab.currentEl._rawText = (tab.currentEl._rawText || '') + text;
+        window.dashboard.renderMarkdownDebounced(tab.currentEl._rawText, tab.currentEl);
         if (tid === activeTabId) {
           state.chatCurrentEl = tab.currentEl;
           chatScrollToBottom();
@@ -211,7 +219,8 @@
         if (!tab.currentEl) {
           tab.currentEl = appendChatBubble('', 'assistant', tid);
         }
-        tab.currentEl.textContent = event.result;
+        tab.currentEl._rawText = event.result;
+        window.dashboard.renderMarkdown(event.result, tab.currentEl);
         if (tid === activeTabId) chatScrollToBottom();
       }
       tab.currentEl = null;
@@ -365,12 +374,14 @@
       const isMulti = !!q.multiSelect;
 
       if (qi > 0) html += `<div class="chat-question-divider"></div>`;
+      const inlineMd = (text) => typeof marked !== 'undefined' ? marked.parseInline(text || '') : escHtml(text || '');
+
       if (q.header) {
         html += `<div class="chat-question-header">${escHtml(q.header)}</div>`;
       }
-      html += `<div class="chat-question-text">${escHtml(q.question)}</div>`;
+      html += `<div class="chat-question-text markdown-body">${inlineMd(q.question)}</div>`;
       if (isMulti) {
-        html += `<div class="chat-question-hint">Select one or more, then submit</div>`;
+        html += `<div class="chat-question-hint">Select one or more</div>`;
       }
 
       if (q.options && q.options.length > 0) {
@@ -382,18 +393,19 @@
           }
           html += `<span class="chat-option-label">${escHtml(opt.label)}</span>`;
           if (opt.description) {
-            html += `<span class="chat-option-desc">${escHtml(opt.description)}</span>`;
+            html += `<span class="chat-option-desc markdown-body">${inlineMd(opt.description)}</span>`;
           }
           html += `</button>`;
         }
         html += `</div>`;
       }
+
+      // Free-text input
+      html += `<textarea class="chat-question-textarea" data-qi="${qi}" rows="2" placeholder="Or type your answer here..."></textarea>`;
     }
 
-    const needsSubmit = questions.length > 1 || questions.some(q => q.multiSelect);
-    if (needsSubmit) {
-      html += `<button class="chat-submit-btn" disabled>Submit</button>`;
-    }
+    // Always show submit
+    html += `<button class="chat-submit-btn" disabled>Submit</button>`;
 
     bubble.innerHTML = html;
 
@@ -402,13 +414,15 @@
 
     function checkSubmitReady() {
       if (!submitBtn) return;
-      const allAnswered = allQuestions.every((_, qi) => {
+      const ready = allQuestions.some((_, qi) => {
         const sel = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
-        return sel.length > 0;
+        const ta = bubble.querySelector(`.chat-question-textarea[data-qi="${qi}"]`);
+        return sel.length > 0 || (ta && ta.value.trim());
       });
-      submitBtn.disabled = !allAnswered;
+      submitBtn.disabled = !ready;
     }
 
+    // Option click: toggle selection (never auto-submit)
     bubble.querySelectorAll('.chat-option-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const qi = parseInt(btn.dataset.qi);
@@ -421,40 +435,63 @@
         } else {
           optionsContainer.querySelectorAll('.chat-option-btn').forEach(b => b.classList.remove('selected'));
           btn.classList.add('selected');
-
-          if (!needsSubmit) {
-            const answer = [{ question: q.question, answer: btn.dataset.label }];
-            sendQuestionAnswer(toolUseId, answer);
-            bubble.querySelectorAll('.chat-option-btn').forEach(b => b.disabled = true);
-            bubble.classList.add('answered');
-            return;
-          }
         }
 
         checkSubmitReady();
       });
     });
 
-    if (submitBtn) {
-      submitBtn.addEventListener('click', () => {
-        const answer = allQuestions.map((q, qi) => {
+    // Textarea input: enable submit when text entered
+    bubble.querySelectorAll('.chat-question-textarea').forEach(ta => {
+      ta.addEventListener('input', checkSubmitReady);
+    });
+
+    submitBtn.addEventListener('click', () => {
+      const answer = allQuestions.map((q, qi) => {
+        const ta = bubble.querySelector(`.chat-question-textarea[data-qi="${qi}"]`);
+        const freeText = ta?.value?.trim() || '';
+
+        // Free text takes priority if filled
+        if (freeText) {
           const selected = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
           const labels = Array.from(selected).map(b => b.dataset.label);
           return {
             question: q.question,
-            answer: q.multiSelect ? labels : labels[0] || '',
+            answer: labels.length > 0 ? `${labels.join(', ')} — ${freeText}` : freeText,
           };
-        });
+        }
 
-        sendQuestionAnswer(toolUseId, answer);
-        bubble.querySelectorAll('.chat-option-btn').forEach(b => b.disabled = true);
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Submitted';
-        bubble.classList.add('answered');
+        const selected = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
+        const labels = Array.from(selected).map(b => b.dataset.label);
+        return {
+          question: q.question,
+          answer: q.multiSelect ? labels : labels[0] || '',
+        };
       });
-    }
+
+      sendQuestionAnswer(toolUseId, answer);
+      bubble.querySelectorAll('.chat-option-btn').forEach(b => b.disabled = true);
+      bubble.querySelectorAll('.chat-question-textarea').forEach(ta => ta.disabled = true);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitted';
+      bubble.classList.add('answered');
+
+      // Show submitted answer
+      const answerText = answer.map(a => {
+        const val = Array.isArray(a.answer) ? a.answer.join(', ') : a.answer;
+        return val;
+      }).filter(Boolean).join('; ');
+      if (answerText) {
+        const answerEl = document.createElement('div');
+        answerEl.className = 'chat-question-answer';
+        answerEl.textContent = answerText;
+        bubble.appendChild(answerEl);
+      }
+    });
 
     container.appendChild(bubble);
+    // Typeset math in question content
+    if (window.MathJax?.typesetPromise) window.MathJax.typesetPromise([bubble]).catch(() => {});
     if (tid === activeTabId) chatScrollToBottom();
   }
 

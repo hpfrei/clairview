@@ -119,15 +119,16 @@
     } else {
       html += '<div class="cap-list" id="mcpToolList">';
       for (const t of mcp.tools) {
+        const bi = t.builtin;
         html += `<div class="cap-list-item mcp-tool-row">
-          <label class="mcp-tool-toggle" title="${t.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
-            <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${t.slug}" class="mcp-tool-cb">
+          <label class="mcp-tool-toggle" title="${bi ? 'Built-in (always enabled)' : t.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
+            <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${t.slug}" class="mcp-tool-cb" ${bi ? 'disabled' : ''}>
           </label>
-          <span class="cap-item-name${t.enabled ? '' : ' mcp-disabled'}">${escHtml(t.name)}</span>
+          <span class="cap-item-name${t.enabled ? '' : ' mcp-disabled'}">${escHtml(t.name)}${bi ? ' <span class="ref-tag tag-ro" style="font-size:9px;margin-left:4px">built-in</span>' : ''}</span>
           <span class="cap-item-desc">${escHtml(t.description || '')}</span>
           <span class="cap-list-actions">
-            <button class="cap-edit-btn mcp-tool-edit" data-slug="${t.slug}" title="Edit tool">&#9998;</button>
-            <button class="cap-del-btn mcp-tool-del" data-slug="${t.slug}" title="Delete tool">&#10005;</button>
+            <button class="cap-edit-btn mcp-tool-edit" data-slug="${t.slug}" title="${bi ? 'View tool' : 'Edit tool'}">&#9998;</button>
+            ${bi ? '' : `<button class="cap-del-btn mcp-tool-del" data-slug="${t.slug}" title="Delete tool">&#10005;</button>`}
           </span>
         </div>`;
       }
@@ -210,7 +211,7 @@
   function toolModalKeyHandler(e) {
     if (!mcp.editing) { document.removeEventListener('keydown', toolModalKeyHandler); return; }
     if (e.key === 'Escape') closeToolModal();
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveTool(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (!mcp.editTool?.builtin) saveTool(); }
   }
 
   function renderModalHeader() {
@@ -218,10 +219,12 @@
     if (!el) return;
     const tool = mcp.editTool;
     const isNew = mcp.editing === '__new__' && !tool?.name;
+    const isBuiltin = tool?.builtin;
+    const title = isNew ? 'New Tool' : isBuiltin ? 'View Tool: ' + escHtml(tool?.name || mcp.editing) : 'Edit Tool: ' + escHtml(tool?.name || mcp.editing);
     el.innerHTML = `
-      <h3>${isNew ? 'New Tool' : 'Edit Tool: ' + escHtml(tool?.name || mcp.editing)}</h3>
+      <h3>${title}${isBuiltin ? ' <span class="ref-tag tag-ro" style="font-size:10px;vertical-align:middle">built-in</span>' : ''}</h3>
       <div class="mcp-tool-modal-actions">
-        <button class="mcp-action-btn primary" id="mcpToolSave">Save</button>
+        ${isBuiltin ? '' : '<button class="mcp-action-btn primary" id="mcpToolSave">Save</button>'}
         <button class="mcp-action-btn close-btn" id="mcpToolClose">&times;</button>
       </div>`;
     el.querySelector('#mcpToolSave')?.addEventListener('click', saveTool);
@@ -233,16 +236,17 @@
     if (!el) return;
     const tool = mcp.editTool;
     if (!tool) return;
+    const ro = tool.builtin;
 
     const paramRows = (tool.params || []).map((p, i) => `
       <tr class="mcp-param-row" data-idx="${i}">
-        <td><input type="text" class="mcp-p-name" value="${escHtml(p.name)}" placeholder="param_name"></td>
-        <td><select class="mcp-p-type">
+        <td><input type="text" class="mcp-p-name" value="${escHtml(p.name)}" placeholder="param_name" ${ro ? 'readonly' : ''}></td>
+        <td><select class="mcp-p-type" ${ro ? 'disabled' : ''}>
           ${['string','number','boolean','object','array'].map(t => `<option ${p.type === t ? 'selected' : ''}>${t}</option>`).join('')}
         </select></td>
-        <td><input type="text" class="mcp-p-desc" value="${escHtml(p.description || '')}" placeholder="Help text for Claude"></td>
-        <td style="text-align:center"><input type="checkbox" class="mcp-p-req" ${p.required ? 'checked' : ''}></td>
-        <td><button class="mcp-p-del" title="Remove">&times;</button></td>
+        <td><input type="text" class="mcp-p-desc" value="${escHtml(p.description || '')}" placeholder="Help text for Claude" ${ro ? 'readonly' : ''}></td>
+        <td style="text-align:center"><input type="checkbox" class="mcp-p-req" ${p.required ? 'checked' : ''} ${ro ? 'disabled' : ''}></td>
+        ${ro ? '<td></td>' : '<td><button class="mcp-p-del" title="Remove">&times;</button></td>'}
       </tr>`).join('');
 
     const paramNames = (tool.params || []).map(p => p.name).join(', ');
@@ -250,13 +254,13 @@
     el.innerHTML = `
       <div class="mcp-tool-form">
         <div class="mcp-form-group">
-          <div class="mcp-form-row"><label>Name: <input type="text" id="mcpToolName" value="${escHtml(tool.name)}" placeholder="my-tool"></label></div>
-          <div class="mcp-form-row"><label style="flex:1">Description: <input type="text" id="mcpToolDesc" value="${escHtml(tool.description || '')}" placeholder="What this tool does — shown to Claude"></label></div>
+          <div class="mcp-form-row"><label>Name: <input type="text" id="mcpToolName" value="${escHtml(tool.name)}" placeholder="my-tool" ${ro ? 'readonly' : ''}></label></div>
+          <div class="mcp-form-row"><label style="flex:1">Description: <input type="text" id="mcpToolDesc" value="${escHtml(tool.description || '')}" placeholder="What this tool does — shown to Claude" ${ro ? 'readonly' : ''}></label></div>
         </div>
 
         <div class="mcp-form-group">
-          <div class="mcp-form-group-header"><h4>Parameters</h4><button class="cap-new-btn" id="mcpAddParam" style="font-size:11px">+ Add</button></div>
-          <div class="mcp-form-hint">Define what Claude passes to your tool. Each parameter becomes a Zod schema entry.</div>
+          <div class="mcp-form-group-header"><h4>Parameters</h4>${ro ? '' : '<button class="cap-new-btn" id="mcpAddParam" style="font-size:11px">+ Add</button>'}</div>
+          ${ro ? '' : '<div class="mcp-form-hint">Define what Claude passes to your tool. Each parameter becomes a Zod schema entry.</div>'}
           <table class="mcp-param-table" id="mcpParamTable">
             <tr><th>Name</th><th>Type</th><th>Description</th><th>Req</th><th></th></tr>
             ${paramRows}
@@ -265,9 +269,9 @@
 
         <div class="mcp-form-group">
           <h4>Implementation</h4>
-          <div class="mcp-form-hint">Write the handler body. It receives the parameters as named arguments and must return MCP content.</div>
+          ${ro ? '<div class="mcp-form-hint">Built-in tool — read only.</div>' : '<div class="mcp-form-hint">Write the handler body. It receives the parameters as named arguments and must return MCP content.</div>'}
           <div class="mcp-handler-sig">async (input) => {  <span style="color:var(--text-dim)">// input = { ${paramNames} }</span></div>
-          <textarea id="mcpToolHandler" class="cap-modal-code mcp-handler-editor" spellcheck="false" rows="10">${escHtml(tool.handlerBody || 'return {\n    content: [{ type: "text", text: "Result" }],\n  };')}</textarea>
+          <textarea id="mcpToolHandler" class="cap-modal-code mcp-handler-editor" spellcheck="false" rows="10" ${ro ? 'readonly' : ''}>${escHtml(tool.handlerBody || 'return {\n    content: [{ type: "text", text: "Result" }],\n  };')}</textarea>
           <div class="mcp-handler-sig">}</div>
         </div>
 
@@ -275,17 +279,19 @@
           <h4>Test</h4>
         </div>
 
-        <div class="mcp-form-group">
+        ${ro ? '' : `<div class="mcp-form-group">
           <h4>Extra Files</h4>
           <div class="mcp-form-hint">Add helper modules when your tool logic needs shared utilities, data files, or grows too complex for one file. Import them with relative paths like <code>import { helper } from "../helpers/utils.js";</code> in your handler. Files live in the integrated server directory alongside <code>tools/</code>.</div>
-        </div>
+        </div>`}
       </div>`;
 
-    // Events
-    el.querySelector('#mcpAddParam')?.addEventListener('click', addParamRow);
-    el.querySelectorAll('.mcp-p-del').forEach(btn => btn.addEventListener('click', () => {
-      btn.closest('tr').remove();
-    }));
+    // Events (only for non-builtin tools)
+    if (!ro) {
+      el.querySelector('#mcpAddParam')?.addEventListener('click', addParamRow);
+      el.querySelectorAll('.mcp-p-del').forEach(btn => btn.addEventListener('click', () => {
+        btn.closest('tr').remove();
+      }));
+    }
 
     renderTestSection();
   }

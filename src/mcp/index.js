@@ -358,7 +358,12 @@ function spawnBridge() {
   const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
   return spawn('node', [bridgePath, servers.INTEGRATED_SLUG], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, CLAUDE_DOC_SERVER_SLUG: servers.INTEGRATED_SLUG },
+    env: {
+      ...process.env,
+      CLAUDE_DOC_SERVER_SLUG: servers.INTEGRATED_SLUG,
+      CLAUDE_DOC_AUTH_TOKEN: opts.authToken || process.env.AUTH_TOKEN || '',
+      CLAUDE_DOC_DASHBOARD_PORT: String(opts.dashboardPort || process.env.DASHBOARD_PORT || 3457),
+    },
   });
 }
 

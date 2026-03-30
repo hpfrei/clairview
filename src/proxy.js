@@ -107,11 +107,14 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
               pending.reject = reject;
             });
 
-            // Broadcast question to dashboard
+            // Broadcast question to dashboard (include workflow context if set)
+            const qCtx = _questionContext || {};
+            console.log(`[proxy] Broadcasting ask:question ${toolUseId}, questionContext:`, qCtx.tabId ? `tabId=${qCtx.tabId}` : 'none (chat)');
             broadcaster.broadcast({
               type: 'ask:question',
               toolUseId,
               questions: pending.questions,
+              ...(qCtx.tabId ? { tabId: qCtx.tabId, runId: qCtx.runId, stepId: qCtx.stepId } : {}),
             });
 
             try {
@@ -130,10 +133,12 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
                 content: JSON.stringify(answer),
               };
 
-              broadcaster.broadcast({ type: 'ask:answered', toolUseId });
+              const aCtx = _questionContext || {};
+              broadcaster.broadcast({ type: 'ask:answered', toolUseId, ...(aCtx.tabId ? { tabId: aCtx.tabId } : {}) });
             } catch {
               // Timeout or error - forward original error as-is
-              broadcaster.broadcast({ type: 'ask:timeout', toolUseId });
+              const tCtx = _questionContext || {};
+              broadcaster.broadcast({ type: 'ask:timeout', toolUseId, ...(tCtx.tabId ? { tabId: tCtx.tabId } : {}) });
             }
 
             pendingQuestions.delete(toolUseId);
@@ -582,5 +587,14 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
   return router;
 }
 
+// Question context — set by workflow executeStep to tag questions with tabId/runId/stepId
+let _questionContext = null;
+function setQuestionContext(ctx) { _questionContext = ctx; }
+function clearQuestionContext() { _questionContext = null; }
+function getQuestionContext() { return _questionContext; }
+
 module.exports = createProxyRouter;
 module.exports.pendingQuestions = pendingQuestions;
+module.exports.setQuestionContext = setQuestionContext;
+module.exports.clearQuestionContext = clearQuestionContext;
+module.exports.getQuestionContext = getQuestionContext;

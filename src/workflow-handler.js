@@ -4,6 +4,8 @@
 // ============================================================
 
 const workflows = require('./workflows');
+const caps = require('./capabilities');
+const mcpServers = require('./mcp/servers');
 
 let broadcaster = null;
 let sessionManager = null;
@@ -53,6 +55,15 @@ async function handleMessage(ws, msg, bc) {
         }
         break;
 
+      case 'workflow:saveCompiled':
+        const okJs = workflows.saveCompiledSource(cwd, msg.name, msg.compiledSource || '');
+        if (okJs) {
+          broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+        } else {
+          send({ type: 'workflow:error', error: `Cannot save compiled JS for: ${msg.name}` });
+        }
+        break;
+
       case 'workflow:delete':
         const deleted = workflows.deleteWorkflow(cwd, msg.name);
         if (deleted) {
@@ -64,10 +75,11 @@ async function handleMessage(ws, msg, bc) {
 
       case 'workflow:generate':
         try {
+          const envContext = buildEnvContext(cwd);
           const generated = await workflows.generateWorkflow(
             msg.description,
             msg.feedback || null,
-            { proxyPort: opts.proxyPort || 3456, cwd }
+            { proxyPort: opts.proxyPort || 3456, cwd, envContext }
           );
           send({ type: 'workflow:generated', workflow: generated });
         } catch (err) {
@@ -77,10 +89,12 @@ async function handleMessage(ws, msg, bc) {
 
       case 'workflow:compile':
         try {
+          const envContext = buildEnvContext(cwd);
           const result = await workflows.compileWorkflow(msg.name, {
             proxyPort: opts.proxyPort || 3456,
             cwd,
             broadcaster,
+            envContext,
           });
           broadcaster.broadcast({ type: 'workflow:compiled', name: msg.name, success: result.success, compiledSource: result.compiledSource });
           broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
@@ -91,14 +105,17 @@ async function handleMessage(ws, msg, bc) {
 
       case 'workflow:run':
         try {
+          // Prefer explicit cwd from message, fall back to session default
+          const runCwd = msg.cwd || cwd;
           // Run async — don't await, let it broadcast progress
           workflows.runWorkflow(msg.name, msg.inputs || {}, {
             sessionManager,
             broadcaster,
-            cwd,
+            cwd: runCwd,
+            tabId: msg.tabId || null,
             proxyPort: opts.proxyPort || 3456,
           }).catch(err => {
-            broadcaster.broadcast({ type: 'workflow:error', runId: msg.runId, error: err.message });
+            broadcaster.broadcast({ type: 'workflow:error', runId: msg.runId, tabId: msg.tabId || undefined, error: err.message });
           });
         } catch (err) {
           send({ type: 'workflow:error', error: `Run failed: ${err.message}` });
@@ -125,6 +142,29 @@ async function handleMessage(ws, msg, bc) {
     console.error('[workflow] Handler error:', err);
     send({ type: 'workflow:error', error: err.message });
   }
+}
+
+function buildEnvContext(cwd) {
+  const profiles = caps.listProfiles(cwd).map(p => ({
+    name: p.name,
+    description: p.description || '',
+    model: p.model || null,
+    builtin: p.builtin || false,
+  }));
+
+  const tools = mcpServers.listTools().filter(t => t.enabled).map(t => ({
+    name: t.name,
+    description: t.description || '',
+    params: (t.params || []).map(p => ({ name: p.name, type: p.type, description: p.description })),
+  }));
+
+  const wfs = workflows.listWorkflows(cwd).map(w => ({
+    name: w.name,
+    description: w.description || '',
+    status: w.status,
+  }));
+
+  return { profiles, tools, workflows: wfs };
 }
 
 module.exports = { init, onConnect, handleMessage };

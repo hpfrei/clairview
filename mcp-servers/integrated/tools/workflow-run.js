@@ -8,6 +8,7 @@ export default function register(server) {
     {
     name: z.string().describe("Name of the workflow to run"),
     inputs: z.record(z.any()).describe("Input values for the workflow (key-value pairs)").optional(),
+    cwd: z.string().describe("Working directory for the workflow run").optional(),
     },
     async (input) => {
   // input is an object with: { name, inputs }
@@ -39,7 +40,7 @@ export default function register(server) {
         resolve({ content: [{ type: 'text', text: 'Error: ' + (msg.error || 'Unknown') }] });
       }
     });
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'workflow:run', name, inputs: inputs || {} })));
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'workflow:run', name, inputs: inputs || {}, ...(cwd ? { cwd } : {}) })));
     ws.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });
   });
     }

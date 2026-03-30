@@ -1,6 +1,7 @@
 (function() {
   'use strict';
   const { state, escHtml, highlightJSON, renderJSON, jsonBlock, formatDuration, truncate,
+          renderMarkdown, renderMarkdownDebounced,
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
 
   // --- Timeline filter ---
@@ -235,6 +236,15 @@
           const parsed = JSON.parse(inputEl.textContent);
           inputEl.innerHTML = renderJSON(parsed);
         } catch {}
+      }
+      // Render markdown for text blocks after streaming completes
+      const bodyEl = document.getElementById(`block-body-${data.index}`);
+      if (bodyEl && !bodyEl.classList.contains('tool-use') && !bodyEl.classList.contains('thinking')) {
+        const rawText = bodyEl.textContent;
+        if (rawText) {
+          bodyEl.classList.add('markdown-body');
+          renderMarkdown(rawText, bodyEl);
+        }
       }
     }
 
@@ -559,6 +569,7 @@
     }
 
     detailContent.innerHTML = html;
+    processMarkdownBlocks(detailContent);
   }
 
   function renderTurnDetail(interaction) {
@@ -682,6 +693,7 @@
     html += `</div>`;
 
     detailContent.innerHTML = html;
+    processMarkdownBlocks(detailContent);
   }
 
   function renderToolDetail(interaction, toolIndex) {
@@ -745,6 +757,7 @@
     }
 
     detailContent.innerHTML = html;
+    processMarkdownBlocks(detailContent);
 
     const link = detailContent.querySelector('.turn-link');
     if (link) {
@@ -787,7 +800,7 @@
       } else if (b.type === 'text') {
         return `<div class="content-block">
           <div class="content-block-header">Text</div>
-          <div class="content-block-body">${escHtml(b.text)}</div>
+          <div class="content-block-body markdown-body" data-md-pending="${escHtml(b.text)}">${escHtml(b.text)}</div>
         </div>`;
       } else if (b.type === 'tool_use') {
         let inputHtml;
@@ -807,11 +820,21 @@
     }).join('');
   }
 
+  // Post-process: render markdown in elements with data-md-pending attribute
+  function processMarkdownBlocks(root) {
+    const els = (root || document).querySelectorAll('[data-md-pending]');
+    for (const el of els) {
+      const text = el.getAttribute('data-md-pending');
+      el.removeAttribute('data-md-pending');
+      if (text) renderMarkdown(text, el);
+    }
+  }
+
   function renderStaticBlock(block) {
     if (block.type === 'text') {
       return `<div class="content-block">
         <div class="content-block-header">Text</div>
-        <div class="content-block-body">${escHtml(block.text || '')}</div>
+        <div class="content-block-body markdown-body" data-md-pending="${escHtml(block.text || '')}">${escHtml(block.text || '')}</div>
       </div>`;
     }
     if (block.type === 'thinking') {

@@ -11,9 +11,10 @@ export default function register(server) {
     async (input) => {
   // input is an object with: {  }
   const http = await import('http');
+  const { WebSocket } = await import('ws');
   const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';
   const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';
-  
+
   return new Promise((resolve) => {
     const req = http.request({
       hostname: '127.0.0.1', port: dashPort, path: '/login',
@@ -21,9 +22,8 @@ export default function register(server) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': 'token=' + token }
     }, () => {});
     req.end();
-    
+
     // Use WebSocket to query
-    const { WebSocket } = await import('ws');
     const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });
     const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Timeout waiting for workflow list' }] }); }, 5000);
     ws.on('message', (data) => {

@@ -53,6 +53,46 @@ function escHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// --- Markdown rendering (with HTML/SVG pass-through and MathJax) ---
+function renderMarkdown(text, targetEl) {
+  if (!text) { targetEl.innerHTML = ''; return; }
+  if (typeof marked === 'undefined') { targetEl.textContent = text; return; }
+
+  // Configure marked to pass through HTML/SVG blocks and render fenced code
+  const renderer = new marked.Renderer();
+  const origCode = renderer.code?.bind(renderer);
+  renderer.code = function(args) {
+    const code = typeof args === 'object' ? args.text : args;
+    const lang = (typeof args === 'object' ? args.lang : arguments[1]) || '';
+    // Render html and svg fenced blocks as live content
+    if (lang === 'html' || lang === 'svg') {
+      return `<div class="rendered-block rendered-${lang}">${code}</div>`;
+    }
+    // Default code block rendering
+    return `<pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre>`;
+  };
+
+  marked.setOptions({ renderer, breaks: true, gfm: true });
+  targetEl.innerHTML = marked.parse(text);
+
+  // Typeset math if MathJax is available
+  if (window.MathJax?.typesetPromise) {
+    window.MathJax.typesetPromise([targetEl]).catch(() => {});
+  }
+}
+
+// Debounced markdown render for streaming (renders at most every 200ms)
+const _renderTimers = new WeakMap();
+function renderMarkdownDebounced(text, targetEl) {
+  // Store raw text on element for final render
+  targetEl._rawText = text;
+  if (_renderTimers.has(targetEl)) return;
+  _renderTimers.set(targetEl, setTimeout(() => {
+    _renderTimers.delete(targetEl);
+    renderMarkdown(targetEl._rawText, targetEl);
+  }, 200));
+}
+
 function highlightJSON(obj) {
   const json = JSON.stringify(obj, null, 2);
   if (!json) return '';
@@ -201,6 +241,8 @@ window.dashboard = {
   jsonBlock,
   formatDuration,
   truncate,
+  renderMarkdown,
+  renderMarkdownDebounced,
   timelineList,
   detailContent,
   emptyState,
@@ -271,11 +313,16 @@ function handleMessage(msg) {
     case 'ask:question':
     case 'ask:answered':
     case 'ask:timeout':
-      window.chatModule?.handleMessage(msg);
+      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
+        window.workflowRunModule?.handleMessage(msg);
+      } else {
+        window.chatModule?.handleMessage(msg);
+      }
       break;
     case 'chat:settings':
       window.chatModule?.handleMessage(msg);
       window.capabilitiesModule?.handleSettings(msg);
+      window.workflowRunModule?.handleSettings?.(msg);
       break;
 
     // Capabilities
@@ -291,19 +338,39 @@ function handleMessage(msg) {
       window.chatModule?.updateProfiles(msg.profiles);
       break;
 
-    // Workflows
+    // Workflows (editor)
     case 'workflow:list':
+      window.workflowModule?.handleMessage(msg);
+      window.workflowRunModule?.handleMessage(msg);
+      break;
     case 'workflow:loaded':
+      // Route to runs module if it requested the load
+      if (window.workflowRunModule?.pendingLoad === msg.name) {
+        window.workflowRunModule.handleMessage(msg);
+      } else {
+        window.workflowModule?.handleMessage(msg);
+      }
+      break;
     case 'workflow:generated':
     case 'workflow:compile:progress':
     case 'workflow:compiled':
+      window.workflowModule?.handleMessage(msg);
+      break;
     case 'workflow:error':
+      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
+        window.workflowRunModule?.handleMessage(msg);
+      } else {
+        window.workflowModule?.handleMessage(msg);
+      }
+      break;
+
+    // Workflow run events (routed to Runs tab when available)
     case 'workflow:run:started':
     case 'workflow:step:start':
     case 'workflow:step:progress':
     case 'workflow:step:complete':
     case 'workflow:run:complete':
-      window.workflowModule?.handleMessage(msg);
+      window.workflowRunModule?.handleMessage(msg);
       break;
 
     // MCP
@@ -368,15 +435,12 @@ function updateSessionPicker(sessions, activeId) {
 // VIEW SWITCHING (Dashboard / Claude / Capabilities)
 // ============================================================
 
-document.getElementById('headerTabs').addEventListener('click', e => {
-  const tab = e.target.closest('.header-tab');
-  if (!tab) return;
-  const view = tab.dataset.view;
-
+function switchView(view) {
   document.querySelectorAll('.header-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
+  const activeBtn = document.querySelector(`.header-tab[data-view="${view}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
 
-  const views = ['view-dashboard', 'view-claude', 'view-capabilities', 'view-workflows'];
+  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-workflows', 'view-workflow-runs'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -388,7 +452,16 @@ document.getElementById('headerTabs').addEventListener('click', e => {
       el.classList.add('hidden');
     }
   }
+}
+
+document.getElementById('headerTabs').addEventListener('click', e => {
+  const tab = e.target.closest('.header-tab');
+  if (!tab) return;
+  switchView(tab.dataset.view);
 });
+
+// Brand click switches to home
+document.getElementById('brandBtn')?.addEventListener('click', () => switchView('home'));
 
 // ============================================================
 // REFERENCE PANEL LOGIC

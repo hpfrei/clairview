@@ -8,6 +8,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const caps = require('./capabilities');
+const { setQuestionContext, clearQuestionContext } = require('./proxy');
 
 const WORKFLOWS_DIR = 'capabilities/workflows';
 
@@ -43,8 +44,8 @@ function listWorkflows(cwd) {
 
       let status = 'draft';
       if (hasCompiled) {
-        // Check if source has changed since compilation
-        const sourceHash = hashContent(fs.readFileSync(srcPath, 'utf8'));
+        // Check if source has changed since compilation (normalize via re-serialize to match compile hash)
+        const sourceHash = hashContent(JSON.stringify(src, null, 2));
         try {
           const compiled = require(compiledPath);
           status = compiled.sourceHash === sourceHash ? 'compiled' : 'needs-compile';
@@ -88,6 +89,14 @@ function saveWorkflow(cwd, name, workflow) {
   return true;
 }
 
+function saveCompiledSource(cwd, name, source) {
+  if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) return false;
+  const dir = path.join(workflowsDir(cwd), name);
+  if (!fs.existsSync(dir)) return false;
+  fs.writeFileSync(path.join(dir, 'compiled.js'), source);
+  return true;
+}
+
 function deleteWorkflow(cwd, name) {
   const dir = path.join(workflowsDir(cwd), name);
   if (!fs.existsSync(dir)) return false;
@@ -113,7 +122,7 @@ function generateRunId() {
 /**
  * Run a workflow. Each agent step spawns a full claude -p session.
  */
-async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, proxyPort }) {
+async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tabId, proxyPort }) {
   const workflow = loadWorkflow(cwd, name);
   if (!workflow) throw new Error(`Workflow not found: ${name}`);
 
@@ -137,10 +146,12 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
   const run = {
     runId,
     name,
+    tabId: tabId || null,
     status: 'running',
     steps: stepEntries.map(([id, step]) => ({ id, ...step, status: 'pending', output: null, elapsed: null })),
     ctx,
     cancel: false,
+    currentProc: null,
     startedAt: Date.now(),
   };
   activeRuns.set(runId, run);
@@ -149,6 +160,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
     type: 'workflow:run:started',
     runId,
     name,
+    tabId: tabId || undefined,
     steps: run.steps.map(s => ({ id: s.id, status: s.status })),
   });
 
@@ -165,7 +177,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
       if (stepDef.parallel && Array.isArray(stepDef.parallel)) {
         updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
         broadcaster.broadcast({
-          type: 'workflow:step:progress', runId, stepId: currentStepId,
+          type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId: currentStepId,
           text: `Fan-out: spawning ${stepDef.parallel.length} parallel steps: ${stepDef.parallel.join(', ')}`,
         });
 
@@ -179,8 +191,8 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
             const t0 = Date.now();
             try {
               const output = await executeStep(pStepId, prompt, pStepDef, {
-                sessionManager, broadcaster, cwd: workflow.workingDirectory || cwd,
-                proxyPort, runId,
+                sessionManager, broadcaster, cwd,
+                proxyPort, runId, tabId,
               });
               const elapsed = Date.now() - t0;
               ctx.steps[pStepId] = { output };
@@ -251,8 +263,8 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
 
         try {
           const output = await executeStep(currentStepId, prompt, stepDef, {
-            sessionManager, broadcaster, cwd: workflow.workingDirectory || cwd,
-            proxyPort, runId,
+            sessionManager, broadcaster, cwd,
+            proxyPort, runId, tabId,
           });
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output };
@@ -311,7 +323,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
     }
   } catch (err) {
     run.status = 'failed';
-    broadcaster.broadcast({ type: 'workflow:error', runId, error: err.message });
+    broadcaster.broadcast({ type: 'workflow:error', runId, tabId: tabId || undefined, error: err.message });
   }
 
   if (run.cancel) {
@@ -320,7 +332,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, pro
     run.status = 'completed';
   }
 
-  broadcaster.broadcast({ type: 'workflow:run:complete', runId, status: run.status });
+  broadcaster.broadcast({ type: 'workflow:run:complete', runId, tabId: tabId || undefined, status: run.status });
 
   // Save run
   saveRun(cwd, name, runId, run, ctx);
@@ -344,6 +356,7 @@ function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed) {
   broadcaster.broadcast({
     type: status === 'running' ? 'workflow:step:start' : 'workflow:step:complete',
     runId,
+    tabId: run.tabId || undefined,
     stepId,
     status,
     success: status === 'done',
@@ -417,7 +430,7 @@ function evaluateCondition(condition, ctx) {
  * Execute a single workflow step by spawning claude -p.
  * Supports step-level timeout via stepDef.timeout (ms).
  */
-function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId }) {
+function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId, tabId }) {
   return new Promise((resolve, reject) => {
     // Build args for claude -p
     const args = ['-p', '--verbose', '--output-format', 'stream-json'];
@@ -462,6 +475,9 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
       }
     }
 
+    // Set question context so proxy tags ask:question with workflow info
+    if (tabId) setQuestionContext({ tabId, runId, stepId });
+
     const proc = spawn('claude', args, {
       cwd,
       env: {
@@ -471,6 +487,10 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    // Track proc on run for cancellation
+    const run = activeRuns.get(runId);
+    if (run) run.currentProc = proc;
+
     // Step-level timeout
     let timeoutTimer = null;
     let timedOut = false;
@@ -479,7 +499,7 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         broadcaster.broadcast({
-          type: 'workflow:step:progress', runId, stepId,
+          type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId,
           text: `\n[timeout] Step exceeded ${timeoutMs}ms limit — killing process`,
         });
         try { proc.kill('SIGTERM'); } catch {}
@@ -507,7 +527,7 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
           if (event.type === 'content_block_delta' && event.delta?.text) {
             broadcaster.broadcast({
               type: 'workflow:step:progress',
-              runId,
+              runId, tabId: tabId || undefined,
               stepId,
               text: event.delta.text,
             });
@@ -522,13 +542,15 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     proc.stderr.on('data', (chunk) => {
       broadcaster.broadcast({
         type: 'workflow:step:progress',
-        runId,
+        runId, tabId: tabId || undefined,
         stepId,
         text: `[stderr] ${chunk.toString('utf-8')}`,
       });
     });
 
     proc.on('close', (code) => {
+      if (run) run.currentProc = null;
+      if (tabId) clearQuestionContext();
       if (timeoutTimer) clearTimeout(timeoutTimer);
 
       // Flush buffer
@@ -559,6 +581,9 @@ function cancelRun(runId) {
   const run = activeRuns.get(runId);
   if (run) {
     run.cancel = true;
+    if (run.currentProc) {
+      try { run.currentProc.kill('SIGTERM'); } catch {}
+    }
     return true;
   }
   return false;
@@ -605,19 +630,36 @@ function saveRun(cwd, name, runId, run, ctx) {
 // GENERATION — claude -p brainstorms workflow from description
 // ============================================================
 
-function generateWorkflow(description, feedback, { proxyPort, cwd }) {
+function generateWorkflow(description, feedback, { proxyPort, cwd, envContext }) {
   return new Promise((resolve, reject) => {
+    let envSection = '';
+    if (envContext) {
+      const parts = [];
+      if (envContext.profiles?.length) {
+        parts.push('Available profiles (use in step "profile" field):\n' +
+          envContext.profiles.map(p => `  - "${p.name}": ${p.description || '(no description)'}${p.model ? ` [model: ${p.model}]` : ''}`).join('\n'));
+      }
+      if (envContext.tools?.length) {
+        parts.push('Available MCP tools (Claude can call these during step execution):\n' +
+          envContext.tools.map(t => `  - ${t.name}: ${t.description || '(no description)'}${t.params?.length ? ' — params: ' + t.params.map(p => p.name).join(', ') : ''}`).join('\n'));
+      }
+      if (envContext.workflows?.length) {
+        parts.push('Other existing workflows (can be invoked via the workflow_run MCP tool):\n' +
+          envContext.workflows.map(w => `  - ${w.name}: ${w.description || '(no description)'}`).join('\n'));
+      }
+      if (parts.length) envSection = '\n\nEnvironment context:\n' + parts.join('\n\n');
+    }
+
     let prompt = `You are a workflow designer. Create a workflow JSON definition based on this description:
 
 "${description}"
 
-${feedback ? `Additional feedback from the user: "${feedback}"` : ''}
+${feedback ? `Additional feedback from the user: "${feedback}"` : ''}${envSection}
 
 Output ONLY valid JSON in this exact format (no markdown, no explanation):
 {
   "name": "kebab-case-name",
   "description": "what this workflow does",
-  "workingDirectory": "${cwd}",
   "inputs": {
     "key": "description of this input"
   },
@@ -642,6 +684,10 @@ Rules:
 - Use "condition" for branching decisions
 - The first step in the object is the entry point
 - Steps execute in order unless overridden by "next", "then", or "else"
+- When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool
+- If a step can leverage an existing MCP tool (listed above), mention the tool by name in the "do" instruction
+- If a step can delegate to another workflow, use the workflow_run MCP tool
+- Choose the most appropriate profile for each step based on what it needs to do
 - Always include a final summary step`;
 
     const args = ['-p', '--verbose', '--output-format', 'stream-json'];
@@ -726,13 +772,28 @@ Rules:
 // COMPILATION — claude -p transforms source JSON to executable JS
 // ============================================================
 
-function compileWorkflow(name, { proxyPort, cwd, broadcaster }) {
+function compileWorkflow(name, { proxyPort, cwd, broadcaster, envContext }) {
   return new Promise((resolve, reject) => {
     const workflow = loadWorkflow(cwd, name);
     if (!workflow) { reject(new Error(`Workflow not found: ${name}`)); return; }
 
     const sourceContent = JSON.stringify(workflow, null, 2);
     const sourceHash = hashContent(sourceContent);
+    const compiledPath = path.join(workflowsDir(cwd), name, 'compiled.js');
+
+    let envSection = '';
+    if (envContext) {
+      const parts = [];
+      if (envContext.tools?.length) {
+        parts.push('Available MCP tools that steps can call:\n' +
+          envContext.tools.map(t => `  - ${t.name}: ${t.description || ''}${t.params?.length ? ' — params: ' + t.params.map(p => `${p.name}(${p.type})`).join(', ') : ''}`).join('\n'));
+      }
+      if (envContext.workflows?.length) {
+        parts.push('Other workflows (callable via workflow_run tool):\n' +
+          envContext.workflows.map(w => `  - ${w.name}: ${w.description || ''}`).join('\n'));
+      }
+      if (parts.length) envSection = '\n\nEnvironment context (tools/workflows the steps can use):\n' + parts.join('\n\n') + '\n';
+    }
 
     const prompt = `You are a workflow compiler. Transform this workflow JSON into a compiled CommonJS JavaScript module.
 
@@ -740,8 +801,10 @@ Source workflow.json:
 \`\`\`json
 ${sourceContent}
 \`\`\`
+${envSection}
+Write the compiled JavaScript to: ${compiledPath}
 
-Output ONLY the JavaScript code (no markdown fences, no explanation). The module must export:
+The module must export:
 
 module.exports = {
   name: "${workflow.name}",
@@ -774,7 +837,13 @@ Rules:
 - Convert "produces" into parseOutput(raw) that extracts the expected shape
 - Wire data flow explicitly: if step B has context: ["A"], then B's buildPrompt must reference ctx.steps.A.output
 - The steps array must be in execution order
-- Use the exact sourceHash provided`;
+- Use the exact sourceHash provided
+- Output rendering supports full Markdown, MathJax ($...$ and $$...$$), and fenced code blocks. When a step produces visual output (diagrams, UI, formulas), use these formats:
+  - Markdown tables, lists, headings for structured text
+  - \`\`\`html for rendered HTML content (iframes, styled elements)
+  - \`\`\`svg for inline SVG diagrams and charts
+  - LaTeX math via $inline$ or $$display$$ for equations
+  - Standard \`\`\`language for code snippets`;
 
     const args = ['-p', '--verbose', '--output-format', 'stream-json'];
 
@@ -798,7 +867,6 @@ Rules:
 
     let buffer = '';
     let stderrBuf = '';
-    let result = null;
 
     proc.stdout.on('data', (chunk) => {
       buffer += chunk.toString('utf-8');
@@ -808,7 +876,6 @@ Rules:
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line);
-          if (event.type === 'result' && event.result) result = event.result;
           if (event.type === 'content_block_delta' && event.delta?.text && broadcaster) {
             broadcaster.broadcast({ type: 'workflow:compile:progress', name, text: event.delta.text });
           }
@@ -823,33 +890,17 @@ Rules:
     proc.on('close', (code) => {
       clearTimeout(compileTimeout);
 
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer);
-          if (event.type === 'result' && event.result) result = event.result;
-        } catch {}
-      }
-
-      if (!result) {
-        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
-        reject(new Error(`Compilation produced no output (exit ${code})${detail}`));
-        return;
-      }
-
-      // Extract JS code
-      let jsCode = result;
-      // Remove markdown fences if present
-      const fenceMatch = jsCode.match(/```(?:javascript|js)?\n([\s\S]*?)```/);
-      if (fenceMatch) jsCode = fenceMatch[1];
-
-      // Write compiled.js
+      // Read the compiled file from disk — claude -p writes it directly
       try {
-        const compiledPath = path.join(workflowsDir(cwd), name, 'compiled.js');
-        const finalCode = jsCode.trim() + '\n';
-        fs.writeFileSync(compiledPath, finalCode);
-        resolve({ name, success: true, sourceHash, compiledSource: finalCode });
+        if (fs.existsSync(compiledPath)) {
+          const compiledSource = fs.readFileSync(compiledPath, 'utf8');
+          resolve({ name, success: true, sourceHash, compiledSource });
+        } else {
+          const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+          reject(new Error(`Compilation did not produce compiled.js (exit ${code})${detail}`));
+        }
       } catch (e) {
-        reject(new Error(`Failed to write compiled.js: ${e.message}`));
+        reject(new Error(`Failed to read compiled.js: ${e.message}`));
       }
     });
 
@@ -865,6 +916,7 @@ module.exports = {
   loadWorkflow,
   loadCompiledSource,
   saveWorkflow,
+  saveCompiledSource,
   deleteWorkflow,
   runWorkflow,
   cancelRun,

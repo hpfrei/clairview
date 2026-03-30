@@ -96,6 +96,10 @@ function saveTool(tool, oldSlug) {
   const meta = readMeta();
   if (!meta) return { error: 'Integrated server not initialized.' };
 
+  // Prevent saving over builtin tools
+  const existing = (meta.tools || []).find(t => t.slug === (tool.slug || slugify(tool.name)));
+  if (existing?.builtin) return { error: 'Cannot modify built-in tool.' };
+
   const slug = tool.slug || slugify(tool.name);
   if (!validateSlug(slug)) return { error: 'Invalid tool name. Use lowercase letters, numbers, hyphens. Min 2 chars.' };
 
@@ -144,6 +148,8 @@ function deleteTool(slug) {
 
   const idx = meta.tools.findIndex(t => t.slug === slug);
   if (idx < 0) return { error: 'Tool not found.' };
+
+  if (meta.tools[idx].builtin) return { error: 'Cannot delete built-in tool.' };
 
   const tool = meta.tools[idx];
   meta.tools.splice(idx, 1);
