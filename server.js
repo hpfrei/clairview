@@ -27,13 +27,18 @@ const proxyApp = express();
 let broadcaster = { broadcast() {} };
 let sessionManager = null; // forward reference, assigned below
 
-// getActiveModelDef: returns the model definition if the active profile uses a non-Anthropic model
-function getActiveModelDef() {
+// getModelDef: returns a resolved model definition by name, or the active profile's model if no name given
+function getModelDef(name) {
+  if (name) return caps.loadModel(__dirname, name) || null;
   if (!sessionManager?.capabilities?.modelDef) return null;
   return caps.loadModel(__dirname, sessionManager.capabilities.modelDef) || null;
 }
 
-const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getActiveModelDef);
+function getProfileName() {
+  return sessionManager?.capabilities?.name || null;
+}
+
+const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getModelDef, getProfileName);
 proxyApp.use(proxyRouter);
 const proxyServer = http.createServer(proxyApp);
 

@@ -110,7 +110,7 @@ function hashContent(content) {
 // RUNTIME — Step execution with parallel, timeout, error handling
 // ============================================================
 
-// Active runs: runId → { status, name, steps, ctx, cancel }
+// Active runs: runId → { status, name, steps, ctx, cancel, procs }
 const activeRuns = new Map();
 
 function generateRunId() {
@@ -121,7 +121,7 @@ function generateRunId() {
  * Run a workflow. Each agent step spawns a full claude -p session.
  */
 async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tabId, proxyPort }) {
-  const workflow = loadWorkflow(cwd, name);
+  const workflow = loadWorkflow(PROJECT_ROOT, name);
   if (!workflow) throw new Error(`Workflow not found: ${name}`);
 
   const runId = generateRunId();
@@ -150,6 +150,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
     ctx,
     cancel: false,
     currentProc: null,
+    procs: new Set(),
     startedAt: Date.now(),
   };
   activeRuns.set(runId, run);
@@ -159,7 +160,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
     runId,
     name,
     tabId: tabId || undefined,
-    steps: run.steps.map(s => ({ id: s.id, status: s.status })),
+    steps: run.steps.map(s => ({ id: s.id, status: s.status, profile: s.profile || null })),
   });
 
   // Walk steps
@@ -219,6 +220,12 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
           },
         };
 
+        // If cancelled during parallel execution, break immediately
+        if (run.cancel) {
+          updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, 0);
+          break;
+        }
+
         if (failures.length > 0) {
           updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, 0);
           // Check for onError on the fan-out step itself
@@ -271,6 +278,9 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output: null, error: err.message };
           updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, elapsed);
+
+          // If cancelled, break immediately — no retry/onError
+          if (run.cancel) break;
 
           // Check for onError handler
           if (stepDef.onError && workflow.steps[stepDef.onError]) {
@@ -435,10 +445,25 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
 
     if (tabId) setQuestionContext({ tabId, runId, stepId });
 
-    const proc = spawnClaude(args, { cwd, proxyPort });
+    // Route through specific model if profile has one, otherwise direct to Anthropic
+    const proc = spawnClaude(args, {
+      cwd, proxyPort,
+      ...(profile.modelDef ? { modelName: profile.modelDef } : { direct: true }),
+    });
 
     const run = activeRuns.get(runId);
-    if (run) run.currentProc = proc;
+    if (run) {
+      run.currentProc = proc;
+      run.procs.add(proc);
+    }
+
+    // Bail immediately if already cancelled
+    if (run?.cancel) {
+      try { proc.kill('SIGTERM'); } catch {}
+      // Don't wait — reject right away
+      reject(new Error(`Cancelled`));
+      return;
+    }
 
     // Step-level timeout
     let timeoutTimer = null;
@@ -480,12 +505,17 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     });
 
     proc.on('close', (code) => {
-      if (run) run.currentProc = null;
+      if (run) {
+        run.currentProc = null;
+        run.procs.delete(proc);
+      }
       if (tabId) clearQuestionContext();
       if (timeoutTimer) clearTimeout(timeoutTimer);
       parser.flush();
 
-      if (timedOut) {
+      if (run?.cancel) {
+        reject(new Error(`Cancelled`));
+      } else if (timedOut) {
         reject(new Error(`Step "${stepId}" timed out after ${timeoutMs}ms`));
       } else if (code !== 0 && !result) {
         reject(new Error(`Step "${stepId}" exited with code ${code}`));
@@ -505,9 +535,16 @@ function cancelRun(runId) {
   const run = activeRuns.get(runId);
   if (run) {
     run.cancel = true;
-    if (run.currentProc) {
-      try { run.currentProc.kill('SIGTERM'); } catch {}
+    // Kill all tracked processes (covers parallel fan-out)
+    for (const proc of run.procs) {
+      try { proc.kill('SIGTERM'); } catch {}
     }
+    // SIGKILL fallback after 3s for any stubborn processes
+    setTimeout(() => {
+      for (const proc of run.procs) {
+        try { proc.kill('SIGKILL'); } catch {}
+      }
+    }, 3000);
     return true;
   }
   return false;

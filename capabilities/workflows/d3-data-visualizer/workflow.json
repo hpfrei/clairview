@@ -5,21 +5,21 @@
   "steps": {
     "gather-requirements": {
       "profile": "safe",
-      "do": "Use the AskUserQuestion tool to ask the user what data they want to visualize. Ask them to describe: (1) the data they want to analyse (they can paste raw data, describe a dataset, or point to a file), (2) any preferences for chart type (bar, line, scatter, pie, heatmap, etc.) or say 'auto' for automatic selection, and (3) any specific styling or interactivity requirements. Collect their responses and summarize the requirements clearly.",
-      "produces": "A structured summary of the user's data, preferred visualization type, and any styling/interactivity requirements."
+      "do": "Use the AskUserQuestion tool to ask the user what data they want to visualize. Ask them to describe: (1) the data source or dataset they want to analyse, (2) what kind of insights or story they want the visualization to tell, and (3) any preferences for chart type (bar, line, scatter, pie, treemap, force-directed graph, etc.) or if they want you to recommend the best approach. Collect their response and summarize the requirements clearly.",
+      "produces": "A clear summary of the user's data, goals, and visualization preferences"
     },
     "design-visualization": {
       "profile": "safe",
-      "do": "Based on the user's requirements, design the optimal visualization approach. Analyse the data characteristics (categorical vs numerical, time-series, distribution, comparison, correlation, etc.) and determine: (1) the best D3.js chart type if the user chose 'auto', or validate their chosen type against the data, (2) the layout and dimensions, (3) axes, scales, color schemes, and legends needed, (4) any interactive features (tooltips, hover effects, transitions, zoom/pan), (5) responsive design considerations. Produce a detailed visualization specification.",
-      "produces": "A detailed visualization design specification including chart type, scales, axes, color scheme, interactivity plan, and data transformation strategy.",
+      "do": "Based on the user's requirements, design the optimal D3.js visualization approach. Consider: (1) the best chart type for the data and goals described, (2) the data structure needed (arrays, nested objects, etc.), (3) color scheme and layout decisions, (4) any interactivity (tooltips, hover effects, transitions, zoom, filtering), (5) responsive design considerations. If the user provided raw data, plan how to embed it. If they described a data pattern, plan how to generate representative sample data. Write a detailed visualization specification including chart type, axes, scales, color palette, dimensions, and interactive features.",
+      "produces": "A detailed visualization design specification including chart type, data structure, scales, colors, interactivity plan, and layout",
       "context": [
         "gather-requirements"
       ]
     },
     "generate-html": {
       "profile": "full",
-      "do": "Generate a single self-contained HTML file that implements the designed visualization. The file must: (1) load D3.js from CDN (https://d3js.org/d3.v7.min.js) via a script tag, (2) embed all CSS in a <style> block with a clean, modern design including proper fonts, colors, and layout, (3) embed all JavaScript in a <script> block that creates the D3.js visualization, (4) include the data directly embedded in the JavaScript, (5) be responsive and work well in modern browsers, (6) include interactive features like tooltips on hover, smooth transitions, and proper axis labels with formatting. Write the file to the current working directory with a descriptive filename ending in .html. Make sure the visualization is polished and production-quality with proper margins, padding, titles, and legends where appropriate.",
-      "produces": "The absolute file path of the generated self-contained HTML file.",
+      "do": "Generate a single self-contained HTML file that implements the visualization design. The file MUST: (1) load D3.js from CDN (https://d3js.org/d3.v7.min.js) via a <script> tag, (2) embed ALL CSS in a <style> block in the <head>, (3) embed ALL JavaScript in a <script> block, (4) embed the data directly in JavaScript (no external data files), (5) include a clean, modern design with proper fonts (use Google Fonts or system fonts), (6) be fully responsive, (7) include tooltips or hover interactions where appropriate, (8) include a title and any necessary labels/legends, (9) use smooth transitions and animations for visual polish. Write the file to 'visualization.html' in the current working directory. Make sure the visualization is production-quality and visually appealing with proper margins, padding, and spacing.",
+      "produces": "A self-contained HTML file at ./visualization.html with embedded D3.js visualization",
       "context": [
         "gather-requirements",
         "design-visualization"
@@ -28,8 +28,8 @@
     },
     "summary": {
       "profile": "safe",
-      "do": "Present a clear summary to the user including: (1) what visualization was created and why that chart type was chosen, (2) the file path where the HTML file was saved, (3) how to open it (e.g., open in a browser), (4) a brief description of the interactive features included. Ask if they would like any adjustments to the visualization.",
-      "produces": "A user-friendly summary of the generated visualization and its location.",
+      "do": "Provide a concise summary to the user of what was created. Include: (1) the chart type and why it was chosen, (2) key features of the visualization (interactivity, responsiveness, etc.), (3) the file path where the HTML was saved (./visualization.html), (4) instructions on how to open it (just open the HTML file in any modern browser — no server needed since D3.js loads from CDN). Mention that they can modify the embedded data array in the JavaScript to update the visualization with their own data if sample data was used.",
+      "produces": "A user-friendly summary of the generated visualization and how to use it",
       "context": [
         "gather-requirements",
         "design-visualization",

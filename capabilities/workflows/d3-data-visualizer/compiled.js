@@ -1,5 +1,5 @@
 // Compiled workflow: d3-data-visualizer
-// Source hash: f7a1d861d108
+// Source hash: 0c7e1818da9b
 // Generated: 2026-03-30
 //
 // Asks the user what data to analyse, designs the optimal visualization approach,
@@ -8,7 +8,7 @@
 
 module.exports = {
   name: "d3-data-visualizer",
-  sourceHash: "f7a1d861d108",
+  sourceHash: "0c7e1818da9b",
   inputs: {},
   steps: [
     {
@@ -18,11 +18,11 @@ module.exports = {
       buildPrompt(ctx) {
         return `Use the AskUserQuestion tool to ask the user what data they want to visualize. Ask them to describe:
 
-1. The data they want to analyse — they can paste raw data, describe a dataset, or point to a file
-2. Any preferences for chart type (bar, line, scatter, pie, heatmap, etc.) or say 'auto' for automatic selection
-3. Any specific styling or interactivity requirements
+1. The data source or dataset they want to analyse
+2. What kind of insights or story they want the visualization to tell
+3. Any preferences for chart type (bar, line, scatter, pie, treemap, force-directed graph, etc.) or if they want you to recommend the best approach
 
-Collect their responses and summarize the requirements clearly as a structured summary covering: the data, the preferred visualization type, and any styling/interactivity requirements.`;
+Collect their response and summarize the requirements clearly, covering: the data described, the analytical goals, and their visualization preferences.`;
       },
       parseOutput(raw) {
         return raw;
@@ -39,15 +39,17 @@ Collect their responses and summarize the requirements clearly as a structured s
 
 ${requirements}
 
-Based on these requirements, design the optimal visualization approach. Analyse the data characteristics (categorical vs numerical, time-series, distribution, comparison, correlation, etc.) and determine:
+Based on these requirements, design the optimal D3.js visualization approach. Consider:
 
-1. The best D3.js chart type if the user chose 'auto', or validate their chosen type against the data
-2. The layout and dimensions
-3. Axes, scales, color schemes, and legends needed
-4. Any interactive features (tooltips, hover effects, transitions, zoom/pan)
+1. The best chart type for the data and goals described
+2. The data structure needed (arrays, nested objects, etc.)
+3. Color scheme and layout decisions
+4. Any interactivity (tooltips, hover effects, transitions, zoom, filtering)
 5. Responsive design considerations
 
-Produce a detailed visualization design specification including chart type, scales, axes, color scheme, interactivity plan, and data transformation strategy.`;
+If the user provided raw data, plan how to embed it. If they described a data pattern, plan how to generate representative sample data.
+
+Produce a detailed visualization design specification including chart type, axes, scales, color palette, dimensions, and interactive features.`;
       },
       parseOutput(raw) {
         return raw;
@@ -69,21 +71,25 @@ Visualization design specification:
 
 ${design}
 
-Generate a single self-contained HTML file that implements the designed visualization. The file must:
+Generate a single self-contained HTML file that implements the visualization design. The file MUST:
 
-1. Load D3.js from CDN (https://d3js.org/d3.v7.min.js) via a script tag
-2. Embed all CSS in a <style> block with a clean, modern design including proper fonts, colors, and layout
-3. Embed all JavaScript in a <script> block that creates the D3.js visualization
-4. Include the data directly embedded in the JavaScript
-5. Be responsive and work well in modern browsers
-6. Include interactive features like tooltips on hover, smooth transitions, and proper axis labels with formatting
+1. Load D3.js from CDN (https://d3js.org/d3.v7.min.js) via a <script> tag
+2. Embed ALL CSS in a <style> block in the <head> with a clean, modern design using proper fonts (Google Fonts or system fonts)
+3. Embed ALL JavaScript in a <script> block
+4. Embed the data directly in JavaScript (no external data files)
+5. Be fully responsive
+6. Include tooltips or hover interactions where appropriate
+7. Include a title and any necessary labels/legends
+8. Use smooth transitions and animations for visual polish
+9. Have proper margins, padding, and spacing for a production-quality appearance
 
-Write the file to the current working directory with a descriptive filename ending in .html. Make sure the visualization is polished and production-quality with proper margins, padding, titles, and legends where appropriate.
+Write the file to 'visualization.html' in the current working directory. Make sure the visualization is production-quality and visually appealing.
 
-Return the absolute file path of the generated self-contained HTML file.`;
+Return the absolute file path of the generated HTML file.`;
       },
       parseOutput(raw) {
-        return raw;
+        const match = raw.match(/(?:^|\s)(\/[^\s]+\.html)\b/m);
+        return match ? match[1].trim() : raw;
       },
       next: "summary",
       maxRetries: 2
@@ -107,14 +113,14 @@ ${design}
 Generation result:
 ${generated}
 
-Present a clear summary to the user including:
+Provide a concise summary to the user of what was created. Include:
 
-1. What visualization was created and why that chart type was chosen
-2. The file path where the HTML file was saved
-3. How to open it (e.g., open in a browser)
-4. A brief description of the interactive features included
+1. The chart type and why it was chosen
+2. Key features of the visualization (interactivity, responsiveness, etc.)
+3. The file path where the HTML was saved (./visualization.html)
+4. Instructions on how to open it — just open the HTML file in any modern browser, no server needed since D3.js loads from CDN
 
-Ask if they would like any adjustments to the visualization.`;
+If sample data was used, mention that they can modify the embedded data array in the JavaScript to update the visualization with their own data.`;
       },
       parseOutput(raw) {
         return raw;

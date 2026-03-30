@@ -105,6 +105,8 @@ Available templates in this skill directory:
       if (c.permissionMode && c.permissionMode !== 'default') parts.push(c.permissionMode);
       if (c.maxTurns) parts.push(`${c.maxTurns} turns`);
       if (c.maxBudgetUsd) parts.push(`$${c.maxBudgetUsd}`);
+      const allowedCount = c.allowedTools?.length || 0;
+      if (allowedCount > 0) parts.push(`${allowedCount} tools allowed`);
       const disabledCount = c.disabledTools?.length || 0;
       if (disabledCount > 0) parts.push(`${disabledCount} tools off`);
       if (c.disableSlashCommands) parts.push('skills off');
@@ -286,6 +288,13 @@ Available templates in this skill directory:
     document.getElementById('pmAppendPrompt').value = profile.appendSystemPrompt || '';
     document.getElementById('pmSystemPrompt').value = profile.systemPrompt || '';
 
+    // Allow-all-tools checkbox
+    const allowAllEl = document.getElementById('pmAllowAllTools');
+    if (allowAllEl) {
+      const allowed = new Set(profile.allowedTools || []);
+      allowAllEl.checked = allowed.size > 0 && state.knownTools.every(t => allowed.has(t));
+    }
+
     // Tool checkbox grid
     const grid = document.getElementById('pmToolGrid');
     grid.innerHTML = '';
@@ -363,7 +372,7 @@ Available templates in this skill directory:
     openProfileModal({
       name: '', builtin: false,
       model: null, effort: null, permissionMode: 'default',
-      disabledTools: [], mcpServers: [], disableSlashCommands: false,
+      allowedTools: [], disabledTools: [], mcpServers: [], disableSlashCommands: false,
       maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
       modelDef: null,
     }, 'new');
@@ -406,6 +415,9 @@ Available templates in this skill directory:
       return alert('Invalid name. Use lowercase letters, numbers, and hyphens. Min 2 chars.');
     }
 
+    const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;
+    const allowedTools = allowAllTools ? [...state.knownTools] : [];
+
     const disabledTools = [];
     document.querySelectorAll('#pmToolGrid input[type="checkbox"]').forEach(cb => {
       if (!cb.checked) disabledTools.push(cb.dataset.tool);
@@ -430,6 +442,7 @@ Available templates in this skill directory:
       })(),
       effort: document.getElementById('pmEffort')?.value || null,
       permissionMode: document.getElementById('pmPermission')?.value || 'default',
+      allowedTools,
       disabledTools,
       mcpServers,
       disableSlashCommands: !document.getElementById('pmSlash')?.checked,
@@ -1026,5 +1039,5 @@ Available templates in this skill directory:
   }
 
   // --- Export ---
-  window.capabilitiesModule = { handleMessage, handleSettings };
+  window.capabilitiesModule = { handleMessage, handleSettings, openProfileModal };
 })();

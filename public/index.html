@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -78,6 +77,7 @@
       </div>
       <div id="timeline-list"></div>
     </aside>
+    <div id="timeline-resizer"></div>
     <section id="detail">
       <div id="empty-state">
         <p>No interaction selected.</p>
@@ -1054,6 +1054,9 @@
               <div class="pm-form-group">
                 <h4>Tools</h4>
                 <p class="cap-modal-hint">Checked tools are enabled. Unchecked tools are passed as <code>--disallowedTools</code> to the CLI.</p>
+                <label class="pm-tool-item" style="margin-bottom:8px;font-weight:600">
+                  <input type="checkbox" id="pmAllowAllTools"> Allow all tools (pass <code>--allowedTools</code> &mdash; bypasses permission prompts)
+                </label>
                 <div class="pm-tool-grid" id="pmToolGrid"></div>
               </div>
 
@@ -1099,8 +1102,8 @@ auto           Automatic mode with
                guardrails</pre>
 
               <h4>Built-in profiles</h4>
-              <pre class="cap-modal-pre">full     Everything enabled, default
-         perms, all tools
+              <pre class="cap-modal-pre">full     Everything enabled, all tools
+         allowed (no permission prompts)
 
 safe     acceptEdits mode, blocks
          Bash/Write/Edit/Notebook
@@ -1116,7 +1119,7 @@ minimal  plan mode, only Read/Glob/
               <p class="cap-modal-hint"><strong>Override</strong> completely replaces the default system prompt. Only use when you need full control &mdash; you lose all built-in tool instructions and safety guidelines.</p>
 
               <h4>Tools</h4>
-              <p class="cap-modal-hint">Unchecked tools are passed via <code>--disallowedTools</code>. Claude will not see these tools and cannot invoke them. Useful for restricting destructive operations (Write, Edit, Bash) in review-only profiles.</p>
+              <p class="cap-modal-hint"><strong>Allow all tools</strong> passes <code>--allowedTools</code> with every tool name, bypassing permission prompts for Write, WebFetch, Bash, Agent, Tasks, etc. Unchecked tools are passed via <code>--disallowedTools</code> and Claude cannot invoke them.</p>
 
               <h4>MCP Tools</h4>
               <p class="cap-modal-hint">Custom tools provided by the integrated MCP server. The server auto-starts with the dashboard and all enabled tools are available across all profiles.</p>

@@ -167,7 +167,7 @@ function renderValue(val, key) {
     const more = val.length > 1 ? '<span class="jt-comma">, </span>…' : '';
     const count = ` <span class="jt-count">// ${val.length}</span>`;
     const summary = `${pv}${more} <span class="jt-bracket">]</span>${count}`;
-    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">[</span><span class="jt-summary">${summary}</span><button class="jt-expand-btn"></button></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">]</span></details>`;
+    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">[</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">]</span></details>`;
   }
   if (typeof val === 'object') {
     const keys = Object.keys(val);
@@ -177,7 +177,7 @@ function renderValue(val, key) {
     ).join('');
     const pv = preview(val, 60);
     const summary = `${pv} <span class="jt-bracket">}</span>`;
-    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">{</span><span class="jt-summary">${summary}</span><button class="jt-expand-btn"></button></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">}</span></details>`;
+    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">{</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">}</span></details>`;
   }
   return keyHtml + escHtml(String(val));
 }
@@ -354,6 +354,7 @@ function handleMessage(msg) {
     // Session
     case 'session:list':
       updateSessionPicker(msg.sessions, msg.activeId);
+      window.inspectorModule?.handleMessage(msg);
       break;
     case 'session:switched':
       window.inspectorModule?.handleMessage(msg);
@@ -565,6 +566,37 @@ document.addEventListener('keydown', e => {
     cards.forEach(c => c.classList.toggle('open', !allOpen));
   }
 });
+
+// ============================================================
+// TIMELINE RESIZER
+// ============================================================
+(function initResizer() {
+  const resizer = document.getElementById('timeline-resizer');
+  const timeline = document.getElementById('timeline');
+  if (!resizer || !timeline) return;
+
+  let startX, startW;
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = timeline.offsetWidth;
+    resizer.classList.add('dragging');
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function onDrag(e) {
+    const w = startW + (e.clientX - startX);
+    timeline.style.width = Math.max(140, w) + 'px';
+  }
+
+  function onUp() {
+    resizer.classList.remove('dragging');
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', onUp);
+  }
+})();
 
 // --- Init ---
 connect();

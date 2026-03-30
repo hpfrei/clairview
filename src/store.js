@@ -95,6 +95,9 @@ class InteractionStore {
         endpoint: interaction.endpoint,
         timestamp: interaction.timestamp,
         isStreaming: interaction.isStreaming,
+        profile: interaction.profile || undefined,
+        stepId: interaction.stepId || undefined,
+        runId: interaction.runId || undefined,
       },
       response: {
         status: interaction.response?.status ?? null,

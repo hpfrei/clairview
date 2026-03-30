@@ -93,6 +93,7 @@
         <span class="ref-tag ${statusClass}">${statusLabel}</span>
         <span class="cap-item-desc">${escHtml(w.description || '')}</span>
         <span class="cap-list-actions">
+          <button class="wf-play-btn" data-name="${escHtml(w.name)}" title="Run workflow">&#9654;</button>
           <button class="cap-edit-btn wf-edit-btn" data-name="${escHtml(w.name)}" title="Edit">&#9998;</button>
           <button class="cap-del-btn wf-del-btn" data-name="${escHtml(w.name)}" title="Delete">&#10005;</button>
         </span>
@@ -380,7 +381,12 @@
   wfList?.addEventListener('click', (e) => {
     const name = e.target.closest('[data-name]')?.dataset.name;
     if (!name) return;
-    if (e.target.closest('.wf-edit-btn')) {
+    if (e.target.closest('.wf-play-btn')) {
+      if (window.workflowRunModule?.startRun) {
+        window.workflowRunModule.startRun(name);
+        switchView('workflow-runs');
+      }
+    } else if (e.target.closest('.wf-edit-btn')) {
       sendWs({ type: 'workflow:load', name });
     } else if (e.target.closest('.wf-del-btn')) {
       if (confirm(`Delete workflow "${name}"?`)) {

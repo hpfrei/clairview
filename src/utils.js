@@ -20,6 +20,9 @@ function buildClaudeArgs(profile) {
   if (profile.permissionMode && profile.permissionMode !== 'default') {
     args.push('--permission-mode', profile.permissionMode);
   }
+  if (profile.allowedTools?.length > 0) {
+    args.push('--allowedTools', ...profile.allowedTools);
+  }
   if (profile.disabledTools?.length > 0) {
     args.push('--disallowedTools', ...profile.disabledTools);
   }
@@ -36,12 +39,16 @@ function buildClaudeArgs(profile) {
 /**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
-function spawnClaude(args, { cwd, proxyPort, direct }) {
+function spawnClaude(args, { cwd, proxyPort, direct, modelName }) {
   const env = { ...process.env };
   if (proxyPort) {
-    env.ANTHROPIC_BASE_URL = direct
-      ? `http://localhost:${proxyPort}/direct`
-      : `http://localhost:${proxyPort}`;
+    if (direct) {
+      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/direct`;
+    } else if (modelName) {
+      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/use-model/${modelName}`;
+    } else {
+      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}`;
+    }
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }

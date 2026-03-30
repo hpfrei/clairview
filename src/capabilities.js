@@ -15,9 +15,9 @@ const KNOWN_TOOLS = [
 
 const BUILTIN_PROFILES = {
   full: {
-    name: 'full', label: 'Full', description: 'All tools enabled, default permissions', builtin: true,
-    model: null, effort: null, permissionMode: 'default',
-    disabledTools: [], disableSlashCommands: false,
+    name: 'full', label: 'Full', description: 'All tools allowed, no permission prompts', builtin: true,
+    model: null, effort: null, permissionMode: 'bypassPermissions',
+    allowedTools: [...KNOWN_TOOLS], disabledTools: [], disableSlashCommands: false,
     maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
   },
   safe: {
@@ -205,6 +205,7 @@ function validateProfile(p) {
     model: p.model || null,
     effort: VALID_EFFORTS.includes(p.effort) ? p.effort : null,
     permissionMode: VALID_PERMISSIONS.includes(p.permissionMode) ? p.permissionMode : 'default',
+    allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
     disabledTools: Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
     disableSlashCommands: !!p.disableSlashCommands,
     maxTurns: typeof p.maxTurns === 'number' && p.maxTurns > 0 ? p.maxTurns : null,

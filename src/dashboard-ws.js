@@ -327,6 +327,9 @@ class DashboardBroadcaster {
       return {
         id,
         endpoint: inter.request?.endpoint || '/v1/messages',
+        profile: inter.request?.profile || null,
+        stepId: inter.request?.stepId || null,
+        runId: inter.request?.runId || null,
         timestamp: inter.request?.timestamp || null,
         isStreaming: inter.request?.isStreaming ?? true,
         request: {
