@@ -1,7 +1,7 @@
 {
-  "name": "test",
-  "label": "test",
-  "description": "testing claude-doc features",
+  "name": "gpt-4o-mini",
+  "label": "gpt-5.4-nano",
+  "description": "gpt-5.4-nano",
   "builtin": false,
   "model": null,
   "effort": null,
@@ -13,5 +13,5 @@
   "appendSystemPrompt": null,
   "systemPrompt": null,
   "mcpServers": [],
-  "modelDef": "deepseek-v3"
+  "modelDef": "gpt-5.4-nano"
 }

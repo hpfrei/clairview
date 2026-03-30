@@ -41,13 +41,14 @@ class OpenAIProvider extends BaseProvider {
     // Temperature passthrough
     if (body.temperature != null) openaiBody.temperature = body.temperature;
 
-    // max_tokens: use model's limit, capping any client value that exceeds it
+    // Token limit: some models require max_completion_tokens instead of max_tokens
+    const tokenParam = modelDef.useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens';
     if (modelDef.maxOutputTokens) {
-      openaiBody.max_tokens = body.max_tokens != null
+      openaiBody[tokenParam] = body.max_tokens != null
         ? Math.min(body.max_tokens, modelDef.maxOutputTokens)
         : modelDef.maxOutputTokens;
     } else if (body.max_tokens != null) {
-      openaiBody.max_tokens = body.max_tokens;
+      openaiBody[tokenParam] = body.max_tokens;
     }
 
     const url = `${modelDef.apiBaseUrl.replace(/\/$/, '')}/chat/completions`;

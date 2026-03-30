@@ -87,15 +87,15 @@ Available templates in this skill directory:
       for (const p of state.profiles) {
         const opt = document.createElement('option');
         opt.value = p.name;
-        opt.textContent = p.builtin ? `${p.label} (built-in)` : (p.label || p.name);
-        opt.title = p.description || '';
+        opt.textContent = p.builtin ? `${p.name} (built-in)` : p.name;
         profileSel.appendChild(opt);
       }
       profileSel.value = c.name || 'full';
     }
 
     const delBtn = document.getElementById('capDeleteProfile');
-    if (delBtn) delBtn.disabled = !!c.builtin;
+    const prof = state.profiles.find(p => p.name === c.name);
+    if (delBtn) delBtn.disabled = !!c.builtin || (prof?.usedBy?.length > 0);
 
     const summary = document.getElementById('capProfileSummary');
     if (summary) {
@@ -246,15 +246,33 @@ Available templates in this skill directory:
     const title = document.getElementById('profileModalTitle');
     if (mode === 'new') title.textContent = 'New Profile';
     else if (mode === 'duplicate') title.textContent = 'Duplicate Profile';
-    else if (mode === 'view') title.textContent = `Profile: ${profile.label || profile.name}`;
+    else if (mode === 'view') title.textContent = `Profile: ${profile.name}`;
     else title.textContent = `Edit Profile: ${profile.name}`;
 
     const nameInput = document.getElementById('pmName');
     nameInput.value = mode === 'duplicate' ? '' : (profile.name || '');
-    nameInput.readOnly = mode === 'edit' || mode === 'view';
+    const usedBy = profile.usedBy || [];
+    const inUse = usedBy.length > 0;
+    nameInput.readOnly = mode === 'view' || (mode === 'edit' && inUse);
 
-    document.getElementById('pmLabel').value = (mode === 'duplicate' ? '' : profile.label) || '';
-    document.getElementById('pmDescription').value = (mode === 'duplicate' ? '' : profile.description) || '';
+    // Show/hide usage info
+    let usageEl = document.getElementById('pmUsageInfo');
+    if (!usageEl) {
+      usageEl = document.createElement('div');
+      usageEl.id = 'pmUsageInfo';
+      usageEl.className = 'pm-usage-info';
+      nameInput.closest('.pm-form-group').appendChild(usageEl);
+    }
+    if (inUse && mode === 'edit') {
+      const refs = usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('; ');
+      usageEl.textContent = `Used in: ${refs}`;
+      usageEl.style.display = '';
+    } else {
+      usageEl.style.display = 'none';
+    }
+
+    // Store original name for rename detection
+    nameInput.dataset.oldName = mode === 'edit' ? (profile.name || '') : '';
 
     // Unified model selector
     populateModelSelector(profile);
@@ -343,7 +361,7 @@ Available templates in this skill directory:
   // New profile
   document.getElementById('capNewProfile')?.addEventListener('click', () => {
     openProfileModal({
-      name: '', label: '', description: '', builtin: false,
+      name: '', builtin: false,
       model: null, effort: null, permissionMode: 'default',
       disabledTools: [], mcpServers: [], disableSlashCommands: false,
       maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
@@ -354,7 +372,9 @@ Available templates in this skill directory:
   // Edit profile (view-only for built-ins)
   document.getElementById('capEditProfile')?.addEventListener('click', () => {
     if (!state.capabilities) return;
-    openProfileModal(state.capabilities, state.capabilities.builtin ? 'view' : 'edit');
+    const prof = (state.profiles || []).find(p => p.name === state.capabilities.name);
+    const merged = { ...state.capabilities, usedBy: prof?.usedBy || [] };
+    openProfileModal(merged, state.capabilities.builtin ? 'view' : 'edit');
   });
 
   // Duplicate profile
@@ -368,6 +388,12 @@ Available templates in this skill directory:
     const name = state.capabilities?.name;
     if (!name) return;
     if (state.capabilities?.builtin) return alert('Cannot delete built-in profiles. Duplicate it to create an editable copy.');
+    const prof = (state.profiles || []).find(p => p.name === name);
+    const usedBy = prof?.usedBy || [];
+    if (usedBy.length > 0) {
+      const refs = usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('\n');
+      return alert(`Cannot delete "${name}" — it is used in:\n${refs}`);
+    }
     if (!confirm(`Delete profile "${name}"? This cannot be undone.`)) return;
     sendWs({ type: 'profile:delete', name });
   });
@@ -395,8 +421,8 @@ Available templates in this skill directory:
 
     const profile = {
       name,
-      label: document.getElementById('pmLabel')?.value?.trim() || name,
-      description: document.getElementById('pmDescription')?.value?.trim() || '',
+      label: name,
+      description: '',
       builtin: false,
       model: (() => {
         const v = document.getElementById('pmModel')?.value || '';
@@ -417,7 +443,10 @@ Available templates in this skill directory:
       })(),
     };
 
-    sendWs({ type: 'profile:save', profile });
+    const oldName = document.getElementById('pmName')?.dataset.oldName || '';
+    const msg = { type: 'profile:save', profile };
+    if (oldName && oldName !== name) msg.oldName = oldName;
+    sendWs(msg);
     sendWs({ type: 'chat:switchProfile', name });
     closeProfileModal();
   });

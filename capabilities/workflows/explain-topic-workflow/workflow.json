@@ -1,0 +1,54 @@
+{
+  "name": "explain-topic-workflow",
+  "description": "A workflow that explains a topic using an analogy and gathers user questions.",
+  "inputs": {
+    "topic": "The topic the user wants explained"
+  },
+  "steps": {
+    "choose-analogy": {
+      "profile": "safe",
+      "do": "Given the topic '{{topic}}', think of a vivid, everyday analogy that makes the core concepts intuitive. Output the analogy name and a one-sentence summary of why it fits.",
+      "produces": "An analogy name and a brief justification for why it maps well to the topic"
+    },
+    "explain-with-analogy": {
+      "profile": "safe",
+      "do": "Using the chosen analogy, write a clear, engaging explanation of '{{topic}}'. Map each key concept of the topic to a concrete element in the analogy. Keep it conversational and accessible to someone with no prior knowledge. End with a short recap of the key takeaways.",
+      "produces": "A full explanation of the topic through the lens of the analogy, with key concept mappings and a recap",
+      "context": [
+        "choose-analogy"
+      ]
+    },
+    "gather-questions": {
+      "profile": "safe",
+      "do": "Present the explanation to the user, then use the AskUserQuestion tool to ask: 'What questions do you have about this topic? (Type \"none\" if everything is clear.)'",
+      "produces": "The user's follow-up questions or confirmation that they have none",
+      "context": [
+        "explain-with-analogy"
+      ]
+    },
+    "answer-questions": {
+      "profile": "safe",
+      "do": "If the user provided follow-up questions, answer each one clearly, continuing to reference the analogy where helpful. If the user said 'none' or indicated no questions, skip ahead.",
+      "produces": "Answers to the user's questions, or acknowledgement that no questions were asked",
+      "context": [
+        "choose-analogy",
+        "explain-with-analogy",
+        "gather-questions"
+      ],
+      "condition": "The user asked one or more follow-up questions",
+      "then": "summary",
+      "else": "summary"
+    },
+    "summary": {
+      "profile": "safe",
+      "do": "Write a brief summary that recaps: (1) the topic, (2) the analogy used, (3) the key concept mappings, and (4) any follow-up questions that were answered. Format it as a clean, readable reference the user can keep.",
+      "produces": "A concise reference summary of the entire explanation session",
+      "context": [
+        "choose-analogy",
+        "explain-with-analogy",
+        "gather-questions",
+        "answer-questions"
+      ]
+    }
+  }
+}

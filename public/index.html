@@ -1002,10 +1002,6 @@
                 <h4>Identity</h4>
                 <div class="pm-field-row">
                   <label>Name: <input type="text" id="pmName" placeholder="my-profile" pattern="[a-z][a-z0-9-]*" title="Lowercase letters, numbers, hyphens. Min 2 chars."></label>
-                  <label>Label: <input type="text" id="pmLabel" placeholder="My Profile"></label>
-                </div>
-                <div class="pm-field-row">
-                  <label class="pm-wide">Description: <input type="text" id="pmDescription" placeholder="What this profile is for..."></label>
                 </div>
               </div>
 
@@ -1534,12 +1530,132 @@ jq -r '.tool_input.command' |
         <div class="wf-modal-tabbar">
           <button class="wf-modal-tab active" id="wfTabSource">Source JSON</button>
           <button class="wf-modal-tab disabled" id="wfTabCompiled">Compiled JS</button>
+          <button class="wf-modal-tab" id="wfTabHelp">Help</button>
           <div style="flex:1"></div>
-          <button class="cap-new-btn hidden" id="wfRegenBtn" style="background:var(--cyan);border-color:var(--cyan);color:#fff">Regenerate JSON</button>
-          <button class="cap-new-btn wf-compile-btn" id="wfCompileBtn">Compile</button>
+          <button class="wf-action-btn hidden" id="wfRegenBtn">Regenerate JSON</button>
+          <button class="wf-action-btn" id="wfCompileBtn">Compile</button>
         </div>
         <!-- Code editor (shared textarea, content swapped by tab) -->
         <textarea id="wfTextarea" class="cap-modal-code" spellcheck="false" rows="18"></textarea>
+        <!-- Help panel (shown when Help tab is active) -->
+        <div id="wfHelpPanel" class="wf-help-panel hidden">
+          <div class="wf-help-columns">
+            <div class="wf-help-col">
+              <h4>Source JSON</h4>
+              <pre class="wf-help-pre">{
+  "name": "my-workflow",
+  "description": "What this workflow does",
+  "inputs": {
+    "topic": "The topic to process"
+  },
+  "steps": {
+    "step-id": { ... },
+    "step-id": { ... }
+  }
+}</pre>
+              <p class="wf-help-note">Steps execute in key order unless overridden by navigation fields.</p>
+
+              <h4>Step fields</h4>
+              <pre class="wf-help-pre"><b>do</b>           The prompt sent to claude -p.
+             Use {{key}} for input substitution.
+
+<b>profile</b>      Profile name for this step.
+             e.g. "safe", "full", or a custom one.
+             Falls back to the active profile.
+
+<b>produces</b>     Describes expected output format.
+             Appended as a hint to the prompt.
+
+<b>context</b>      Array of step IDs whose output is
+             prepended to this step's prompt.
+             e.g. ["research", "outline"]</pre>
+
+              <h4>Navigation</h4>
+              <pre class="wf-help-pre"><b>next</b>         Unconditional jump to step ID.
+<b>condition</b>    Natural-language branch condition.
+<b>then</b>         Step ID if condition is true.
+<b>else</b>         Step ID if condition is false.
+
+Without next/then/else, advances to the
+next step in key order automatically.</pre>
+
+              <h4>Advanced</h4>
+              <pre class="wf-help-pre"><b>parallel</b>     Array of step IDs to run concurrently.
+             The step itself has no "do" field.
+<b>join</b>         Step ID to resume after parallel done.
+<b>maxRetries</b>   Retry count on failure (default: 0).
+<b>timeout</b>      Step timeout in ms. Kills the process.
+<b>onError</b>      Step ID to jump to on failure.</pre>
+            </div>
+
+            <div class="wf-help-col">
+              <h4>Compiled JS</h4>
+              <pre class="wf-help-pre">module.exports = {
+  name: "my-workflow",
+  sourceHash: "f68b47ebd7a6",
+  inputs: {
+    topic: {
+      type: "string",
+      required: true,
+      description: "The topic to process"
+    }
+  },
+  steps: [ { id, profile, buildPrompt,
+             parseOutput, evaluate, ... } ]
+};</pre>
+              <p class="wf-help-note">sourceHash is first 12 chars of SHA-256 of the source JSON. Used for staleness detection.</p>
+
+              <h4>Step object</h4>
+              <pre class="wf-help-pre"><b>id</b>           Matches the key in workflow.json.
+<b>profile</b>      "safe" | "full" | null (default).
+<b>type</b>         "agent" (has do) or "condition".
+
+<b>buildPrompt(ctx)</b>
+  Returns the full prompt string.
+  ctx.inputs.key    &mdash; resolved input values
+  ctx.steps.id.output &mdash; previous step output
+
+<b>parseOutput(raw)</b>
+  Transforms the raw agent output.
+  Return a string for pass-through, or an
+  object with named fields for downstream
+  steps to reference specific parts.
+
+<b>evaluate(ctx)</b>
+  Deterministic JS predicate for branching.
+  Only on condition steps. No AI call.
+  return ctx.steps["check"].output.passed;
+
+<b>next</b>         "step-id" | null (end).
+<b>then / else</b>  Branch targets from evaluate().
+<b>maxRetries</b>   Same as source JSON.</pre>
+
+              <h4>Output rendering</h4>
+              <pre class="wf-help-pre">Markdown     Tables, lists, headings
+```html       Rendered in an iframe
+```svg        Inline SVG diagrams
+$..$ / $$..$$  LaTeX math (MathJax)
+```lang       Syntax-highlighted code
+
+buildPrompt can instruct the agent to use
+any of these formats in its response.</pre>
+
+              <h4>Runtime context object</h4>
+              <pre class="wf-help-pre">ctx = {
+  inputs: { topic: "user value" },
+  steps: {
+    "research": {
+      output: "raw text or parsed object"
+    },
+    "failed-step": {
+      output: null,
+      error: "error message"
+    }
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
         <!-- Redo bar (only after generate) -->
         <div id="wfRedoBar" class="hidden" style="display:flex; gap:8px; margin-top:8px">
           <input type="text" id="wfRedoInput" placeholder="What should be different..."
@@ -1551,10 +1667,10 @@ jq -r '.tool_input.command' |
         <div id="wfLog" class="wf-modal-log hidden"></div>
       </div>
       <div class="cap-modal-footer">
-        <button class="cap-cancel-btn" id="wfModalCancel">Cancel</button>
-        <button class="cap-save-btn" id="wfGenerateBtn" style="background:var(--cyan); border-color:var(--cyan)">Generate</button>
-        <button class="cap-save-btn" id="wfSaveJson" disabled>Save JSON</button>
-        <button class="cap-save-btn" id="wfSaveJs" disabled style="background:var(--bg-hover); color:var(--text); border-color:var(--border)">Save JS</button>
+        <button class="wf-footer-btn wf-footer-cancel" id="wfModalCancel">Cancel</button>
+        <button class="wf-footer-btn wf-footer-generate" id="wfGenerateBtn">Generate</button>
+        <button class="wf-footer-btn wf-footer-secondary" id="wfSaveJson" disabled>Save JSON</button>
+        <button class="wf-footer-btn wf-footer-secondary" id="wfSaveJs" disabled>Save JS</button>
       </div>
     </div>
   </div>

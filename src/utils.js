@@ -36,12 +36,16 @@ function buildClaudeArgs(profile) {
 /**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
-function spawnClaude(args, { cwd, proxyPort }) {
-  return spawn('claude', args, {
-    cwd,
-    env: { ...process.env, ANTHROPIC_BASE_URL: `http://localhost:${proxyPort}` },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+function spawnClaude(args, { cwd, proxyPort, direct }) {
+  const env = { ...process.env };
+  if (proxyPort) {
+    env.ANTHROPIC_BASE_URL = direct
+      ? `http://localhost:${proxyPort}/direct`
+      : `http://localhost:${proxyPort}`;
+  } else {
+    delete env.ANTHROPIC_BASE_URL;
+  }
+  return spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 /**

@@ -39,6 +39,8 @@
   const wfCompileBtn = document.getElementById('wfCompileBtn');
   const wfTabSource = document.getElementById('wfTabSource');
   const wfTabCompiled = document.getElementById('wfTabCompiled');
+  const wfTabHelp = document.getElementById('wfTabHelp');
+  const wfHelpPanel = document.getElementById('wfHelpPanel');
   const wfLog = document.getElementById('wfLog');
   const wfModalCancel = document.getElementById('wfModalCancel');
   const wfModalClose = document.getElementById('wfModalClose');
@@ -56,14 +58,14 @@
   // --- Log area (in-modal) ---
   function appendLog(text, cls) {
     if (!wfLog) return;
-    wfLog.classList.remove('hidden', 'log-error', 'log-success');
+    wfLog.classList.remove('hidden', 'log-error', 'log-success', 'log-busy');
     if (cls) wfLog.classList.add(cls);
     wfLog.textContent += text;
     wfLog.scrollTop = wfLog.scrollHeight;
   }
   function setLog(text, cls) {
     if (!wfLog) return;
-    wfLog.classList.remove('hidden', 'log-error', 'log-success');
+    wfLog.classList.remove('hidden', 'log-error', 'log-success', 'log-busy');
     if (cls) wfLog.classList.add(cls);
     wfLog.textContent = text;
     wfLog.scrollTop = wfLog.scrollHeight;
@@ -72,7 +74,7 @@
     if (!wfLog) return;
     wfLog.textContent = '';
     wfLog.classList.add('hidden');
-    wfLog.classList.remove('log-error', 'log-success');
+    wfLog.classList.remove('log-error', 'log-success', 'log-busy');
   }
 
   // --- Rendering ---
@@ -151,11 +153,16 @@
 
   function updateTabUI() {
     const hasCompiled = wf.compiledContent != null;
+    const isHelp = wf.activeTab === 'help';
     if (wfTabSource) wfTabSource.classList.toggle('active', wf.activeTab === 'source');
     if (wfTabCompiled) {
       wfTabCompiled.classList.toggle('active', wf.activeTab === 'compiled');
       wfTabCompiled.classList.toggle('disabled', !hasCompiled);
     }
+    if (wfTabHelp) wfTabHelp.classList.toggle('active', isHelp);
+    if (wfTextarea) wfTextarea.classList.toggle('hidden', isHelp);
+    if (wfHelpPanel) wfHelpPanel.classList.toggle('hidden', !isHelp);
+    if (wfRedoBar && isHelp) wfRedoBar.classList.add('hidden');
     if (wfCompileBtn) wfCompileBtn.disabled = wf.compiling;
   }
 
@@ -164,18 +171,21 @@
     // Save current textarea content to the right variable
     if (wf.activeTab === 'source') {
       wf.sourceContent = wfTextarea?.value || '';
-    } else {
+    } else if (wf.activeTab === 'compiled') {
       wf.compiledContent = wfTextarea?.value || '';
     }
     // Switch
     wf.activeTab = tab;
-    if (wfTextarea) wfTextarea.value = tab === 'source' ? wf.sourceContent : (wf.compiledContent || '');
+    if (tab !== 'help' && wfTextarea) {
+      wfTextarea.value = tab === 'source' ? wf.sourceContent : (wf.compiledContent || '');
+    }
     updateTabUI();
   }
 
   // Tab clicks
   wfTabSource?.addEventListener('click', () => switchTab('source'));
   wfTabCompiled?.addEventListener('click', () => switchTab('compiled'));
+  wfTabHelp?.addEventListener('click', () => switchTab('help'));
 
   // Track manual edits in textarea for dirty state
   wfTextarea?.addEventListener('input', () => {
@@ -188,8 +198,9 @@
   });
 
   function updateSaveButtons() {
-    if (wfSaveJson) wfSaveJson.disabled = !wf.jsonDirty;
-    if (wfSaveJs) wfSaveJs.disabled = !wf.jsDirty;
+    const busy = isAnyBusy();
+    if (wfSaveJson) wfSaveJson.disabled = busy || !wf.jsonDirty;
+    if (wfSaveJs) wfSaveJs.disabled = busy || !wf.jsDirty;
   }
 
   function saveWorkflowJson() {
@@ -230,7 +241,7 @@
 
   // Compile
   function startCompile() {
-    if (wf.compiling) return;
+    if (isAnyBusy()) return;
     // Save source first
     if (wf.activeTab === 'source') {
       wf.sourceContent = wfTextarea?.value || '';
@@ -253,37 +264,59 @@
 
     wf.compiling = true;
     setCompileBusy(true);
-    setLog('Compiling...\n');
+    setLog('Compiling\u2026', 'log-busy');
     setTimeout(() => sendWs({ type: 'workflow:compile', name }), 300);
   }
 
   wfCompileBtn?.addEventListener('click', startCompile);
 
-  // Busy states
-  function setGenerateBusy(busy) {
+  // Busy states — only one operation at a time
+  function isAnyBusy() { return wf.generating || wf.compiling; }
+
+  function updateBusyState() {
+    const busy = isAnyBusy();
+    // Generate (footer)
     if (wfGenerateBtn) {
       wfGenerateBtn.disabled = busy;
-      wfGenerateBtn.textContent = busy ? 'Generating\u2026' : 'Generate';
+      wfGenerateBtn.textContent = wf.generating ? 'Generating\u2026' : 'Generate';
+      wfGenerateBtn.classList.toggle('wf-btn-busy', wf.generating);
     }
-  }
-  function setCompileBusy(busy) {
+    // Regenerate JSON (tabbar)
+    if (wfRegenBtn) {
+      wfRegenBtn.disabled = busy;
+      wfRegenBtn.textContent = wf.generating ? 'Regenerating\u2026' : 'Regenerate JSON';
+      wfRegenBtn.classList.toggle('wf-btn-busy', wf.generating);
+    }
+    // Redo (feedback bar)
+    if (wfRedoBtn) wfRedoBtn.disabled = busy;
+    // Compile (tabbar)
     if (wfCompileBtn) {
-      wfCompileBtn.disabled = busy;
-      wfCompileBtn.textContent = busy ? 'Compiling\u2026' : 'Compile';
+      if (wf.compiling) {
+        wfCompileBtn.disabled = true;
+        wfCompileBtn.textContent = 'Compiling\u2026';
+        wfCompileBtn.classList.remove('wf-btn-highlight');
+        wfCompileBtn.classList.add('wf-btn-busy');
+      } else {
+        wfCompileBtn.disabled = busy;
+        wfCompileBtn.classList.remove('wf-btn-busy');
+      }
     }
+    // Footer save/cancel buttons
+    if (wfSaveJson) wfSaveJson.disabled = busy || !wf.jsonDirty;
+    if (wfSaveJs) wfSaveJs.disabled = busy || !wf.jsDirty;
+    if (wfModalCancel) wfModalCancel.disabled = false; // always allow cancel
   }
+
+  function setGenerateBusy() { updateBusyState(); }
+  function setCompileBusy() { updateBusyState(); }
   function updateCompileHighlight(stale) {
     if (!wfCompileBtn) return;
-    if (stale) {
-      wfCompileBtn.style.background = 'var(--accent)';
-      wfCompileBtn.style.borderColor = 'var(--accent)';
-      wfCompileBtn.style.color = '#fff';
+    if (stale && !wf.compiling) {
+      wfCompileBtn.classList.add('wf-btn-highlight');
       wfCompileBtn.textContent = 'Compile Now';
-    } else {
-      wfCompileBtn.style.background = '';
-      wfCompileBtn.style.borderColor = '';
-      wfCompileBtn.style.color = '';
-      wfCompileBtn.textContent = 'Compile';
+    } else if (!stale) {
+      wfCompileBtn.classList.remove('wf-btn-highlight');
+      if (!wf.compiling) wfCompileBtn.textContent = 'Compile';
     }
   }
 
@@ -295,23 +328,24 @@
 
   // Generate (now in footer)
   wfGenerateBtn?.addEventListener('click', () => {
-    if (wf.generating) return;
+    if (isAnyBusy()) return;
     const desc = wfDesc?.value?.trim();
     if (!desc) { setLog('Enter a description first', 'log-error'); return; }
     wf.generating = true;
     setGenerateBusy(true);
     clearWfError();
-    setLog('Generating workflow...\n');
+    setLog('Generating workflow\u2026', 'log-busy');
     sendWs({ type: 'workflow:generate', description: desc });
   });
 
   // Redo
   wfRedoBtn?.addEventListener('click', () => {
+    if (isAnyBusy()) return;
     const feedback = wfRedoInput?.value?.trim();
     if (!feedback) return;
     wf.generating = true;
-    setGenerateBusy(true);
-    setLog('Regenerating workflow...\n');
+    updateBusyState();
+    setLog('Regenerating workflow\u2026', 'log-busy');
     // Pass current source as context + feedback
     if (wf.activeTab === 'source') wf.sourceContent = wfTextarea?.value || '';
     sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback });
@@ -319,12 +353,12 @@
 
   // Regenerate (for existing workflows — regenerates JSON from description)
   wfRegenBtn?.addEventListener('click', () => {
-    if (wf.generating) return;
+    if (isAnyBusy()) return;
     const desc = wfDesc?.value?.trim();
     if (!desc) { setLog('Enter a description first', 'log-error'); return; }
     wf.generating = true;
-    if (wfRegenBtn) { wfRegenBtn.disabled = true; wfRegenBtn.textContent = 'Regenerating\u2026'; }
-    setLog('Regenerating source JSON from description...\n');
+    updateBusyState();
+    setLog('Regenerating source JSON\u2026', 'log-busy');
     sendWs({ type: 'workflow:generate', description: desc });
   });
 
@@ -376,8 +410,7 @@
 
       case 'workflow:generated':
         wf.generating = false;
-        setGenerateBusy(false);
-        if (wfRegenBtn) { wfRegenBtn.disabled = false; wfRegenBtn.textContent = 'Regenerate JSON'; }
+        updateBusyState();
         wf.lastGenerated = msg.workflow;
         wf.sourceContent = JSON.stringify(msg.workflow, null, 2);
         wf.compiledContent = null;
@@ -413,7 +446,7 @@
 
       case 'workflow:compiled':
         wf.compiling = false;
-        setCompileBusy(false);
+        updateBusyState();
         updateCompileHighlight(false);
         if (msg.compiledSource && isModalOpen()) {
           wf.compiledContent = msg.compiledSource;
@@ -432,8 +465,7 @@
       case 'workflow:error':
         wf.generating = false;
         wf.compiling = false;
-        setGenerateBusy(false);
-        setCompileBusy(false);
+        updateBusyState();
         if (isModalOpen()) {
           setLog(msg.error || 'Unknown error', 'log-error');
         } else {

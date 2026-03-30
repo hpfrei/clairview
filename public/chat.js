@@ -277,8 +277,7 @@
     for (const p of (state.profiles || [])) {
       const opt = document.createElement('option');
       opt.value = p.name;
-      opt.textContent = p.builtin ? p.label : p.label || p.name;
-      opt.title = p.description || '';
+      opt.textContent = p.name;
       chatProfileSelect.appendChild(opt);
     }
     chatProfileSelect.value = state.activeProfileName || 'full';

@@ -1,6 +1,7 @@
 node_modules/
 interactions/
 outputs/
+docs/
 
 # MCP config — contains auth tokens, auto-generated per machine
 .mcp.json
@@ -13,15 +14,10 @@ outputs/
 !.claude/commands/
 !.claude/settings.local.json
 
-# Capabilities — ignore runtime, track definitions
-capabilities/*
-!capabilities/profiles/
-!capabilities/active.json
-!capabilities/workflows/
-!capabilities/models.json
+# Capabilities — ignore runtime state and secrets, track definitions
 capabilities/secrets.json
+capabilities/active.json
 capabilities/workflows/*/runs/
-capabilities/workflows/*/compiled.js
 
 # MCP servers — track tool definitions, ignore runtime
 mcp-servers/*/node_modules/

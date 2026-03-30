@@ -28,7 +28,8 @@
       "systemPromptMode": "replace",
       "reasoning": false,
       "contextWindow": 1050000,
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "useMaxCompletionTokens": true
     },
     {
       "name": "gpt-5.4-pro",
@@ -40,7 +41,8 @@
       "systemPromptMode": "replace",
       "reasoning": false,
       "contextWindow": 1050000,
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "useMaxCompletionTokens": true
     },
     {
       "name": "gpt-5.4-mini",
@@ -52,7 +54,8 @@
       "systemPromptMode": "replace",
       "reasoning": false,
       "contextWindow": 400000,
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "useMaxCompletionTokens": true
     },
     {
       "name": "gpt-5.4-nano",
@@ -64,7 +67,8 @@
       "systemPromptMode": "replace",
       "reasoning": false,
       "contextWindow": 400000,
-      "maxOutputTokens": 128000
+      "maxOutputTokens": 128000,
+      "useMaxCompletionTokens": true
     },
     {
       "name": "gemini-3.1-pro",

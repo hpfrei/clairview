@@ -3,9 +3,18 @@ const WebSocket = require('ws');
 const { sanitizeForDashboard, OUTPUTS_DIR } = require('./utils');
 const { pendingQuestions } = require('./proxy');
 const caps = require('./capabilities');
+const workflows = require('./workflows');
 
 // Capabilities config always lives at project root, not the outputs sandbox
 const PROJECT_ROOT = path.dirname(__dirname);
+
+function profilesWithUsage() {
+  const usage = workflows.getProfileUsage(PROJECT_ROOT);
+  return caps.listProfiles(PROJECT_ROOT).map(p => ({
+    ...p,
+    usedBy: usage[p.name] || [],
+  }));
+}
 
 class DashboardBroadcaster {
   constructor(wss, store, sessionManager) {
@@ -40,7 +49,7 @@ class DashboardBroadcaster {
           cwd,
           outputsDir: OUTPUTS_DIR,
           capabilities: this.sessionManager.capabilities,
-          profiles: caps.listProfiles(PROJECT_ROOT),
+          profiles: profilesWithUsage(),
           knownTools: caps.KNOWN_TOOLS,
           knownSkills: caps.KNOWN_SKILLS,
           hookEvents: caps.HOOK_EVENTS,
@@ -121,35 +130,50 @@ class DashboardBroadcaster {
           } else if (msg.type === 'chat:setCapabilities' && this.sessionManager) {
             this.sessionManager.setCapabilities(msg.capabilities);
             const cwd = this.sessionManager.cwd;
-            this.broadcast({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) });
+            this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
           } else if (msg.type === 'chat:switchProfile' && this.sessionManager) {
             const ok = this.sessionManager.switchProfile(msg.name);
             if (!ok) {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Unknown profile: ${msg.name}` }));
             } else {
               const cwd = this.sessionManager.cwd;
-              this.broadcast({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) });
+              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
             }
           } else if (msg.type === 'profile:list') {
             const cwd = this.sessionManager?.cwd || process.cwd();
-            ws.send(JSON.stringify({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) }));
+            ws.send(JSON.stringify({ type: 'profile:list', profiles: profilesWithUsage() }));
           } else if (msg.type === 'profile:save') {
-            const cwd = this.sessionManager?.cwd || process.cwd();
+            // Handle rename: if oldName provided and differs, delete old file first
+            if (msg.oldName && msg.oldName !== msg.profile?.name) {
+              const usage = workflows.getProfileUsage(PROJECT_ROOT);
+              if (usage[msg.oldName]?.length) {
+                ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot rename profile "${msg.oldName}" — it is used in workflows` }));
+                return;
+              }
+              caps.deleteProfile(PROJECT_ROOT, msg.oldName);
+              if (this.sessionManager && this.sessionManager.capabilities.name === msg.oldName) {
+                this.sessionManager.switchProfile(msg.profile.name);
+              }
+            }
             const ok = caps.saveProfile(PROJECT_ROOT, msg.profile);
             if (ok) {
-              this.broadcast({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) });
+              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
             } else {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot save profile: ${msg.profile?.name} (invalid or builtin name)` }));
             }
           } else if (msg.type === 'profile:delete') {
-            const cwd = this.sessionManager?.cwd || process.cwd();
+            const usage = workflows.getProfileUsage(PROJECT_ROOT);
+            if (usage[msg.name]?.length) {
+              const refs = usage[msg.name].map(u => `${u.workflow} (${u.steps.join(', ')})`).join('; ');
+              ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete profile "${msg.name}" — used in: ${refs}` }));
+              return;
+            }
             const ok = caps.deleteProfile(PROJECT_ROOT, msg.name);
             if (ok) {
-              // If active profile was deleted, switch to full
               if (this.sessionManager && this.sessionManager.capabilities.name === msg.name) {
                 this.sessionManager.switchProfile('full');
               }
-              this.broadcast({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) });
+              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
             } else {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete profile: ${msg.name}` }));
             }
@@ -157,7 +181,7 @@ class DashboardBroadcaster {
             const cwd = this.sessionManager?.cwd || process.cwd();
             const ok = caps.duplicateProfile(PROJECT_ROOT, msg.source, msg.newName);
             if (ok) {
-              this.broadcast({ type: 'profile:list', profiles: caps.listProfiles(PROJECT_ROOT) });
+              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
             } else {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot duplicate profile: invalid name or source` }));
             }

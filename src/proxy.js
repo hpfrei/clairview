@@ -84,8 +84,11 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
   router.use(express.json({ limit: '50mb' }));
   router.use(express.raw({ limit: '50mb', type: () => false }));
 
-  // POST /v1/messages - main endpoint
-  router.post('/v1/messages', async (req, res) => {
+  // /direct prefix: log interactions but always use Anthropic (skip model translation)
+  router.use('/direct', (req, res, next) => { req.direct = true; next(); });
+
+  // POST /v1/messages - main endpoint (also handles /direct/v1/messages)
+  router.post(['/v1/messages', '/direct/v1/messages'], async (req, res) => {
     const body = req.body;
     const isStreaming = !!body.stream;
 
@@ -173,8 +176,8 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
       interaction: sanitizeForDashboard(interaction),
     });
 
-    // --- Check for model translation ---
-    const modelDef = typeof getActiveModelDef === 'function' ? getActiveModelDef() : null;
+    // --- Check for model translation (skip for /direct routes) ---
+    const modelDef = req.direct ? null : (typeof getActiveModelDef === 'function' ? getActiveModelDef() : null);
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider) {
@@ -189,7 +192,7 @@ function createProxyRouter(store, broadcaster, targetUrl, getActiveModelDef) {
 
         // Update interaction to reflect what was actually sent
         interaction.request.model = modelDef.label || modelDef.name;
-        interaction.request.max_tokens = translated.body.max_tokens;
+        interaction.request.max_tokens = translated.body.max_tokens ?? translated.body.max_completion_tokens;
         interaction.endpoint = translated.url;
         interaction.translatedFrom = body.model; // preserve original for reference
         broadcaster.broadcast({

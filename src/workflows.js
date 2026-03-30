@@ -615,7 +615,7 @@ Rules:
 - Always include a final summary step`;
 
     const args = buildClaudeArgs(null);
-    const proc = spawnClaude(args, { cwd, proxyPort });
+    const proc = spawnClaude(args, { cwd, proxyPort, direct: true });
 
     const genTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
@@ -741,7 +741,7 @@ Rules:
   - Standard \`\`\`language for code snippets`;
 
     const args = buildClaudeArgs(null);
-    const proc = spawnClaude(args, { cwd, proxyPort });
+    const proc = spawnClaude(args, { cwd, proxyPort, direct: true });
 
     const compileTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
@@ -785,6 +785,25 @@ Rules:
   });
 }
 
+/**
+ * Returns a map of profile name → [{ workflow, steps[] }] showing where each profile is used.
+ */
+function getProfileUsage(cwd) {
+  const usage = {};
+  for (const { name } of listWorkflows(cwd)) {
+    const wf = loadWorkflow(cwd, name);
+    if (!wf?.steps) continue;
+    for (const [stepId, stepDef] of Object.entries(wf.steps)) {
+      if (!stepDef.profile) continue;
+      if (!usage[stepDef.profile]) usage[stepDef.profile] = [];
+      const entry = usage[stepDef.profile].find(e => e.workflow === name);
+      if (entry) entry.steps.push(stepId);
+      else usage[stepDef.profile].push({ workflow: name, steps: [stepId] });
+    }
+  }
+  return usage;
+}
+
 module.exports = {
   listWorkflows,
   loadWorkflow,
@@ -798,5 +817,6 @@ module.exports = {
   generateWorkflow,
   compileWorkflow,
   hashContent,
+  getProfileUsage,
   activeRuns,
 };

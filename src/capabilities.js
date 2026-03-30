@@ -199,8 +199,8 @@ function duplicateProfile(baseDir, sourceName, newName) {
 function validateProfile(p) {
   return {
     name: p.name || 'custom',
-    label: typeof p.label === 'string' ? p.label : (p.name || 'Custom'),
-    description: typeof p.description === 'string' ? p.description : '',
+    label: p.name || 'custom',
+    description: '',
     builtin: !!p.builtin,
     model: p.model || null,
     effort: VALID_EFFORTS.includes(p.effort) ? p.effort : null,
@@ -624,6 +624,7 @@ function resolveModel(model, providers, secrets) {
     reasoning: !!model.reasoning,
     contextWindow: typeof model.contextWindow === 'number' ? model.contextWindow : null,
     maxOutputTokens: typeof model.maxOutputTokens === 'number' ? model.maxOutputTokens : null,
+    useMaxCompletionTokens: !!model.useMaxCompletionTokens,
   };
 }
 
@@ -689,6 +690,7 @@ function validateModel(m) {
     reasoning: !!m.reasoning,
     contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
     maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : null,
+    useMaxCompletionTokens: !!m.useMaxCompletionTokens,
   };
   // Custom provider models can have their own apiBaseUrl/apiKey
   if (m.providerKey === 'custom') {
