@@ -117,6 +117,8 @@ async function handleMessage(ws, msg, bc) {
             cwd: runCwd,
             tabId: msg.tabId || null,
             proxyPort: opts.proxyPort || 3456,
+            dashboardPort: opts.dashboardPort || 3457,
+            authToken: opts.authToken || '',
           }).catch(err => {
             broadcaster.broadcast({ type: 'workflow:error', runId: msg.runId, tabId: msg.tabId || undefined, error: err.message });
           });

@@ -57,6 +57,7 @@ function escHtml(str) {
 // --- Markdown rendering (with HTML/SVG pass-through and MathJax) ---
 function renderMarkdown(text, targetEl) {
   if (!text) { targetEl.innerHTML = ''; return; }
+  text = text.replace(/\n\n/g, '\n');
   if (typeof marked === 'undefined') { targetEl.textContent = text; return; }
 
   // Configure marked to pass through HTML/SVG blocks and render fenced code

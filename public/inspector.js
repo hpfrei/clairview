@@ -16,6 +16,70 @@
     });
   }
 
+  // --- cURL export ---
+  function buildCurlCommand(interaction) {
+    const isTranslated = !!interaction.translatedBody;
+    const endpoint = interaction.endpoint || '/v1/messages';
+    const url = endpoint.startsWith('http') ? endpoint : `https://api.anthropic.com${endpoint}`;
+    const body = isTranslated ? interaction.translatedBody : interaction.request;
+    const headers = isTranslated
+      ? interaction.translatedHeaders || { 'Content-Type': 'application/json', 'Authorization': 'Bearer $API_KEY' }
+      : { 'Content-Type': 'application/json', 'x-api-key': '$ANTHROPIC_API_KEY', 'anthropic-version': '2023-06-01' };
+
+    let cmd = `curl ${url} \\\n`;
+    for (const [key, val] of Object.entries(headers)) {
+      cmd += `  -H '${key}: ${val}' \\\n`;
+    }
+    cmd += `  -d '${JSON.stringify(body, null, 2)}'`;
+    return cmd;
+  }
+
+  function showCurlModal(curlText) {
+    // Remove existing modal if any
+    document.getElementById('curl-modal-overlay')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'curl-modal-overlay';
+    overlay.className = 'curl-modal-overlay';
+    overlay.innerHTML = `
+      <div class="curl-modal">
+        <div class="curl-modal-header">
+          <span>cURL Command</span>
+          <div>
+            <button class="curl-modal-copy">Copy</button>
+            <button class="curl-modal-close">\u00d7</button>
+          </div>
+        </div>
+        <pre class="curl-modal-body"></pre>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Set text content safely (no innerHTML for user data)
+    overlay.querySelector('.curl-modal-body').textContent = curlText;
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.curl-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('.curl-modal-copy').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(curlText).then(() => {
+        e.target.textContent = 'Copied!';
+        setTimeout(() => { e.target.textContent = 'Copy'; }, 1400);
+      });
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.curl-btn');
+    if (!btn) return;
+    const id = btn.dataset.interactionId;
+    const interaction = state.interactions.find(i => i.id === id);
+    if (!interaction) return;
+    showCurlModal(buildCurlCommand(interaction));
+  });
+
   // --- Tool call extraction ---
   function extractToolCalls(interaction) {
     const calls = [];
@@ -314,7 +378,9 @@
     state.interactions.forEach((interaction, idx) => {
       // Apply filter
       if (activeTimelineFilter === 'mcp' && !interaction.isMcp) return;
-      if (activeTimelineFilter === 'api' && interaction.isMcp) return;
+      if (activeTimelineFilter === 'hooks' && !interaction.isHook) return;
+      if (activeTimelineFilter === 'api' && (interaction.isMcp || interaction.isHook)) return;
+      if (activeTimelineFilter === 'mcp' && interaction.isHook) return;
       appendTurnToTimeline(interaction, idx);
     });
   }
@@ -324,6 +390,9 @@
 
     if (interaction.isMcp) {
       return appendMcpCallToTimeline(interaction, idx);
+    }
+    if (interaction.isHook) {
+      return appendHookEntryToTimeline(interaction, idx);
     }
 
     const group = document.createElement('div');
@@ -402,6 +471,39 @@
       <div class="entry-meta">
         <span class="mcp-source-tag mcp-src-${source}">${source}</span>
         <span>${duration}</span>
+      </div>
+    `;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      select({ type: 'turn', id: interaction.id });
+    });
+
+    group.appendChild(el);
+    timelineList.appendChild(group);
+  }
+
+  function appendHookEntryToTimeline(interaction, idx) {
+    const group = document.createElement('div');
+    group.className = 'turn-group hook-call-group';
+    group.dataset.turnId = interaction.id;
+
+    const el = document.createElement('div');
+    el.className = 'timeline-entry turn-entry hook-call-entry';
+    el.dataset.id = interaction.id;
+
+    const hookEvent = interaction.hookEvent || 'Hook';
+    const toolName = interaction.toolName || '';
+    const time = new Date(interaction.timestamp).toLocaleTimeString();
+
+    el.innerHTML = `
+      <div class="entry-header">
+        <span class="entry-num hook-label">${escHtml(hookEvent)}</span>
+        <span class="entry-badge badge-complete">ok</span>
+      </div>
+      <div class="entry-model hook-tool-name">${escHtml(toolName)}</div>
+      <div class="entry-meta">
+        <span>${time}</span>
       </div>
     `;
 
@@ -581,9 +683,46 @@
     processMarkdownBlocks(detailContent);
   }
 
+  function renderHookCallDetail(interaction) {
+    const req = interaction.request || {};
+    const hookEvent = interaction.hookEvent || 'unknown';
+    const toolName = interaction.toolName || '--';
+    const time = new Date(interaction.timestamp).toLocaleTimeString();
+
+    let html = '<div class="section-title" style="color:var(--magenta, #c084fc)">Hook Call</div>';
+    html += `<div class="info-grid">
+      <span class="info-label">Event</span><span class="info-value" style="color:var(--magenta, #c084fc);font-weight:700">${escHtml(hookEvent)}</span>
+      <span class="info-label">Tool</span><span class="info-value">${escHtml(toolName)}</span>
+      <span class="info-label">Session</span><span class="info-value">${escHtml(req.session_id || '--')}</span>
+      <span class="info-label">Time</span><span class="info-value">${time}</span>
+    </div>`;
+
+    if (req.tool_input) {
+      html += '<div class="section-title">Tool Input</div>';
+      html += jsonBlock(req.tool_input);
+    }
+
+    if (req.tool_response) {
+      html += '<div class="section-title">Tool Response</div>';
+      if (typeof req.tool_response === 'string') {
+        html += `<pre class="json-block" style="white-space:pre-wrap">${escHtml(req.tool_response)}</pre>`;
+      } else {
+        html += jsonBlock(req.tool_response);
+      }
+    }
+
+    html += '<div class="section-title">Raw Hook Data</div>';
+    html += jsonBlock(req);
+
+    detailContent.innerHTML = html;
+  }
+
   function renderTurnDetail(interaction) {
     if (interaction.isMcp) {
       return renderMcpCallDetail(interaction);
+    }
+    if (interaction.isHook) {
+      return renderHookCallDetail(interaction);
     }
 
     const req = interaction.request || {};
@@ -652,6 +791,8 @@
         ${jsonBlock(otherParams)}</pre>
       </details>`;
     }
+
+    html += `<button class="curl-btn" data-interaction-id="${interaction.id}">cURL</button>`;
 
     html += `</div>`;
 
@@ -894,13 +1035,15 @@
   function renderUsage(usage) {
     let html = '';
     if (usage.input_tokens !== undefined)
-      html += `<div class="usage-item"><span class="usage-dot input"></span>${usage.input_tokens} input</div>`;
+      html += `<div class="usage-item"><span class="usage-dot input"></span>${usage.input_tokens.toLocaleString()} input</div>`;
     if (usage.output_tokens !== undefined)
-      html += `<div class="usage-item"><span class="usage-dot output"></span>${usage.output_tokens} output</div>`;
+      html += `<div class="usage-item"><span class="usage-dot output"></span>${usage.output_tokens.toLocaleString()} output</div>`;
     if (usage.cache_read_input_tokens)
-      html += `<div class="usage-item"><span class="usage-dot cache-read"></span>${usage.cache_read_input_tokens} cache read</div>`;
+      html += `<div class="usage-item"><span class="usage-dot cache-read"></span>${usage.cache_read_input_tokens.toLocaleString()} cache read</div>`;
     if (usage.cache_creation_input_tokens)
-      html += `<div class="usage-item"><span class="usage-dot cache-create"></span>${usage.cache_creation_input_tokens} cache create</div>`;
+      html += `<div class="usage-item"><span class="usage-dot cache-create"></span>${usage.cache_creation_input_tokens.toLocaleString()} cache create</div>`;
+    if (usage.reasoning_tokens)
+      html += `<div class="usage-item"><span class="usage-dot reasoning"></span>${usage.reasoning_tokens.toLocaleString()} reasoning</div>`;
     return html;
   }
 

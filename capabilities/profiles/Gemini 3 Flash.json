@@ -1,0 +1,22 @@
+{
+  "name": "Gemini 3 Flash",
+  "label": "Gemini 3 Flash",
+  "description": "",
+  "builtin": false,
+  "model": null,
+  "effort": null,
+  "permissionMode": "default",
+  "allowedTools": [],
+  "disabledTools": [
+    "WebFetch"
+  ],
+  "disableSlashCommands": false,
+  "bare": false,
+  "disableAutoMemory": true,
+  "maxTurns": null,
+  "maxBudgetUsd": null,
+  "appendSystemPrompt": null,
+  "systemPrompt": null,
+  "mcpServers": [],
+  "modelDef": "gemini-3-flash"
+}

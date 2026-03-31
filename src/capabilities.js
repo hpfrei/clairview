@@ -197,7 +197,16 @@ function duplicateProfile(baseDir, sourceName, newName) {
   return saveProfile(baseDir, copy);
 }
 
+// Provider keys that support native web search (used by UI + adapter)
+const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
+
 function validateProfile(p) {
+  const modelDef = typeof p.modelDef === 'string' && p.modelDef.trim() ? p.modelDef.trim() : null;
+  let disabledTools = Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t)) : [];
+  // WebFetch is Anthropic server-side only — force-disable for non-Anthropic profiles
+  if (modelDef && !disabledTools.includes('WebFetch')) {
+    disabledTools.push('WebFetch');
+  }
   return {
     name: p.name || 'custom',
     label: p.name || 'custom',
@@ -207,7 +216,7 @@ function validateProfile(p) {
     effort: VALID_EFFORTS.includes(p.effort) ? p.effort : null,
     permissionMode: VALID_PERMISSIONS.includes(p.permissionMode) ? p.permissionMode : 'default',
     allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
-    disabledTools: Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
+    disabledTools,
     disableSlashCommands: !!p.disableSlashCommands,
     bare: !!p.bare,
     disableAutoMemory: p.disableAutoMemory !== false,
@@ -216,7 +225,7 @@ function validateProfile(p) {
     appendSystemPrompt: typeof p.appendSystemPrompt === 'string' && p.appendSystemPrompt.trim() ? p.appendSystemPrompt.trim() : null,
     systemPrompt: typeof p.systemPrompt === 'string' && p.systemPrompt.trim() ? p.systemPrompt.trim() : null,
     mcpServers: Array.isArray(p.mcpServers) ? p.mcpServers.filter(s => typeof s === 'string') : [],
-    modelDef: typeof p.modelDef === 'string' && p.modelDef.trim() ? p.modelDef.trim() : null,
+    modelDef,
   };
 }
 
@@ -415,6 +424,55 @@ function deleteHook(cwd, event, entryIndex) {
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   writeSettingsLocal(cwd, settings);
   return true;
+}
+
+// --- Hook reporter auto-injection ---
+
+const HOOK_REPORTER_MARKER = '__claude_doc_reporter__';
+
+function ensureHookReporters(cwd, reporterPath) {
+  const settings = readSettingsLocal(cwd);
+  if (!settings.hooks) settings.hooks = {};
+  const events = ['PreToolUse', 'PostToolUse'];
+  let changed = false;
+  for (const event of events) {
+    if (!settings.hooks[event]) settings.hooks[event] = [];
+    const entries = settings.hooks[event];
+    // Check if reporter already exists
+    const hasReporter = entries.some(e =>
+      e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
+    );
+    if (!hasReporter) {
+      entries.push({
+        hooks: [{
+          type: 'command',
+          command: `node "${reporterPath}" # ${HOOK_REPORTER_MARKER}`,
+          timeout: 5,
+        }],
+      });
+      changed = true;
+    }
+  }
+  if (changed) writeSettingsLocal(cwd, settings);
+}
+
+function removeHookReporters(cwd) {
+  const settings = readSettingsLocal(cwd);
+  if (!settings.hooks) return;
+  let changed = false;
+  for (const event of Object.keys(settings.hooks)) {
+    const entries = settings.hooks[event];
+    const filtered = entries.filter(e =>
+      !e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
+    );
+    if (filtered.length !== entries.length) {
+      settings.hooks[event] = filtered;
+      changed = true;
+    }
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  if (changed) writeSettingsLocal(cwd, settings);
 }
 
 // --- System prompt constants ---
@@ -757,7 +815,7 @@ function deleteProvider(baseDir, key) {
 // --- Helpers ---
 
 function isValidName(name) {
-  return /^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name) && name.length >= 2 && name.length <= 50;
+  return /^[A-Za-z0-9][A-Za-z0-9 _.\-]*$/.test(name) && name.length >= 2 && name.length <= 50;
 }
 
 function extractFrontmatterField(content, field) {
@@ -788,6 +846,7 @@ function extractFrontmatterField(content, field) {
 
 module.exports = {
   KNOWN_TOOLS,
+  WEB_SEARCH_PROVIDERS,
   BUILTIN_PROFILES,
   PRESETS, // backward compat alias
   KNOWN_SKILLS,
@@ -816,6 +875,8 @@ module.exports = {
   listHooks,
   saveHook,
   deleteHook,
+  ensureHookReporters,
+  removeHookReporters,
   listModels,
   loadModel,
   saveModel,

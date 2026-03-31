@@ -535,6 +535,11 @@
         break;
       case 'session:switched':
         resetChatView();
+        if (msg.chatHistory?.length > 0) {
+          for (const entry of msg.chatHistory) {
+            appendChatBubble(entry.text, entry.role, activeTabId);
+          }
+        }
         break;
     }
   }

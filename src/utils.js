@@ -40,7 +40,7 @@ function buildClaudeArgs(profile) {
 /**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
-function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemory }) {
+function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemory, dashboardPort, authToken }) {
   const env = { ...process.env };
   if (proxyPort) {
     if (direct) {
@@ -56,6 +56,8 @@ function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemor
   if (disableAutoMemory) {
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   }
+  if (dashboardPort) env.CLAUDE_DOC_DASHBOARD_PORT = String(dashboardPort);
+  if (authToken) env.CLAUDE_DOC_AUTH_TOKEN = authToken;
   return spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 

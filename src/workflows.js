@@ -120,7 +120,7 @@ function generateRunId() {
 /**
  * Run a workflow. Each agent step spawns a full claude -p session.
  */
-async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tabId, proxyPort }) {
+async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tabId, proxyPort, dashboardPort, authToken }) {
   const workflow = loadWorkflow(PROJECT_ROOT, name);
   if (!workflow) throw new Error(`Workflow not found: ${name}`);
 
@@ -191,7 +191,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
             try {
               const output = await executeStep(pStepId, prompt, pStepDef, {
                 sessionManager, broadcaster, cwd,
-                proxyPort, runId, tabId,
+                proxyPort, runId, tabId, dashboardPort, authToken,
               });
               const elapsed = Date.now() - t0;
               ctx.steps[pStepId] = { output };
@@ -269,7 +269,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
         try {
           const output = await executeStep(currentStepId, prompt, stepDef, {
             sessionManager, broadcaster, cwd,
-            proxyPort, runId, tabId,
+            proxyPort, runId, tabId, dashboardPort, authToken,
           });
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output };
@@ -440,17 +440,22 @@ function evaluateCondition(condition, ctx) {
  * Execute a single workflow step by spawning claude -p.
  * Supports step-level timeout via stepDef.timeout (ms).
  */
-function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId, tabId }) {
+function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId, tabId, dashboardPort, authToken }) {
   return new Promise((resolve, reject) => {
     const profile = (stepDef.profile && caps.loadProfile(PROJECT_ROOT, stepDef.profile)) || caps.loadActiveProfile(PROJECT_ROOT);
     const args = buildClaudeArgs(profile);
 
     if (tabId) setQuestionContext({ tabId, runId, stepId, profile: stepDef.profile || null });
 
+    // Ensure hook reporters in spawn CWD
+    const reporterPath = path.join(PROJECT_ROOT, 'lib', 'hook-reporter.js');
+    caps.ensureHookReporters(cwd, reporterPath);
+
     // Route through specific model if profile has one, otherwise direct to Anthropic
     const proc = spawnClaude(args, {
       cwd, proxyPort,
       disableAutoMemory: profile.disableAutoMemory !== false,
+      dashboardPort, authToken,
       ...(profile.modelDef ? { modelName: profile.modelDef } : { direct: true }),
     });
 

@@ -30,6 +30,17 @@ class BaseProvider {
   createStreamState() {
     return {};
   }
+
+  /**
+   * Safety-net finalization called by proxy when the upstream stream ends.
+   * Override in subclasses to emit closing Anthropic SSE events if the stream
+   * ended without explicit finalization (e.g. Gemini has no [DONE] sentinel).
+   * @param {object} streamState
+   * @returns {string[]} Array of SSE event strings (empty if already finalized)
+   */
+  finalizeStream(streamState) {
+    return [];
+  }
 }
 
 module.exports = BaseProvider;

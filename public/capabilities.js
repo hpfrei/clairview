@@ -201,6 +201,9 @@ Available templates in this skill directory:
     }
   }
 
+  // Provider keys that support native web search
+  const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
+
   function getSelectedModelDef() {
     const val = document.getElementById('pmModel')?.value || '';
     if (val.startsWith('modeldef:')) {
@@ -241,8 +244,57 @@ Available templates in this skill directory:
     }
   }
 
+  function updateToolGridForModel() {
+    const modelDef = getSelectedModelDef();
+    const grid = document.getElementById('pmToolGrid');
+    if (!grid) return;
+
+    for (const label of grid.querySelectorAll('.pm-tool-item')) {
+      const cb = label.querySelector('input[type="checkbox"]');
+      if (!cb) continue;
+      const tool = cb.dataset.tool;
+      const hint = label.querySelector('.pm-server-tool-hint');
+      if (hint) hint.remove();
+
+      if (tool === 'WebSearch' && modelDef) {
+        const pk = modelDef.providerKey;
+        if (WEB_SEARCH_PROVIDERS.has(pk)) {
+          cb.disabled = false;
+          label.classList.remove('pm-tool-disabled');
+          const span = document.createElement('span');
+          span.className = 'pm-server-tool-hint pm-provider-hint';
+          span.textContent = pk === 'google' ? ' (Google Search)'
+            : pk === 'moonshot' ? ' (Kimi Search)' : ' (web search)';
+          label.appendChild(span);
+        } else {
+          cb.checked = false;
+          cb.disabled = true;
+          label.classList.add('pm-tool-disabled');
+          const span = document.createElement('span');
+          span.className = 'pm-server-tool-hint';
+          span.textContent = ' (not available for this provider)';
+          label.appendChild(span);
+        }
+      } else if (tool === 'WebFetch' && modelDef) {
+        cb.checked = false;
+        cb.disabled = true;
+        label.classList.add('pm-tool-disabled');
+        const span = document.createElement('span');
+        span.className = 'pm-server-tool-hint';
+        span.textContent = ' (Anthropic only \u2014 use MCP for local fetch)';
+        label.appendChild(span);
+      } else if (!modelDef) {
+        cb.disabled = false;
+        label.classList.remove('pm-tool-disabled');
+      }
+    }
+  }
+
   // Listen for model selector changes
-  document.getElementById('pmModel')?.addEventListener('change', updateModelInfo);
+  document.getElementById('pmModel')?.addEventListener('change', () => {
+    updateModelInfo();
+    updateToolGridForModel();
+  });
 
   function openProfileModal(profile, mode) {
     const title = document.getElementById('profileModalTitle');
@@ -312,6 +364,9 @@ Available templates in this skill directory:
       item.appendChild(document.createTextNode(' ' + tool));
       grid.appendChild(item);
     }
+
+    // Mark server-side-only tools based on selected model
+    updateToolGridForModel();
 
     // MCP server checkbox grid
     const mcpGrid = document.getElementById('pmMcpGrid');
@@ -413,8 +468,8 @@ Available templates in this skill directory:
   document.getElementById('pmSave')?.addEventListener('click', () => {
     const name = document.getElementById('pmName')?.value?.trim();
     if (!name) return alert('Profile name is required.');
-    if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name) || name.length < 2) {
-      return alert('Invalid name. Use letters, numbers, spaces, hyphens, or underscores. Min 2 chars.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _.\-]*$/.test(name) || name.length < 2) {
+      return alert('Invalid name. Use letters, numbers, spaces, hyphens, underscores, or dots. Min 2 chars.');
     }
 
     const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;

@@ -152,7 +152,15 @@ class ClaudeSession {
     const mcpConfigFile = this._buildMcpConfig();
     if (mcpConfigFile) args.push('--mcp-config', mcpConfigFile);
 
-    this.proc = spawnClaude(args, { cwd: this.cwd, proxyPort: this.proxyPort, disableAutoMemory: this.capabilities?.disableAutoMemory !== false });
+    // Ensure hook reporters are injected in the spawn CWD
+    const reporterPath = path.join(PROJECT_ROOT, 'lib', 'hook-reporter.js');
+    caps.ensureHookReporters(this.cwd, reporterPath);
+
+    this.proc = spawnClaude(args, {
+      cwd: this.cwd, proxyPort: this.proxyPort,
+      disableAutoMemory: this.capabilities?.disableAutoMemory !== false,
+      dashboardPort: this._dashboardPort, authToken: this._authToken,
+    });
 
     this.proc.stdin.write(prompt);
     this.proc.stdin.end();

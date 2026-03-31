@@ -47,6 +47,7 @@ const proxyServer = http.createServer(proxyApp);
 
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
+dashboardApp.use(express.json());
 dashboardApp.use(express.urlencoded({ extended: false }));
 
 // Auth: cookie parser helper
@@ -68,6 +69,29 @@ dashboardApp.post('/login', (req, res) => {
   } else {
     res.redirect('/login?error=1');
   }
+});
+
+// Hook reporter endpoint (auth via body token, no cookie needed)
+let hookSeq = 0;
+dashboardApp.post('/api/hook-report', (req, res) => {
+  if (req.body?.token !== AUTH_TOKEN) return res.status(401).end();
+  try {
+    const hookData = typeof req.body.hookData === 'string' ? JSON.parse(req.body.hookData) : req.body.hookData;
+    const id = `hook-${Date.now()}-${++hookSeq}`;
+    const interaction = {
+      id, timestamp: Date.now(), isHook: true,
+      hookEvent: hookData.hook_event_name || 'unknown',
+      toolName: hookData.tool_name || null,
+      request: hookData,
+      response: { status: 200, body: hookData.tool_response || null },
+      timing: { startedAt: Date.now(), duration: 0 },
+      status: 'complete', isStreaming: false,
+    };
+    store.add(interaction);
+    broadcaster.broadcast({ type: 'interaction:start', interaction });
+    broadcaster.broadcast({ type: 'interaction:complete', interaction });
+  } catch {}
+  res.status(200).end();
 });
 
 // Auth middleware for all other routes
@@ -113,8 +137,21 @@ sessionManager.broadcaster = broadcaster;
 // Initialize MCP Server Manager
 mcp.init({ broadcaster, store, claudeSession: sessionManager, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
+// Migrate: remove old force-disabled WebSearch/WebFetch from non-Anthropic profiles
+for (const summary of caps.listProfiles(__dirname)) {
+  if (summary.builtin) continue;
+  const p = caps.loadProfile(__dirname, summary.name);
+  if (p && p.modelDef && Array.isArray(p.disabledTools)) {
+    const before = p.disabledTools.length;
+    p.disabledTools = p.disabledTools.filter(t => t !== 'WebSearch' && t !== 'WebFetch');
+    if (p.disabledTools.length !== before) {
+      caps.saveProfile(__dirname, caps.validateProfile(p));
+    }
+  }
+}
+
 // Initialize Workflow Handler
-workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT });
+workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {

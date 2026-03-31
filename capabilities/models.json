@@ -6,7 +6,7 @@
     },
     "google": {
       "label": "Google Gemini",
-      "apiBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai"
+      "apiBaseUrl": "https://generativelanguage.googleapis.com/v1beta"
     },
     "deepseek": {
       "label": "DeepSeek",
@@ -75,7 +75,7 @@
       "label": "Gemini 3.1 Pro",
       "description": "Google's most capable reasoning model for complex agentic workflows (1M context)",
       "providerKey": "google",
-      "provider": "openai",
+      "provider": "gemini",
       "modelId": "gemini-3.1-pro-preview",
       "systemPromptMode": "replace",
       "reasoning": true,
@@ -87,7 +87,7 @@
       "label": "Gemini 3 Flash",
       "description": "Pro-level intelligence at Flash speed and pricing (1M context)",
       "providerKey": "google",
-      "provider": "openai",
+      "provider": "gemini",
       "modelId": "gemini-3-flash-preview",
       "systemPromptMode": "replace",
       "reasoning": true,
@@ -99,7 +99,7 @@
       "label": "Gemini 2.5 Flash",
       "description": "Stable production model with integrated thinking (1M context, depreciating June 2026)",
       "providerKey": "google",
-      "provider": "openai",
+      "provider": "gemini",
       "modelId": "gemini-2.5-flash",
       "systemPromptMode": "replace",
       "reasoning": true,

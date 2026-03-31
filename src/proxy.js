@@ -206,6 +206,13 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
         interaction.request.max_tokens = translated.body.max_tokens ?? translated.body.max_completion_tokens;
         interaction.endpoint = translated.url;
         interaction.translatedFrom = body.model; // preserve original for reference
+        // Store translated request for curl export (mask API key)
+        interaction.translatedBody = translated.body;
+        interaction.translatedHeaders = Object.fromEntries(
+          Object.entries(translated.headers).map(([k, v]) =>
+            k.toLowerCase() === 'authorization' ? [k, 'Bearer $API_KEY'] : [k, v]
+          )
+        );
         broadcaster.broadcast({
           type: 'interaction:update',
           interaction: sanitizeForDashboard(interaction),
@@ -277,6 +284,18 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
                     }
                   }
                 }
+              }
+            }
+
+            // Safety-net finalization — ensures proper Anthropic SSE termination
+            // even if the provider stream ends without explicit signal (e.g. Gemini has no [DONE])
+            const finalEvents = provider.finalizeStream(streamState);
+            for (const eventStr of finalEvents) {
+              res.write(eventStr);
+              const parsed = parseSSEString(eventStr);
+              if (parsed) {
+                interaction.response.sseEvents.push(parsed);
+                trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster);
               }
             }
 

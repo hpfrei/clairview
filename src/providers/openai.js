@@ -1,6 +1,6 @@
 // ============================================================
 // OpenAI-compatible provider adapter
-// Handles: OpenAI, Gemini, DeepSeek, Kimi/Moonshot, Ollama
+// Handles: OpenAI, DeepSeek, Kimi/Moonshot, Ollama
 // ============================================================
 
 const BaseProvider = require('./base');
@@ -24,8 +24,27 @@ class OpenAIProvider extends BaseProvider {
       if (converted) messages.push(...(Array.isArray(converted) ? converted : [converted]));
     }
 
-    // Convert tools
-    const tools = (body.tools || []).map(t => this._convertTool(t, modelDef));
+    // Separate Anthropic-only tools from regular function tools.
+    // Anthropic server tools have a versioned type prefix (web_search_*, web_fetch_*)
+    // or appear by their CLI names (WebSearch, WebFetch). These are never valid
+    // OpenAI-compatible function tools — each provider handles search differently.
+    const ANTHROPIC_TOOL_NAMES = new Set(['WebSearch', 'web_search', 'WebFetch', 'web_fetch']);
+    let hasWebSearch = false;
+    const regularTools = [];
+    for (const t of (body.tools || [])) {
+      if ((t.type && /^web_(search|fetch)_/.test(t.type)) || ANTHROPIC_TOOL_NAMES.has(t.name)) {
+        // Detect web search specifically (not web fetch) for provider injection
+        if ((t.type && t.type.startsWith('web_search_')) || t.name === 'WebSearch' || t.name === 'web_search') {
+          hasWebSearch = true;
+        }
+        // All Anthropic-only tools are stripped from the function tools list
+      } else {
+        regularTools.push(t);
+      }
+    }
+
+    // Convert regular tools to OpenAI function format
+    const tools = regularTools.map(t => this._convertTool(t, modelDef));
 
     const openaiBody = {
       model: modelDef.modelId,
@@ -33,6 +52,12 @@ class OpenAIProvider extends BaseProvider {
       stream: true,
       stream_options: { include_usage: true },
     };
+
+    // Inject provider-native web search as a built-in tool type
+    // (each provider has its own format — not an OpenAI function tool)
+    if (hasWebSearch) {
+      this._injectWebSearch(openaiBody, tools, modelDef);
+    }
 
     if (tools.length > 0) {
       openaiBody.tools = tools;
@@ -50,6 +75,9 @@ class OpenAIProvider extends BaseProvider {
     } else if (body.max_tokens != null) {
       openaiBody[tokenParam] = body.max_tokens;
     }
+
+    // Thinking / reasoning effort translation
+    this._injectThinking(openaiBody, body, modelDef);
 
     const url = `${modelDef.apiBaseUrl.replace(/\/$/, '')}/chat/completions`;
 
@@ -116,12 +144,11 @@ class OpenAIProvider extends BaseProvider {
           contentParts.push({ type: 'image_url', image_url: { url: src.url } });
         }
       } else if (block.type === 'tool_result') {
-        // Tool results go as separate messages
         toolResults.push(block);
       }
     }
 
-    // Emit tool_result messages first (they respond to assistant's tool_calls)
+    // Emit tool_result as separate tool messages (OpenAI format)
     for (const tr of toolResults) {
       let content = '';
       if (typeof tr.content === 'string') {
@@ -184,14 +211,54 @@ class OpenAIProvider extends BaseProvider {
     return result;
   }
 
+  _injectWebSearch(openaiBody, tools, modelDef) {
+    switch (modelDef.providerKey) {
+      case 'openai':
+        tools.push({ type: 'web_search' });
+        break;
+      case 'moonshot':
+        tools.push({ type: 'builtin_function', function: { name: '$web_search' } });
+        break;
+      // deepseek, ollama, custom: silently dropped (no native web search support)
+    }
+  }
+
+  _injectThinking(openaiBody, body, modelDef) {
+    if (!body.thinking || body.thinking.type !== 'enabled') return;
+    const budget = body.thinking.budget_tokens;
+    if (!budget || budget <= 0) return;
+
+    const modelId = modelDef.modelId.toLowerCase();
+
+    switch (modelDef.providerKey) {
+      case 'openai':
+        // OpenAI reasoning models (o1, o3, gpt-5+) use reasoning_effort
+        if (modelId.includes('o1') || modelId.includes('o3') || modelId.includes('gpt-5')) {
+          openaiBody.reasoning_effort = this._budgetToEffort(budget);
+        }
+        break;
+      // deepseek: reasoner model thinks automatically, no explicit control
+      // moonshot: thinking models think automatically, no explicit control
+    }
+  }
+
+  _budgetToEffort(budgetTokens) {
+    if (budgetTokens <= 4096) return 'low';
+    if (budgetTokens <= 16384) return 'medium';
+    return 'high';
+  }
+
   _convertTool(tool, modelDef) {
     const description = modelDef.toolOverrides?.[tool.name] || tool.description || '';
+    const schema = tool.input_schema || {};
+    // OpenAI-compatible APIs require type: "object" in function parameters
+    if (!schema.type) schema.type = 'object';
     return {
       type: 'function',
       function: {
         name: tool.name,
         description,
-        parameters: tool.input_schema || {},
+        parameters: schema,
       },
     };
   }
@@ -207,7 +274,15 @@ class OpenAIProvider extends BaseProvider {
       toolCalls: {},       // indexed by tool call index
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+      reasoningTokens: 0,
     };
+  }
+
+  finalizeStream(ss) {
+    if (ss.finalized) return [];
+    return this._finalize(ss);
   }
 
   translateSSEChunk(data, ss) {
@@ -243,6 +318,17 @@ class OpenAIProvider extends BaseProvider {
     if (parsed.usage) {
       ss.inputTokens = parsed.usage.prompt_tokens || ss.inputTokens;
       ss.outputTokens = parsed.usage.completion_tokens || ss.outputTokens;
+      // OpenAI: prompt_tokens_details.cached_tokens, completion_tokens_details.reasoning_tokens
+      if (parsed.usage.prompt_tokens_details?.cached_tokens) {
+        ss.cacheReadTokens = parsed.usage.prompt_tokens_details.cached_tokens;
+      }
+      if (parsed.usage.completion_tokens_details?.reasoning_tokens) {
+        ss.reasoningTokens = parsed.usage.completion_tokens_details.reasoning_tokens;
+      }
+      // DeepSeek: prompt_cache_hit_tokens / prompt_cache_miss_tokens
+      if (parsed.usage.prompt_cache_hit_tokens) {
+        ss.cacheReadTokens = parsed.usage.prompt_cache_hit_tokens;
+      }
     }
 
     const choice = parsed.choices?.[0];
@@ -332,6 +418,7 @@ class OpenAIProvider extends BaseProvider {
   }
 
   _finalize(ss) {
+    ss.finalized = true;
     const events = [];
 
     // Close any open text block
@@ -353,11 +440,15 @@ class OpenAIProvider extends BaseProvider {
       }
     }
 
-    // Message delta with stop reason
+    // Message delta with stop reason and full usage
+    const usage = { input_tokens: ss.inputTokens, output_tokens: ss.outputTokens };
+    if (ss.cacheReadTokens) usage.cache_read_input_tokens = ss.cacheReadTokens;
+    if (ss.cacheCreateTokens) usage.cache_creation_input_tokens = ss.cacheCreateTokens;
+    if (ss.reasoningTokens) usage.reasoning_tokens = ss.reasoningTokens;
     events.push(this._sseEvent('message_delta', {
       type: 'message_delta',
       delta: { stop_reason: ss.finishReason || 'end_turn', stop_sequence: null },
-      usage: { output_tokens: ss.outputTokens },
+      usage,
     }));
 
     // Message stop
