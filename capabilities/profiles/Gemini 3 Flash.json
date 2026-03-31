@@ -8,6 +8,16 @@
   "permissionMode": "default",
   "allowedTools": [],
   "disabledTools": [
+    "NotebookEdit",
+    "Agent",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "EnterWorktree",
+    "ExitWorktree",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "RemoteTrigger",
     "WebFetch"
   ],
   "disableSlashCommands": false,

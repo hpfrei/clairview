@@ -8,6 +8,30 @@ const BaseProvider = require('./base');
 // Anthropic server-side tool names (CLI + API formats)
 const ANTHROPIC_TOOL_NAMES = new Set(['WebSearch', 'web_search', 'WebFetch', 'web_fetch']);
 
+// Server-side cache for Gemini 3 thought signatures.
+// Claude Code doesn't preserve unknown fields on content blocks, so we store
+// them here keyed by tool_use ID and re-attach when building the next request.
+const _thoughtSignatures = new Map();
+const SIGNATURE_MAX_AGE = 24 * 60 * 60 * 1000; // 24h TTL
+
+function _storeSignature(toolId, signature) {
+  _thoughtSignatures.set(toolId, { sig: signature, ts: Date.now() });
+  // Prune old entries if map grows large
+  if (_thoughtSignatures.size > 500) {
+    const now = Date.now();
+    for (const [id, entry] of _thoughtSignatures) {
+      if (now - entry.ts > SIGNATURE_MAX_AGE) _thoughtSignatures.delete(id);
+    }
+  }
+}
+
+function _getSignature(toolId) {
+  const entry = _thoughtSignatures.get(toolId);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > SIGNATURE_MAX_AGE) { _thoughtSignatures.delete(toolId); return null; }
+  return entry.sig;
+}
+
 class GeminiProvider extends BaseProvider {
 
   // --- Request translation (Anthropic → Gemini) ---
@@ -171,7 +195,12 @@ class GeminiProvider extends BaseProvider {
           args: typeof block.input === 'string' ? JSON.parse(block.input) : (block.input || {}),
         };
         if (block.id) functionCall.id = block.id;
-        parts.push({ functionCall });
+        // Re-attach thoughtSignature from server-side cache (Claude Code doesn't preserve it).
+        // It's a SIBLING of functionCall in the part, required by Gemini 3 for integrity.
+        const part = { functionCall };
+        const sig = block.id ? _getSignature(block.id) : null;
+        if (sig) part.thoughtSignature = sig;
+        parts.push(part);
       }
       // Skip 'thinking' blocks
     }
@@ -335,11 +364,17 @@ class GeminiProvider extends BaseProvider {
 
         ss.toolCalls.push({ id: toolId, contentIndex: ss.contentIndex });
 
-        // Emit complete tool_use block (Gemini sends full args in one chunk)
+        // Store thoughtSignature server-side — Claude Code won't preserve unknown fields
+        // on content blocks, so we cache it by tool ID and re-attach on the next request.
+        if (part.thoughtSignature) {
+          _storeSignature(toolId, part.thoughtSignature);
+        }
+
+        const contentBlock = { type: 'tool_use', id: toolId, name: toolName, input: {} };
         events.push(this._sseEvent('content_block_start', {
           type: 'content_block_start',
           index: ss.contentIndex,
-          content_block: { type: 'tool_use', id: toolId, name: toolName, input: {} },
+          content_block: contentBlock,
         }));
         events.push(this._sseEvent('content_block_delta', {
           type: 'content_block_delta',
