@@ -78,7 +78,7 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster) {
   });
 }
 
-function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfileName) {
+function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfileName, getProfileCaps) {
   const router = express.Router();
 
   router.use(express.json({ limit: '50mb' }));
@@ -158,6 +158,8 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
       timestamp: Date.now(),
       endpoint: '/v1/messages',
       profile: wfCtx?.profile ?? (typeof getProfileName === 'function' ? getProfileName() : null),
+      bare: !!(typeof getProfileCaps === 'function' && getProfileCaps()?.bare),
+      disableAutoMemory: typeof getProfileCaps === 'function' ? getProfileCaps()?.disableAutoMemory !== false : true,
       stepId: wfCtx?.stepId || null,
       runId: wfCtx?.runId || null,
       request: { ...body },

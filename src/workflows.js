@@ -450,6 +450,7 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     // Route through specific model if profile has one, otherwise direct to Anthropic
     const proc = spawnClaude(args, {
       cwd, proxyPort,
+      disableAutoMemory: profile.disableAutoMemory !== false,
       ...(profile.modelDef ? { modelName: profile.modelDef } : { direct: true }),
     });
 

@@ -29,6 +29,7 @@ function buildClaudeArgs(profile) {
   if (profile.model) args.push('--model', profile.model);
   if (profile.effort) args.push('--effort', profile.effort);
   if (profile.disableSlashCommands) args.push('--disable-slash-commands');
+  if (profile.bare) args.push('--bare');
   if (profile.maxTurns) args.push('--max-turns', String(profile.maxTurns));
   if (profile.maxBudgetUsd) args.push('--max-budget-usd', String(profile.maxBudgetUsd));
   if (profile.appendSystemPrompt) args.push('--append-system-prompt', profile.appendSystemPrompt);
@@ -39,7 +40,7 @@ function buildClaudeArgs(profile) {
 /**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
-function spawnClaude(args, { cwd, proxyPort, direct, modelName }) {
+function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemory }) {
   const env = { ...process.env };
   if (proxyPort) {
     if (direct) {
@@ -51,6 +52,9 @@ function spawnClaude(args, { cwd, proxyPort, direct, modelName }) {
     }
   } else {
     delete env.ANTHROPIC_BASE_URL;
+  }
+  if (disableAutoMemory) {
+    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   }
   return spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 }

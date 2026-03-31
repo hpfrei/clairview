@@ -37,8 +37,11 @@ function getModelDef(name) {
 function getProfileName() {
   return sessionManager?.capabilities?.name || null;
 }
+function getProfileCaps() {
+  return sessionManager?.capabilities || null;
+}
 
-const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getModelDef, getProfileName);
+const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getModelDef, getProfileName, getProfileCaps);
 proxyApp.use(proxyRouter);
 const proxyServer = http.createServer(proxyApp);
 

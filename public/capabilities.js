@@ -285,6 +285,8 @@ Available templates in this skill directory:
     document.getElementById('pmMaxTurns').value = profile.maxTurns || '';
     document.getElementById('pmMaxBudget').value = profile.maxBudgetUsd || '';
     document.getElementById('pmSlash').checked = !profile.disableSlashCommands;
+    document.getElementById('pmBare').checked = !!profile.bare;
+    document.getElementById('pmDisableMemory').checked = profile.disableAutoMemory !== false;
     document.getElementById('pmAppendPrompt').value = profile.appendSystemPrompt || '';
     document.getElementById('pmSystemPrompt').value = profile.systemPrompt || '';
 
@@ -411,8 +413,8 @@ Available templates in this skill directory:
   document.getElementById('pmSave')?.addEventListener('click', () => {
     const name = document.getElementById('pmName')?.value?.trim();
     if (!name) return alert('Profile name is required.');
-    if (!/^[a-z][a-z0-9-]*$/.test(name) || name.length < 2) {
-      return alert('Invalid name. Use lowercase letters, numbers, and hyphens. Min 2 chars.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name) || name.length < 2) {
+      return alert('Invalid name. Use letters, numbers, spaces, hyphens, or underscores. Min 2 chars.');
     }
 
     const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;
@@ -446,6 +448,8 @@ Available templates in this skill directory:
       disabledTools,
       mcpServers,
       disableSlashCommands: !document.getElementById('pmSlash')?.checked,
+      bare: !!document.getElementById('pmBare')?.checked,
+      disableAutoMemory: document.getElementById('pmDisableMemory')?.checked !== false,
       maxTurns: maxT > 0 ? maxT : null,
       maxBudgetUsd: maxB > 0 ? maxB : null,
       appendSystemPrompt: document.getElementById('pmAppendPrompt')?.value?.trim() || null,

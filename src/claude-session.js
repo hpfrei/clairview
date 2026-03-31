@@ -152,7 +152,7 @@ class ClaudeSession {
     const mcpConfigFile = this._buildMcpConfig();
     if (mcpConfigFile) args.push('--mcp-config', mcpConfigFile);
 
-    this.proc = spawnClaude(args, { cwd: this.cwd, proxyPort: this.proxyPort });
+    this.proc = spawnClaude(args, { cwd: this.cwd, proxyPort: this.proxyPort, disableAutoMemory: this.capabilities?.disableAutoMemory !== false });
 
     this.proc.stdin.write(prompt);
     this.proc.stdin.end();

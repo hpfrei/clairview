@@ -605,6 +605,8 @@
       <span class="info-label">Temperature</span><span class="info-value">${temperature}</span>
       <span class="info-label">Stream</span><span class="info-value">${stream}</span>
       <span class="info-label">Endpoint</span><span class="info-value">${escHtml(interaction.endpoint || '/v1/messages')}</span>
+      <span class="info-label">Bare</span><span class="info-value">${interaction.bare ? 'yes' : 'no'}</span>
+      <span class="info-label">Auto-memory</span><span class="info-value">${interaction.disableAutoMemory ? 'disabled' : 'enabled'}</span>
       <span class="info-label">Time</span><span class="info-value">${new Date(interaction.timestamp).toLocaleTimeString()}</span>
     </div>`;
 

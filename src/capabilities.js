@@ -18,27 +18,28 @@ const BUILTIN_PROFILES = {
     name: 'full', label: 'Full', description: 'All tools allowed, no permission prompts', builtin: true,
     model: null, effort: null, permissionMode: 'bypassPermissions',
     allowedTools: [...KNOWN_TOOLS], disabledTools: [], disableSlashCommands: false,
+    bare: false, disableAutoMemory: true,
     maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
   },
   safe: {
     name: 'safe', label: 'Safe', description: 'No file writes or shell execution', builtin: true,
     model: null, effort: null, permissionMode: 'acceptEdits',
     disabledTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'CronCreate', 'CronDelete', 'EnterWorktree', 'ExitWorktree'],
-    disableSlashCommands: false,
+    disableSlashCommands: false, bare: false, disableAutoMemory: true,
     maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
   },
   readonly: {
     name: 'readonly', label: 'Read-only', description: 'Read and search only', builtin: true,
     model: null, effort: null, permissionMode: 'plan',
     disabledTools: KNOWN_TOOLS.filter(t => !['Read', 'Glob', 'Grep', 'AskUserQuestion'].includes(t)),
-    disableSlashCommands: true,
+    disableSlashCommands: true, bare: false, disableAutoMemory: true,
     maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
   },
   minimal: {
     name: 'minimal', label: 'Minimal', description: 'Absolute minimum for code reading', builtin: true,
     model: null, effort: null, permissionMode: 'plan',
     disabledTools: KNOWN_TOOLS.filter(t => !['Read', 'Glob', 'Grep'].includes(t)),
-    disableSlashCommands: true,
+    disableSlashCommands: true, bare: false, disableAutoMemory: true,
     maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
   },
 };
@@ -208,6 +209,8 @@ function validateProfile(p) {
     allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
     disabledTools: Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
     disableSlashCommands: !!p.disableSlashCommands,
+    bare: !!p.bare,
+    disableAutoMemory: p.disableAutoMemory !== false,
     maxTurns: typeof p.maxTurns === 'number' && p.maxTurns > 0 ? p.maxTurns : null,
     maxBudgetUsd: typeof p.maxBudgetUsd === 'number' && p.maxBudgetUsd > 0 ? p.maxBudgetUsd : null,
     appendSystemPrompt: typeof p.appendSystemPrompt === 'string' && p.appendSystemPrompt.trim() ? p.appendSystemPrompt.trim() : null,
@@ -754,7 +757,7 @@ function deleteProvider(baseDir, key) {
 // --- Helpers ---
 
 function isValidName(name) {
-  return /^[a-z][a-z0-9-]*$/.test(name) && name.length >= 2 && name.length <= 50;
+  return /^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name) && name.length >= 2 && name.length <= 50;
 }
 
 function extractFrontmatterField(content, field) {
