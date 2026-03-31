@@ -285,39 +285,82 @@ class DashboardBroadcaster {
     });
   }
 
+  _isNewUserTurn(inter) {
+    const ep = inter.request?.endpoint || '/v1/messages';
+    if (ep.startsWith('mcp://') || ep.startsWith('hook://')) return false;
+    const msgs = inter.request?.messages;
+    if (!msgs || msgs.length === 0) return false;
+    const last = msgs[msgs.length - 1];
+    if (last.role !== 'user') return false;
+    const content = Array.isArray(last.content) ? last.content : [];
+    if (content.length === 0) return typeof last.content === 'string';
+    return content[content.length - 1]?.type === 'text';
+  }
+
+  _extractAssistantText(inter) {
+    // Try body.content first (non-streaming)
+    const body = inter.response?.body;
+    if (body?.content) {
+      const texts = body.content.filter(b => b.type === 'text').map(b => b.text);
+      if (texts.length > 0) return texts.join('\n');
+    }
+    // Fall back to SSE events (streaming)
+    const events = inter.response?.sseEvents || [];
+    let text = '';
+    for (const e of events) {
+      let data = e.data;
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch { continue; } }
+      if (data?.delta?.type === 'text_delta') text += data.delta.text || '';
+    }
+    return text || null;
+  }
+
+  _extractUserPrompt(inter) {
+    const msgs = inter.request?.messages || [];
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== 'user') return null;
+    const content = last.content;
+    if (typeof content === 'string') {
+      return content.startsWith('<system-reminder>') ? null : content;
+    }
+    if (Array.isArray(content)) {
+      const texts = content
+        .filter(b => b.type === 'text' && !b.text.startsWith('<system-reminder>'))
+        .map(b => b.text);
+      return texts.length > 0 ? texts[texts.length - 1] : null;
+    }
+    return null;
+  }
+
   _extractChatHistory(interactions) {
     const history = [];
-    for (const inter of interactions) {
-      // Extract user prompt from the last user message
-      const messages = inter.request?.messages || [];
-      for (const m of messages) {
-        if (m.role === 'user') {
-          const content = m.content;
-          if (typeof content === 'string') {
-            // Skip system reminder texts
-            if (!content.startsWith('<system-reminder>')) {
-              history.push({ role: 'user', text: content });
-            }
-          } else if (Array.isArray(content)) {
-            // Find the actual user text (last text block, skip system-reminders)
-            const texts = content
-              .filter(b => b.type === 'text' && !b.text.startsWith('<system-reminder>'))
-              .map(b => b.text);
-            if (texts.length > 0) {
-              history.push({ role: 'user', text: texts[texts.length - 1] });
-            }
-          }
+    let segmentStart = -1;
+
+    for (let i = 0; i < interactions.length; i++) {
+      if (!this._isNewUserTurn(interactions[i])) continue;
+
+      // Push assistant text from the previous segment (last interaction before this new turn)
+      if (segmentStart >= 0) {
+        for (let j = i - 1; j >= segmentStart; j--) {
+          const text = this._extractAssistantText(interactions[j]);
+          if (text) { history.push({ role: 'assistant', text }); break; }
         }
       }
-      // Extract assistant response
-      const body = inter.response?.body;
-      if (body?.content) {
-        const textBlocks = body.content.filter(b => b.type === 'text').map(b => b.text);
-        if (textBlocks.length > 0) {
-          history.push({ role: 'assistant', text: textBlocks.join('\n') });
-        }
+
+      // Push user prompt for this turn
+      const prompt = this._extractUserPrompt(interactions[i]);
+      if (prompt) history.push({ role: 'user', text: prompt });
+      segmentStart = i;
+    }
+
+    // Push assistant text from the final segment
+    if (segmentStart >= 0) {
+      for (let j = interactions.length - 1; j >= segmentStart; j--) {
+        const text = this._extractAssistantText(interactions[j]);
+        if (text) { history.push({ role: 'assistant', text }); break; }
       }
     }
+
     return history;
   }
 
@@ -326,7 +369,11 @@ class DashboardBroadcaster {
       const id = `restored-${i}-${Date.now()}`;
       return {
         id,
-        endpoint: inter.request?.endpoint || '/v1/messages',
+        endpoint: (inter.request?.endpoint?.startsWith('mcp://') || inter.request?.endpoint?.startsWith('hook://'))
+          ? inter.request.endpoint : '/v1/messages',
+        originalEndpoint: inter.request?.endpoint || '/v1/messages',
+        isMcp: !!inter.request?.endpoint?.startsWith('mcp://'),
+        isHook: !!inter.request?.endpoint?.startsWith('hook://'),
         profile: inter.request?.profile || null,
         stepId: inter.request?.stepId || null,
         runId: inter.request?.runId || null,

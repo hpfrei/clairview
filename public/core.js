@@ -57,7 +57,7 @@ function escHtml(str) {
 // --- Markdown rendering (with HTML/SVG pass-through and MathJax) ---
 function renderMarkdown(text, targetEl) {
   if (!text) { targetEl.innerHTML = ''; return; }
-  text = text.replace(/\n\n/g, '\n');
+  text = text.replace(/\n{2,}/g, '\n');
   if (typeof marked === 'undefined') { targetEl.textContent = text; return; }
 
   // Configure marked to pass through HTML/SVG blocks and render fenced code
@@ -235,7 +235,7 @@ const statsEl = document.getElementById('stats');
 const sessionPicker = document.getElementById('sessionPicker');
 const newSessionBtn = document.getElementById('newSessionBtn');
 const deleteSessionBtn = document.getElementById('deleteSessionBtn');
-const switchSessionBtn = document.getElementById('switchSessionBtn');
+
 
 // Centralized settings state sync — called once, modules just re-render
 function syncSettings(msg) {
@@ -449,15 +449,15 @@ newSessionBtn?.addEventListener('click', () => {
 });
 
 sessionPicker?.addEventListener('change', () => {
-  updateSessionActions();
-});
-
-switchSessionBtn?.addEventListener('click', () => {
   const id = parseInt(sessionPicker.value, 10);
-  if (!id || isNaN(id) || id === state.activeSessionId) return;
+  if (!id || isNaN(id) || id === state.activeSessionId) {
+    updateSessionActions();
+    return;
+  }
   if (state.ws?.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({ type: 'session:switch', id }));
   }
+  updateSessionActions();
 });
 
 deleteSessionBtn?.addEventListener('click', () => {
@@ -471,7 +471,6 @@ deleteSessionBtn?.addEventListener('click', () => {
 function updateSessionActions() {
   const id = parseInt(sessionPicker?.value, 10);
   const isActive = !id || id === state.activeSessionId;
-  switchSessionBtn?.classList.toggle('hidden', isActive);
   deleteSessionBtn?.classList.toggle('hidden', isActive);
 }
 
