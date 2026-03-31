@@ -257,7 +257,7 @@ aside#timeline {
 }
 
 .turn-group.new-user-turn {
-  border-top: none;
+  border-top: 2px solid blue;
 }
 
 .turn-group.new-user-turn:first-child {
@@ -3083,7 +3083,7 @@ footer {
   transition: background 0.1s;
 }
 .wfrun-step-row:hover { background: var(--bg-hover); }
-.wfrun-step-row.running { border-left-color: var(--accent); }
+.wfrun-step-row.running { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .wfrun-step-row.done { border-left-color: var(--green); }
 .wfrun-step-row.failed { border-left-color: var(--red); }
 .wfrun-step-row.expanded { background: var(--bg-hover); }
@@ -3095,10 +3095,15 @@ footer {
   flex-shrink: 0;
 }
 .wfrun-step-icon.pending { color: var(--text-dim); }
-.wfrun-step-icon.running { color: var(--accent); animation: pulse 2s infinite; }
+.wfrun-step-icon.running { color: var(--accent); animation: wfrun-spin 1s linear infinite; }
 .wfrun-step-icon.done { color: var(--green); }
 .wfrun-step-icon.failed { color: var(--red); }
 .wfrun-step-icon.skipped { color: var(--text-dim); }
+
+@keyframes wfrun-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 .wfrun-step-name {
   font-size: 12px;

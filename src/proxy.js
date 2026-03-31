@@ -157,7 +157,7 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages',
-      profile: typeof getProfileName === 'function' ? getProfileName() : null,
+      profile: wfCtx?.profile ?? (typeof getProfileName === 'function' ? getProfileName() : null),
       stepId: wfCtx?.stepId || null,
       runId: wfCtx?.runId || null,
       request: { ...body },

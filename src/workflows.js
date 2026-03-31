@@ -273,7 +273,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
           });
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output };
-          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed);
+          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, output);
         } catch (err) {
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output: null, error: err.message };
@@ -355,13 +355,13 @@ function getNextStepId(stepEntries, currentId) {
   return null;
 }
 
-function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed) {
+function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed, output) {
   const step = run.steps.find(s => s.id === stepId);
   if (step) {
     step.status = status;
     if (elapsed !== undefined) step.elapsed = elapsed;
   }
-  broadcaster.broadcast({
+  const msg = {
     type: status === 'running' ? 'workflow:step:start' : 'workflow:step:complete',
     runId,
     tabId: run.tabId || undefined,
@@ -369,7 +369,9 @@ function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed) {
     status,
     success: status === 'done',
     elapsed,
-  });
+  };
+  if (output !== undefined) msg.output = typeof output === 'string' ? output : JSON.stringify(output);
+  broadcaster.broadcast(msg);
 }
 
 function buildPrompt(stepDef, ctx, workflow) {
@@ -443,7 +445,7 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     const profile = (stepDef.profile && caps.loadProfile(PROJECT_ROOT, stepDef.profile)) || caps.loadActiveProfile(PROJECT_ROOT);
     const args = buildClaudeArgs(profile);
 
-    if (tabId) setQuestionContext({ tabId, runId, stepId });
+    if (tabId) setQuestionContext({ tabId, runId, stepId, profile: stepDef.profile || null });
 
     // Route through specific model if profile has one, otherwise direct to Anthropic
     const proc = spawnClaude(args, {

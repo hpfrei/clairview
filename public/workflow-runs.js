@@ -308,7 +308,7 @@
     // Step list
     html += '<div class="wfrun-step-list">';
     for (const s of tab.steps) {
-      const icons = { pending: '\u25cb', running: '\u25cc', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
+      const icons = { pending: '\u25cb', running: '\u27f3', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
       const icon = icons[s.status] || '\u25cb';
       const expanded = tab.expandedStepId === s.id;
       const elapsed = s.elapsed != null ? (s.elapsed < 1000 ? s.elapsed + 'ms' : (s.elapsed / 1000).toFixed(1) + 's') : '';
@@ -567,6 +567,10 @@
       case 'workflow:step:complete': {
         const t = findTab(msg.tabId);
         if (!t) break;
+        // If we have no streamed progress text but the complete message has output, use it
+        if (msg.output && !t.stepOutputs[msg.stepId]) {
+          t.stepOutputs[msg.stepId] = msg.output;
+        }
         updateStep(t, msg.stepId, msg.success ? 'done' : 'failed', msg.elapsed);
         if (msg.tabId === activeTabId) renderActivePhase(t);
         break;

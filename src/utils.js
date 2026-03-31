@@ -104,11 +104,17 @@ const OUTPUTS_DIR = path.join(path.dirname(__dirname), 'outputs');
  * Returns the absolute path inside outputs/.
  */
 function resolveOutputDir(userPath) {
-  const clean = (userPath || '').replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
-  // path.resolve against outputs dir; strip leading / so it's treated as relative
+  if (!userPath) { ensureDir(OUTPUTS_DIR); return OUTPUTS_DIR; }
+  // If already an absolute path inside outputs/, use it directly
+  const normalized = path.resolve(userPath);
+  if (normalized.startsWith(OUTPUTS_DIR)) {
+    ensureDir(normalized);
+    return normalized;
+  }
+  // Otherwise treat as relative to OUTPUTS_DIR (strip traversal and leading slashes)
+  const clean = userPath.replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
   const stripped = clean.replace(/^[/\\]+/, '');
   const resolved = stripped ? path.join(OUTPUTS_DIR, stripped) : OUTPUTS_DIR;
-  // Final containment check
   if (!resolved.startsWith(OUTPUTS_DIR)) return OUTPUTS_DIR;
   ensureDir(resolved);
   return resolved;
