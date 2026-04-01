@@ -93,7 +93,7 @@
 
     let html = `<div class="ref-intro">
       <strong>MCP Tools</strong> extend Claude Code with custom tools you create. One integrated server
-      (<code>claude-doc-tools</code>) runs automatically and registers with Claude Code &mdash;
+      (<code>clairview-tools</code>) runs automatically and registers with Claude Code &mdash;
       you just add tools below and Claude can call them like built-in ones.
     </div>`;
 

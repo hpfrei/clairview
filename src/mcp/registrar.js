@@ -35,8 +35,8 @@ function register(slug, meta, bridgePath, authToken, dashboardPort, projectDir) 
   const env = {
     MCP_DASHBOARD_URL: `ws://localhost:${dashboardPort}`,
     MCP_AUTH_TOKEN: authToken,
-    CLAUDE_DOC_AUTH_TOKEN: authToken,
-    CLAUDE_DOC_DASHBOARD_PORT: String(dashboardPort),
+    CLAIRVIEW_AUTH_TOKEN: authToken,
+    CLAIRVIEW_DASHBOARD_PORT: String(dashboardPort),
   };
   // Merge user env vars
   if (meta.env) Object.assign(env, meta.env);

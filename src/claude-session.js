@@ -105,9 +105,9 @@ class ClaudeSession {
         if (k) env[k] = String(v);
       }
     }
-    env.CLAUDE_DOC_DASHBOARD_PORT = String(this._dashboardPort || process.env.DASHBOARD_PORT || '3457');
-    env.CLAUDE_DOC_AUTH_TOKEN = String(this._authToken || process.env.AUTH_TOKEN || '');
-    env.CLAUDE_DOC_SERVER_SLUG = mcpServers.INTEGRATED_SLUG;
+    env.CLAIRVIEW_DASHBOARD_PORT = String(this._dashboardPort || process.env.DASHBOARD_PORT || '3457');
+    env.CLAIRVIEW_AUTH_TOKEN = String(this._authToken || process.env.AUTH_TOKEN || '');
+    env.CLAIRVIEW_SERVER_SLUG = mcpServers.INTEGRATED_SLUG;
 
     const config = {
       mcpServers: {
@@ -122,7 +122,7 @@ class ClaudeSession {
     if (Object.keys(config.mcpServers).length === 0) return null;
 
     // Write to temp file
-    const tmpFile = path.join(os.tmpdir(), `claude-doc-mcp-${Date.now()}-${process.pid}.json`);
+    const tmpFile = path.join(os.tmpdir(), `clairview-mcp-${Date.now()}-${process.pid}.json`);
     fs.writeFileSync(tmpFile, JSON.stringify(config, null, 2));
     this._mcpConfigFile = tmpFile;
     return tmpFile;

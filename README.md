@@ -1,4 +1,4 @@
-# claude-doc
+# clairview
 
 A browser-based dashboard for Claude Code. Inspect API traffic, run chat sessions remotely, build workflows, manage profiles, and route through multiple LLM providers.
 
@@ -113,8 +113,8 @@ Two built-in themes toggled from the header: **Bright** (checker-paper grid, def
 ### Install
 
 ```bash
-git clone https://github.com/hpfrei/claude-doc.git
-cd claude-doc
+git clone https://github.com/hpfrei/clairview.git
+cd clairview
 npm install
 ```
 
@@ -167,7 +167,7 @@ ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
 
 ```
                           +---------------------------+
-                          |    claude-doc server       |
+                          |    clairview server       |
 Browser -- WebSocket -->  |                           |
 (:3457)                   |  proxy :3456  (SSE pass)  |--- HTTP/SSE -->  Anthropic API
                           |  dashboard :3457  (WS)    |                  (or provider adapter)

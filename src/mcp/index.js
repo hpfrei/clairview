@@ -360,9 +360,9 @@ function spawnBridge() {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      CLAUDE_DOC_SERVER_SLUG: servers.INTEGRATED_SLUG,
-      CLAUDE_DOC_AUTH_TOKEN: opts.authToken || process.env.AUTH_TOKEN || '',
-      CLAUDE_DOC_DASHBOARD_PORT: String(opts.dashboardPort || process.env.DASHBOARD_PORT || 3457),
+      CLAIRVIEW_SERVER_SLUG: servers.INTEGRATED_SLUG,
+      CLAIRVIEW_AUTH_TOKEN: opts.authToken || process.env.AUTH_TOKEN || '',
+      CLAIRVIEW_DASHBOARD_PORT: String(opts.dashboardPort || process.env.DASHBOARD_PORT || 3457),
     },
   });
 }
@@ -417,7 +417,7 @@ async function mcpInitialize(proc) {
   sendJsonRpc(proc, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'claude-doc', version: '1.0.0' },
+    clientInfo: { name: 'clairview', version: '1.0.0' },
   }, 1);
   await waitForResponse(proc, 1);
   sendJsonRpc(proc, 'notifications/initialized');

@@ -20,7 +20,7 @@
   // --- Content ---
 
   const overviewMd = `
-# claude-doc
+# clairview
 
 A development dashboard that wraps **Claude Code** with inspection, multi-tab chat, workflow automation, and custom MCP tools.
 
@@ -39,7 +39,7 @@ A development dashboard that wraps **Claude Code** with inspection, multi-tab ch
   <text x="100" y="55" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">Browser UI</text>
   <!-- Server -->
   <rect x="300" y="10" width="200" height="80" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
-  <text x="400" y="38" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">claude-doc server</text>
+  <text x="400" y="38" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">clairview server</text>
   <text x="400" y="58" text-anchor="middle" fill="var(--text-dim)" font-size="11">proxy + dashboard + WS</text>
   <text x="400" y="73" text-anchor="middle" fill="var(--text-dim)" font-size="11">workflow engine</text>
   <!-- API -->

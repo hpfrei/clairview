@@ -1,4 +1,4 @@
-# Contributing to claude-doc
+# Contributing to clairview
 
 Thanks for your interest in contributing! This project is open to contributions of all kinds — bug fixes, new features, documentation improvements, and ideas.
 
@@ -9,8 +9,8 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 1. Fork the repository
 2. Clone your fork and install dependencies:
    ```bash
-   git clone https://github.com/<your-username>/claude-doc.git
-   cd claude-doc
+   git clone https://github.com/<your-username>/clairview.git
+   cd clairview
    npm install
    ```
 3. Run `claude` once from the project directory to authenticate (see [README](README.md))
@@ -37,7 +37,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ## Reporting Bugs
 
-Open an [issue](https://github.com/hpfrei/claude-doc/issues) with:
+Open an [issue](https://github.com/hpfrei/clairview/issues) with:
 
 - What you expected to happen
 - What actually happened

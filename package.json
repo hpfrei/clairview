@@ -1,5 +1,5 @@
 {
-  "name": "claude-doc",
+  "name": "clairview",
   "version": "1.0.0",
   "description": "Transparent proxy for studying Claude Code API interactions",
   "main": "server.js",

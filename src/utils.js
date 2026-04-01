@@ -56,8 +56,8 @@ function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemor
   if (disableAutoMemory) {
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   }
-  if (dashboardPort) env.CLAUDE_DOC_DASHBOARD_PORT = String(dashboardPort);
-  if (authToken) env.CLAUDE_DOC_AUTH_TOKEN = authToken;
+  if (dashboardPort) env.CLAIRVIEW_DASHBOARD_PORT = String(dashboardPort);
+  if (authToken) env.CLAIRVIEW_AUTH_TOKEN = authToken;
   return spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 

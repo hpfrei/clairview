@@ -428,7 +428,7 @@ function deleteHook(cwd, event, entryIndex) {
 
 // --- Hook reporter auto-injection ---
 
-const HOOK_REPORTER_MARKER = '__claude_doc_reporter__';
+const HOOK_REPORTER_MARKER = '__clairview_reporter__';
 
 function ensureHookReporters(cwd, reporterPath) {
   const settings = readSettingsLocal(cwd);
