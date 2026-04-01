@@ -237,32 +237,11 @@ This means the profile is **immutable for the process lifetime**. Switching prof
 
 ### Request flow
 
-```
-Browser / API client
-  │
-  ├─ WebSocket ──► Dashboard :3457 ──► spawns claude -p (with profile URL)
-  │                                         │
-  │                                         ▼
-  │                                    Proxy :3456
-  │                                    extracts /p/{profile}
-  │                                    loads profile + modelDef
-  │                                         │
-  │                          ┌──────────────┴──────────────┐
-  │                          │                             │
-  │                    no modelDef                   has modelDef
-  │                          │                             │
-  │                   forward as-is              translate request
-  │                          │                             │
-  │                          ▼                             ▼
-  │                    Anthropic API              OpenAI / Gemini / ...
-  │                          │                             │
-  │                          └──────────────┬──────────────┘
-  │                                         │
-  │                              record for Inspector
-  │                              stream back to claude -p
-  │                                         │
-  └─ WebSocket ◄── Dashboard :3457 ◄── stdout stream
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/request-flow-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/request-flow-light.svg">
+  <img alt="Request flow diagram" src="docs/request-flow-light.svg" width="780">
+</picture>
 
 ### AskUserQuestion interception
 
@@ -419,4 +398,4 @@ docs/
 
 ## License
 
-Business Source License 1.1 -- see [LICENSE](LICENSE). Copyright (c) 2026 hpfreilabs.com
+Business Source License 1.1 -- see [LICENSE](LICENSE). Copyright (c) 2026 [hpfreilabs.com](https://hpfreilabs.com)
