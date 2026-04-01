@@ -1,0 +1,116 @@
+<svg viewBox="0 0 880 460" xmlns="http://www.w3.org/2000/svg" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#656d76"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#1a7f37"/></marker>
+    <marker id="ay" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#9a6700"/></marker>
+    <marker id="ac" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#0969da"/></marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="880" height="460" rx="12" fill="#ffffff"/>
+
+  <!-- ═══ CLIENTS (left) ═══ -->
+  <rect x="30" y="40" width="150" height="70" rx="8" fill="#f6f8fa" stroke="#0969da" stroke-width="1.5"/>
+  <text x="105" y="68" text-anchor="middle" fill="#1f2328" font-size="13" font-weight="600">Browser UI</text>
+  <text x="105" y="86" text-anchor="middle" fill="#656d76" font-size="10">chat / inspector / runs</text>
+  <text x="105" y="100" text-anchor="middle" fill="#656d76" font-size="10">profiles / models</text>
+
+  <rect x="30" y="130" width="150" height="50" rx="8" fill="#f6f8fa" stroke="#218bff" stroke-width="1"/>
+  <text x="105" y="152" text-anchor="middle" fill="#1f2328" font-size="12">REST API client</text>
+  <text x="105" y="168" text-anchor="middle" fill="#656d76" font-size="9">POST /api/run (SSE)</text>
+
+  <!-- ═══ SERVER (center) ═══ -->
+  <rect x="260" y="25" width="280" height="110" rx="10" fill="#f6f8fa" stroke="#1a7f37" stroke-width="2"/>
+  <text x="400" y="50" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">clairview</text>
+  <text x="400" y="70" text-anchor="middle" fill="#656d76" font-size="10">dashboard :3457  &#x2502;  proxy :3456</text>
+  <text x="400" y="86" text-anchor="middle" fill="#656d76" font-size="10">session manager  &#x2502;  workflow engine</text>
+  <text x="400" y="102" text-anchor="middle" fill="#656d76" font-size="10">MCP server  &#x2502;  cost tracker</text>
+  <text x="400" y="118" text-anchor="middle" fill="#656d76" font-size="10">per-session profile routing</text>
+
+  <!-- ═══ UPSTREAM APIS (right) ═══ -->
+  <rect x="640" y="35" width="200" height="45" rx="8" fill="#f6f8fa" stroke="#8250df" stroke-width="1.5"/>
+  <text x="740" y="55" text-anchor="middle" fill="#1f2328" font-size="12" font-weight="600">Anthropic API</text>
+  <text x="740" y="70" text-anchor="middle" fill="#656d76" font-size="9">Claude Opus / Sonnet / Haiku</text>
+
+  <rect x="640" y="95" width="200" height="45" rx="8" fill="#f6f8fa" stroke="#656d76" stroke-width="1"/>
+  <text x="740" y="115" text-anchor="middle" fill="#1f2328" font-size="12">OpenAI / Gemini / ...</text>
+  <text x="740" y="130" text-anchor="middle" fill="#656d76" font-size="9">translated via provider adapters</text>
+
+  <!-- Arrows: clients -> server -->
+  <line x1="180" y1="75" x2="260" y2="75" stroke="#656d76" stroke-width="1.2" marker-end="url(#a)"/>
+  <text x="220" y="68" text-anchor="middle" fill="#656d76" font-size="8">WebSocket</text>
+  <line x1="180" y1="155" x2="260" y2="90" stroke="#656d76" stroke-width="1" marker-end="url(#a)"/>
+  <text x="208" y="130" text-anchor="middle" fill="#656d76" font-size="8">SSE</text>
+
+  <!-- Arrows: server -> upstream -->
+  <line x1="540" y1="55" x2="640" y2="55" stroke="#656d76" stroke-width="1.2" marker-end="url(#a)"/>
+  <text x="590" y="48" text-anchor="middle" fill="#656d76" font-size="8">direct forward</text>
+  <line x1="540" y1="95" x2="640" y2="110" stroke="#656d76" stroke-width="1" marker-end="url(#a)"/>
+  <text x="590" y="96" text-anchor="middle" fill="#656d76" font-size="8">translate request</text>
+
+  <!-- ═══ CLAUDE PROCESSES (middle row) ═══ -->
+  <rect x="240" y="170" width="125" height="50" rx="6" fill="#f6f8fa" stroke="#0969da" stroke-width="1.2"/>
+  <text x="302" y="192" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">claude -p</text>
+  <text x="302" y="207" text-anchor="middle" fill="#656d76" font-size="9">chat session</text>
+
+  <rect x="380" y="170" width="125" height="50" rx="6" fill="#f6f8fa" stroke="#0969da" stroke-width="1.2"/>
+  <text x="442" y="192" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">claude -p</text>
+  <text x="442" y="207" text-anchor="middle" fill="#656d76" font-size="9">chat session</text>
+
+  <rect x="240" y="235" width="125" height="50" rx="6" fill="#f6f8fa" stroke="#1a7f37" stroke-width="1.2"/>
+  <text x="302" y="257" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">claude -p</text>
+  <text x="302" y="272" text-anchor="middle" fill="#656d76" font-size="9">workflow step</text>
+
+  <rect x="380" y="235" width="125" height="50" rx="6" fill="#f6f8fa" stroke="#1a7f37" stroke-width="1.2"/>
+  <text x="442" y="257" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">claude -p</text>
+  <text x="442" y="272" text-anchor="middle" fill="#656d76" font-size="9">workflow step</text>
+
+  <!-- Arrows: server -> processes -->
+  <line x1="340" y1="135" x2="302" y2="170" stroke="#656d76" stroke-width="1" marker-end="url(#a)"/>
+  <line x1="400" y1="135" x2="442" y2="170" stroke="#656d76" stroke-width="1" marker-end="url(#a)"/>
+  <line x1="340" y1="135" x2="302" y2="235" stroke="#656d76" stroke-width="1" stroke-dasharray="4" marker-end="url(#a)"/>
+  <line x1="400" y1="135" x2="442" y2="235" stroke="#656d76" stroke-width="1" stroke-dasharray="4" marker-end="url(#a)"/>
+
+  <!-- ═══ PROFILE-SCOPED URL NOTE ═══ -->
+  <rect x="560" y="175" width="280" height="55" rx="6" fill="none" stroke="#1a7f37" stroke-width="1" stroke-dasharray="5"/>
+  <text x="700" y="195" text-anchor="middle" fill="#656d76" font-size="9">each process has its own profile URL:</text>
+  <text x="700" y="211" text-anchor="middle" fill="#1a7f37" font-size="10" font-weight="600">:3456/p/{profile}/v1/messages</text>
+  <text x="700" y="224" text-anchor="middle" fill="#656d76" font-size="9">concurrent sessions never interfere</text>
+
+  <!-- ═══ ASKUSERQUESTION (bottom left) ═══ -->
+  <rect x="55" y="310" width="200" height="45" rx="6" fill="#f6f8fa" stroke="#9a6700" stroke-width="1.2" stroke-dasharray="5"/>
+  <text x="155" y="337" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">AskUserQuestion</text>
+  <text x="155" y="350" text-anchor="middle" fill="#656d76" font-size="9">intercepted by proxy &#x2192; shown in UI</text>
+
+  <line x1="302" y1="220" x2="240" y2="310" stroke="#9a6700" stroke-width="1" stroke-dasharray="4" marker-end="url(#ay)"/>
+  <line x1="302" y1="285" x2="240" y2="316" stroke="#9a6700" stroke-width="1" stroke-dasharray="4" marker-end="url(#ay)"/>
+  <line x1="155" y1="310" x2="105" y2="110" stroke="#9a6700" stroke-width="1" stroke-dasharray="4" marker-end="url(#ay)"/>
+
+  <!-- ═══ MCP TOOLS (bottom center) ═══ -->
+  <rect x="310" y="320" width="180" height="50" rx="6" fill="#f6f8fa" stroke="#8250df" stroke-width="1.2"/>
+  <text x="400" y="342" text-anchor="middle" fill="#1f2328" font-size="11" font-weight="500">MCP Tools</text>
+  <text x="400" y="358" text-anchor="middle" fill="#656d76" font-size="9">custom + chat + workflow_run</text>
+
+  <line x1="442" y1="220" x2="420" y2="320" stroke="#656d76" stroke-width="1" marker-end="url(#a)"/>
+
+  <!-- ═══ WORKFLOW ENGINE (bottom right) ═══ -->
+  <rect x="560" y="310" width="200" height="55" rx="6" fill="#f6f8fa" stroke="#1a7f37" stroke-width="1.2"/>
+  <text x="660" y="332" text-anchor="middle" fill="#1f2328" font-size="12" font-weight="500">Workflow Engine</text>
+  <text x="660" y="348" text-anchor="middle" fill="#656d76" font-size="9">parallel steps &#x2502; context passing</text>
+  <text x="660" y="360" text-anchor="middle" fill="#656d76" font-size="9">branching &#x2502; retries &#x2502; escalation</text>
+
+  <line x1="400" y1="135" x2="560" y2="335" stroke="#1a7f37" stroke-width="1" stroke-dasharray="4"/>
+
+  <!-- ═══ FOOTER LEGEND ═══ -->
+  <rect x="30" y="400" width="820" height="40" rx="6" fill="#f6f8fa"/>
+  <circle cx="60" cy="420" r="5" fill="#0969da"/>
+  <text x="75" y="424" fill="#656d76" font-size="10">Browser / Chat</text>
+  <circle cx="190" cy="420" r="5" fill="#1a7f37"/>
+  <text x="205" y="424" fill="#656d76" font-size="10">Server / Workflows</text>
+  <circle cx="340" cy="420" r="5" fill="#8250df"/>
+  <text x="355" y="424" fill="#656d76" font-size="10">LLM APIs / MCP</text>
+  <circle cx="475" cy="420" r="5" fill="#9a6700"/>
+  <text x="490" y="424" fill="#656d76" font-size="10">AskUserQuestion</text>
+  <circle cx="620" cy="420" r="5" fill="#656d76"/>
+  <text x="635" y="424" fill="#656d76" font-size="10">Data flow</text>
+</svg>

@@ -1,7 +1,7 @@
 node_modules/
 interactions/
 outputs/
-docs/
+docs/api/
 
 # MCP config — contains auth tokens, auto-generated per machine
 .mcp.json

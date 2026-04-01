@@ -1,113 +1,42 @@
-# clairview
+<div align="center">
 
-A browser-based dashboard for Claude Code. Inspect API traffic, run chat sessions remotely, build workflows, manage profiles, and route through multiple LLM providers.
+<img src="public/favicon.svg" width="80" alt="clairview logo"/>
+
+# $\Huge\textsf{clairview}$
+
+$\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#d29922}automate}$
+
+A development dashboard that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with real-time API inspection,
+multi-session chat, workflow automation, custom MCP tools, multi-provider model routing, and a REST API.
+
+[Getting started](#getting-started) ·
+[Features](#features) ·
+[Architecture](#architecture) ·
+[API reference](#rest-api) ·
+[Project structure](#project-structure)
+
+</div>
+
+---
 
 ## Use cases
 
-- **Study the wire protocol** -- see exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts
-- **Remote access** -- run Claude Code on a powerful machine and control it from a phone, tablet, or any browser
-- **Multi-provider experimentation** -- route Claude Code through OpenAI, Gemini, DeepSeek, or local models via provider adapters
-- **Automated pipelines** -- chain multi-step workflows with branching, parallelism, and per-step profiles
-- **Tool development** -- create and test custom MCP tools from a form-driven editor without leaving the browser
+| | |
+|---|---|
+| $\color{#58a6ff}{\textsf{Study the wire protocol}}$ | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
+| $\color{#3fb950}{\textsf{Remote access}}$ | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
+| $\color{#bc8cff}{\textsf{Multi-provider routing}}$ | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
+| $\color{#d29922}{\textsf{Automated pipelines}}$ | Chain multi-step workflows with branching, parallelism, and per-step profiles |
+| $\color{#79c0ff}{\textsf{Tool development}}$ | Create and test custom MCP tools from a form-driven editor without leaving the browser |
+| $\color{#f778ba}{\textsf{Programmatic access}}$ | Drive chats and workflows via the REST API with Server-Sent Events streaming |
 
-## Features
+---
 
-### Inspector
-
-A transparent proxy that captures every API call between Claude Code and the upstream LLM.
-
-- Full request/response capture with headers, payloads, and timing
-- Live SSE event stream -- watch `message_start`, `content_block_delta`, tool calls as they arrive
-- Hierarchical timeline: turns > tool calls, with search and filtering
-- Token usage breakdown: input, output, cache read, cache creation
-- Profile flags (bare mode, auto-memory) shown per request
-- All interactions saved to disk as structured JSON for offline analysis
-
-### Chat
-
-Multi-tab browser-based Claude Code sessions with full conversation context.
-
-- Send prompts, get streamed responses, answer interactive questions -- no terminal needed
-- Multiple independent tabs, each with its own profile and working directory
-- Session resume via `--resume` -- follow-up questions work naturally
-- AskUserQuestion interception -- Claude's questions appear in the browser, answers are injected back transparently
-- Live task panel -- `TaskCreate`/`TaskUpdate` tool calls rendered as a draggable status board
-- Stop running sessions at any time
-
-### Workflows
-
-Define multi-step AI pipelines that execute as sequences of `claude -p` spawns.
-
-- **Generate** -- describe a workflow in natural language, get a structured `workflow.json`
-- **Edit** -- modify steps, inputs, profiles, conditions, and flow in the browser
-- **Compile** -- transforms the definition into an optimized `compiled.js` module with prompt builders and output parsers
-- **Run** -- each step spawns a fresh `claude -p` process, streamed to the Runs tab
-- **Flow control** -- conditional branching (`then`/`else`), parallel fan-out, joins, retries, timeouts, error handlers
-- **Per-step profiles** -- different model/effort/permissions per step
-- **Context chaining** -- pipe previous step outputs into downstream prompts via `context` references
-- Run history saved to `capabilities/workflows/<name>/runs/`
-
-### Profiles
-
-Named capability bundles that control how `claude -p` is spawned.
-
-| Setting | CLI flag | Description |
-|---|---|---|
-| Model | `--model` | sonnet, opus, haiku, or custom model ID |
-| Effort | `--effort` | low, medium, high, max |
-| Permission mode | `--permission-mode` | default, acceptEdits, plan, bypassPermissions, dontAsk, auto |
-| Allowed/disabled tools | `--allowedTools` / `--disallowedTools` | Per-tool enable/disable via checkboxes |
-| Bare mode | `--bare` | Strip skills and MCP servers |
-| Disable auto-memory | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | Prevent auto-memory writes |
-| Slash commands | `--disable-slash-commands` | Enable/disable built-in skills |
-| Max turns | `--max-turns` | Cap agentic loop iterations |
-| Budget | `--max-budget-usd` | Dollar spend limit per run |
-| System prompt | `--append-system-prompt` / `--system-prompt` | Append to or replace the default system prompt |
-| MCP servers | `--mcp-config` | Integrated server with custom tools |
-
-Four built-in profiles: **Full** (all tools, bypass permissions), **Safe** (no writes or shell), **Read-only**, **Minimal**. Duplicate to create editable custom profiles.
-
-### LLM Provider Adapters
-
-Route Claude Code through non-Anthropic models. The proxy translates Anthropic Messages API requests into the target provider's format and translates responses back -- Claude Code sees a normal Anthropic API.
-
-**Supported providers** (all via OpenAI-compatible adapter):
-
-| Provider | Models | Notes |
-|---|---|---|
-| **OpenAI** | GPT-5.4, GPT-5.4 Pro/Mini/Nano | via `api.openai.com` |
-| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Flash | OpenAI-compatible endpoint, reasoning support |
-| **DeepSeek** | V3.2, R1 Thinking | 128K context |
-| **Moonshot (Kimi)** | K2.5, K2 Thinking | 256K context |
-| **Ollama** | Any local model | localhost base URL |
-
-Model definitions are configured in `capabilities/models.json`. API keys stored separately in `capabilities/secrets.json`. Each model can specify system prompt handling (replace/prepend/append/passthrough), reasoning mode, context window, and max output tokens.
-
-### MCP Tool Manager
-
-Extend Claude Code with custom tools through one integrated MCP server.
-
-- Form-driven tool editor with typed parameters (string, number, boolean, object, array)
-- Auto-generated `server.js` and per-tool files -- you only write the handler body
-- Enable/disable tools with checkboxes, restart indicator when changes need applying
-- Inline testing with parameter inputs and result display
-- All MCP tool calls logged in the Inspector
-
-### Skills, Agents, and Hooks
-
-- **Skills** -- create and edit skills (`.claude/skills/<name>/SKILL.md`) with supporting template files
-- **Agents** -- custom sub-agents with their own system prompts, models, and tool restrictions
-- **Hooks** -- lifecycle hooks (PreToolUse, PostToolUse, Stop, etc.) with command, prompt, or agent handlers
-
-### Themes
-
-Two built-in themes toggled from the header: **Bright** (checker-paper grid, default) and **Dark** (Tokyo Night).
-
-## Setup
+## Getting started
 
 ### Prerequisites
 
-- Node.js 18+
+- **Node.js 18+**
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
 ### Install
@@ -118,11 +47,7 @@ cd clairview
 npm install
 ```
 
-Run `claude` once manually to authenticate if you haven't already:
-
-```bash
-claude
-```
+Run `claude` once manually to authenticate if you haven't already.
 
 ### Run
 
@@ -137,19 +62,16 @@ Auth token (auto-generated):
 c0b253eb-c650-4def-ba2c-4b2b1b545d85
 ```
 
-Open `http://localhost:3457` and log in with the token.
+Open **http://localhost:3457** and log in with the token.
 
-To use a custom port:
+> [!TIP]
+> Custom port: `npm start -- 8080` or `DASHBOARD_PORT=8080 npm start`
 
-```bash
-npm start -- 8080          # or: DASHBOARD_PORT=8080 npm start
-```
-
-To inspect an external Claude Code session, point it at the proxy:
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
-```
+> [!TIP]
+> Inspect an external Claude Code session by pointing it at the proxy:
+> ```bash
+> ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
+> ```
 
 ### Environment variables
 
@@ -161,71 +83,339 @@ ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
 | `ANTHROPIC_TARGET_URL` | `https://api.anthropic.com` | Upstream API URL |
 | `MAX_HISTORY` | `200` | Max interactions kept in memory |
 
+> [!WARNING]
 > The dashboard binds to `0.0.0.0` for remote access. It is protected by the auth token, but do not expose it to untrusted networks without TLS/VPN.
 
-## How it works
+---
+
+## Features
+
+### $\color{#58a6ff}{\textsf{Inspector}}$
+
+A transparent proxy that captures every API call between Claude Code and the upstream LLM -- across all sessions, all providers, in real time.
+
+- Full request/response capture with headers, payloads, and timing
+- Live SSE event stream -- watch `message_start`, `content_block_delta`, tool calls as they arrive
+- Hierarchical timeline: turns > tool calls, with search and filtering
+- Token usage breakdown: input, output, cache read, cache creation
+- **Cost tracking** per interaction, per model, per provider
+- Live **markdown rendering** of assistant responses in the detail panel
+- Profile flags (bare mode, auto-memory) shown per request
+- All interactions saved to disk as structured JSON for offline analysis
+
+### $\color{#3fb950}{\textsf{Chat}}$
+
+Multi-tab browser-based Claude Code sessions with full conversation context.
+
+- Send prompts, get streamed responses, answer interactive questions -- no terminal needed
+- **Multiple independent tabs**, each with its own profile, model, and working directory
+- **Per-session isolation** -- switching profiles or models in one tab never affects another
+- Session resume via `--resume` -- follow-up questions work naturally
+- **AskUserQuestion** interception -- Claude's questions appear in the browser, answers are injected back transparently
+- Live **task panel** -- `TaskCreate`/`TaskUpdate` tool calls rendered as a draggable status board
+- Stop running sessions at any time
+- Live process counter in the footer shows how many `claude -p` instances are active
+
+### $\color{#bc8cff}{\textsf{Workflows}}$
+
+Multi-step AI pipelines that execute as sequences of `claude -p` spawns.
+
+- **Design** -- describe a workflow in natural language, name it, define its inputs
+- **Generate** -- AI creates a structured `workflow.json` with steps, profiles, and context chains
+- **Compile** -- AI transforms the JSON into an optimized `compiled.js` module with prompt builders and output parsers
+- **Run** -- each step spawns a fresh `claude -p` process, streamed live to the Runs tab
+- **Flow control** -- conditional branching (`then`/`else`), parallel fan-out, joins, retries, timeouts, error handlers
+- **Per-step profiles** -- different model/effort/permissions per step
+- **Context chaining** -- pipe previous step outputs into downstream prompts via `context` references
+- **Parallel execution** -- multiple workflows (or multiple runs of the same workflow) can execute simultaneously
+- **Escalation** -- steps can pause via AskUserQuestion and wait for user input
+- Run history saved to `capabilities/workflows/<name>/runs/`
+
+### $\color{#d29922}{\textsf{Profiles}}$
+
+Named capability bundles that control how `claude -p` is spawned.
+
+| Setting | CLI flag | Description |
+|---|---|---|
+| Model | `--model` | sonnet, opus, haiku, or custom model ID |
+| Effort | `--effort` | low, medium, high, max |
+| Permission mode | `--permission-mode` | default, acceptEdits, plan, bypassPermissions, dontAsk, auto |
+| Allowed/disabled tools | `--allowedTools` / `--disallowedTools` | Per-tool enable/disable via checkboxes |
+| Model definition | profile `modelDef` field | Route through a third-party model |
+| Bare mode | `--bare` | Strip skills and MCP servers |
+| Disable auto-memory | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | Prevent auto-memory writes |
+| Slash commands | `--disable-slash-commands` | Enable/disable built-in skills |
+| Max turns | `--max-turns` | Cap agentic loop iterations |
+| Budget | `--max-budget-usd` | Dollar spend limit per run |
+| System prompt | `--append-system-prompt` / `--system-prompt` | Append to or replace the default system prompt |
+| MCP servers | `--mcp-config` | Integrated server with custom tools |
+
+**Built-in profiles:**
+
+| Profile | Permission mode | Description |
+|---|---|---|
+| $\color{#3fb950}{\texttt{full}}$ | `bypassPermissions` | All tools, no prompts |
+| $\color{#d29922}{\texttt{safe}}$ | `acceptEdits` | No bash, write, edit, or destructive tools |
+| $\color{#58a6ff}{\texttt{readonly}}$ | `plan` | Only Read, Glob, Grep, AskUserQuestion |
+| $\color{#8b949e}{\texttt{minimal}}$ | `plan` | Only Read, Glob, Grep; slash commands disabled |
+
+Duplicate any built-in profile to create an editable custom profile with full control over all settings.
+
+### $\color{#bc8cff}{\textsf{LLM Provider Adapters}}$
+
+Route Claude Code through non-Anthropic models. The proxy translates Anthropic Messages API requests into the target provider's format and translates responses back -- Claude Code sees a normal Anthropic API.
+
+| Provider | Models | Notes |
+|---|---|---|
+| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | Direct passthrough (no translation) |
+| **OpenAI** | GPT-5.4, GPT-5.4 Pro / Mini / Nano | via `api.openai.com` |
+| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Flash | 1M context, reasoning support |
+| **DeepSeek** | V3.2, R1 Thinking | 128K context |
+| **Moonshot (Kimi)** | K2.5, K2 Thinking | 256K context |
+| **Ollama** | Any local model | localhost base URL |
+
+Model definitions are configured in `capabilities/models.json`. API keys stored separately in `capabilities/secrets.json` (gitignored). Each model can specify system prompt handling (`replace` / `prepend` / `append` / `passthrough`), reasoning mode, context window, max output tokens, and cost per million tokens.
+
+### $\color{#79c0ff}{\textsf{MCP Tool Manager}}$
+
+Extend Claude Code with custom tools through one integrated MCP server.
+
+- Form-driven tool editor with typed parameters (string, number, boolean, object, array)
+- Auto-generated `server.js` and per-tool handler files -- you only write the handler body
+- Enable/disable tools with checkboxes, restart indicator when changes need applying
+- Inline testing with parameter inputs and result display
+- All MCP tool calls logged in the Inspector
+
+**Built-in MCP tools** (always available):
+
+| Tool | Description |
+|---|---|
+| `chat` | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
+| `workflow_list` | List available compiled workflows |
+| `workflow_run` | Execute a workflow with inputs and optional cwd |
+| `workflow_status` | Check progress of a running workflow |
+| `workflow_cancel` | Cancel a running workflow |
+
+The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator using `chat` to delegate research to a `readonly` session).
+
+### $\color{#f778ba}{\textsf{Skills, Agents, and Hooks}}$
+
+- **Skills** -- create and edit skills (`.claude/skills/<name>/SKILL.md`) with supporting template files
+- **Agents** -- custom sub-agents with their own system prompts, models, and tool restrictions
+- **Hooks** -- lifecycle hooks (`PreToolUse`, `PostToolUse`, `Stop`, etc.) with command, prompt, or agent handlers
+
+### $\textsf{Themes}$
+
+Two built-in themes toggled from the header: **Bright** (checker-paper grid, default) and **Dark** (Tokyo Night palette).
+
+---
+
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/architecture-light.svg">
+  <img alt="clairview architecture" src="docs/architecture-light.svg" width="880">
+</picture>
+
+clairview runs two servers from a single Node.js process:
+
+| Server | Port | Binding | Purpose |
+|---|---|---|---|
+| **Proxy** | `:3456` | `127.0.0.1` | Intercepts all Claude API calls for inspection and model routing |
+| **Dashboard** | `:3457` | `0.0.0.0` | WebSocket + REST API + web UI (auth-protected) |
+
+### Per-session isolation
+
+Every `claude -p` process gets its profile baked into its base URL at spawn time:
 
 ```
-                          +---------------------------+
-                          |    clairview server       |
-Browser -- WebSocket -->  |                           |
-(:3457)                   |  proxy :3456  (SSE pass)  |--- HTTP/SSE -->  Anthropic API
-                          |  dashboard :3457  (WS)    |                  (or provider adapter)
-                          +---------+---------+-------+
-                                    |         |
-                         +----------+         +----------+
-                         |                               |
-                   Built-in claude -p              External claude -p
-                  (spawned, --resume)             (your terminal)
+ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
 ```
 
-The proxy is fully transparent with zero latency overhead. Raw SSE bytes flow to Claude Code unmodified while parsed events are tapped off to the dashboard over WebSocket.
+This means the profile is **immutable for the process lifetime**. Switching profiles in the browser or starting a new workflow will never affect a running session. Concurrent chats, workflows, and API calls are fully isolated.
 
-When using a provider adapter, requests are translated to the target provider's format on the fly, and responses are translated back to Anthropic's SSE format before reaching Claude Code.
+### Request flow
+
+```
+Browser / API client
+  │
+  ├─ WebSocket ──► Dashboard :3457 ──► spawns claude -p (with profile URL)
+  │                                         │
+  │                                         ▼
+  │                                    Proxy :3456
+  │                                    extracts /p/{profile}
+  │                                    loads profile + modelDef
+  │                                         │
+  │                          ┌──────────────┴──────────────┐
+  │                          │                             │
+  │                    no modelDef                   has modelDef
+  │                          │                             │
+  │                   forward as-is              translate request
+  │                          │                             │
+  │                          ▼                             ▼
+  │                    Anthropic API              OpenAI / Gemini / ...
+  │                          │                             │
+  │                          └──────────────┬──────────────┘
+  │                                         │
+  │                              record for Inspector
+  │                              stream back to claude -p
+  │                                         │
+  └─ WebSocket ◄── Dashboard :3457 ◄── stdout stream
+```
+
+### AskUserQuestion interception
+
+When `claude -p` calls the `AskUserQuestion` tool during a chat or workflow step:
+
+1. The proxy intercepts the tool call in the API response stream
+2. When `claude -p` sends back the error `tool_result`, the proxy pauses the request
+3. The proxy broadcasts `ask:question` to the dashboard UI
+4. The UI renders the question with options and free text input
+5. User answers, UI sends `ask:answer` back via WebSocket
+6. Proxy rewrites the `tool_result` with the real answer and continues the API call
+7. Claude resumes as if the tool succeeded normally
+
+---
+
+## REST API
+
+The dashboard server (`:3457`) exposes a REST API for programmatic access. All endpoints require authentication.
+
+> [!NOTE]
+> Auth methods: cookie `token=<TOKEN>`, header `Authorization: Bearer <TOKEN>`, or `X-Clairview-Internal: true` from localhost.
+
+### $\texttt{POST /api/run}$
+
+Start a chat or workflow. Returns a **Server-Sent Events** stream.
+
+<details>
+<summary><b>Request body</b></summary>
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | **yes** | `"chat"` or `"workflow"` |
+| `prompt` | `string` | for chat | The user message to send to Claude |
+| `workflow` | `string` | for workflow | Name of the workflow to run |
+| `inputs` | `object` | no | Input variables for the workflow |
+| `cwd` | `string` | no | Working directory override |
+| `profile` | `string` | no | Profile name (e.g. `"full"`, `"safe"`, or a custom profile). Does not change the global active profile. |
+| `sessionId` | `string` | no | Chat only -- resume an existing session for multi-turn |
+
+</details>
+
+<details>
+<summary><b>SSE events</b></summary>
+
+| Event | Payload | Description |
+|---|---|---|
+| `text` | `{ text }` | Streamed text delta from Claude |
+| `ask` | `{ toolUseId, questions }` | AskUserQuestion -- session needs user input |
+| `step` | `{ stepId, status, text? }` | Workflow step progress |
+| `error` | `{ error }` | Error message |
+| `done` | `{ result, sessionId? }` or `{ result, runId }` | Completion with final result |
+
+</details>
+
+### $\texttt{POST /api/run/answer}$
+
+Answer a pending `AskUserQuestion`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `toolUseId` | `string` | **yes** | From the `ask` SSE event |
+| `answer` | `any` | **yes** | The answer value |
+
+Returns `{ ok: true }` or `404` if no pending question matches.
+
+### Examples
+
+<details>
+<summary><b>Chat with curl</b></summary>
+
+```bash
+# Start a chat (streams SSE events)
+curl -N -X POST http://localhost:3457/api/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"chat","prompt":"List all TODO comments in the codebase","profile":"readonly"}'
+
+# Continue the conversation using the sessionId from the done event
+curl -N -X POST http://localhost:3457/api/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"chat","prompt":"Now fix the first one","profile":"full","sessionId":"SESSION_ID"}'
+```
+
+</details>
+
+<details>
+<summary><b>Run a workflow with curl</b></summary>
+
+```bash
+curl -N -X POST http://localhost:3457/api/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"workflow","workflow":"code-review","inputs":{"branch":"feature/auth"},"cwd":"/path/to/repo"}'
+```
+
+The `step` events track each step's progress. The `done` event includes the workflow result and `runId`.
+
+</details>
+
+---
 
 ## Project structure
 
 ```
-server.js                Entry point -- proxy + dashboard servers, auth
+server.js                  Entry point -- proxy + dashboard servers, auth
 src/
-  proxy.js               API forwarding, SSE passthrough, provider routing
-  sse-passthrough.js     Zero-copy SSE transform stream
-  claude-session.js      Spawns claude -p with profile flags and session resume
-  claude-sessions.js     Multi-tab session manager
-  dashboard-ws.js        WebSocket server and broadcast hub
-  capabilities.js        Profiles, models, providers, hooks, skills, agents CRUD
-  workflows.js           Workflow CRUD + runtime engine (generate, compile, execute)
-  workflow-handler.js    WebSocket handler for workflow operations
-  store.js               In-memory interaction store with disk persistence
-  utils.js               Shared spawn utilities, stream parsing, output sandboxing
+  proxy.js                 API forwarding, SSE passthrough, provider routing, per-session profiles
+  sse-passthrough.js       Zero-copy SSE transform stream
+  api.js                   REST API endpoints (POST /api/run, POST /api/run/answer)
+  claude-session.js        Spawns claude -p with profile flags and session resume
+  claude-sessions.js       Multi-tab session manager
+  dashboard-ws.js          WebSocket server and broadcast hub
+  capabilities.js          Profiles, models, providers, hooks, skills, agents CRUD
+  workflows.js             Workflow CRUD + runtime engine (generate, compile, execute)
+  workflow-handler.js      WebSocket handler for workflow operations
+  store.js                 In-memory interaction store with disk persistence
+  utils.js                 Central spawn function, process tracking, stream parsing
   providers/
-    base.js              Provider adapter interface
-    openai.js            OpenAI-compatible adapter (OpenAI, Gemini, DeepSeek, Moonshot, Ollama)
-    registry.js          Provider registry
+    base.js                Provider adapter interface
+    openai.js              OpenAI-compatible adapter (OpenAI, Gemini, DeepSeek, Moonshot, Ollama)
+    registry.js            Provider registry
   mcp/
-    index.js             MCP init, auto-start, tool probing, inspector logging
-    servers.js           Tool CRUD, server.js/tool file generation
-    registrar.js         Reads/writes .mcp.json and ~/.claude.json
+    index.js               MCP init, auto-start, tool probing, inspector logging
+    servers.js             Tool CRUD, server.js/tool file generation
+    registrar.js           Reads/writes .mcp.json and ~/.claude.json
 lib/
-  mcp-bridge.js          Stdio bridge Claude Code spawns via --mcp-config
+  mcp-bridge.js            Stdio bridge Claude Code spawns via --mcp-config
 public/
-  index.html             Dashboard SPA (Inspector, Chat, Capabilities, Workflows, Runs)
-  capabilities.js        Profile/model/tool management UI
-  inspector.js           Inspector timeline and detail panel
-  chat.js                Chat tab UI and session controls
-  workflows.js           Workflow editor and generator UI
-  style.css              Layout and structural styles
-  theme-bright.css       Bright theme (default)
-  theme-dark.css         Dark theme (Tokyo Night)
+  index.html               Dashboard SPA
+  home.js                  Home view documentation (5 tabs: overview, architecture, workflows, tools, API)
+  core.js                  WebSocket, view switching, markdown rendering, process counter
+  capabilities.js          Profile/model/tool/skill/agent/hook management UI
+  inspector.js             Inspector timeline and detail panel
+  chat.js                  Chat tab UI and session controls
+  workflows.js             Workflow editor and generator UI
+  style.css                Layout and structural styles
+  theme-bright.css         Bright theme (default)
+  theme-dark.css           Dark theme (Tokyo Night)
 capabilities/
-  models.json            Pre-configured LLM provider models
-  secrets.json           API keys (gitignored)
-  profiles/              Custom profile JSON files
-  workflows/             Workflow definitions, compiled modules, run history
-mcp-servers/integrated/  Auto-generated MCP tool server
-interactions/            Saved API call history (per-session directories)
-outputs/                 Sandboxed working directory for Claude sessions
+  models.json              Pre-configured LLM provider models
+  anthropic-pricing.json   Anthropic model pricing (auto-refreshable)
+  secrets.json             API keys (gitignored)
+  profiles/                Custom profile JSON files
+  workflows/               Workflow definitions, compiled modules, run history
+mcp-servers/integrated/    Auto-generated MCP tool server + built-in tools
+interactions/              Saved API call history (per-session directories)
+outputs/                   Sandboxed working directory for Claude sessions
+docs/
+  architecture-*.svg       Architecture diagrams (light + dark theme)
 ```
+
+---
 
 ## License
 
