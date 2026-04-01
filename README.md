@@ -240,7 +240,7 @@ This means the profile is **immutable for the process lifetime**. Switching prof
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/request-flow-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/request-flow-light.svg">
-  <img alt="Request flow diagram" src="docs/request-flow-light.svg" width="780">
+  <img alt="Request flow diagram" src="docs/request-flow-light.svg" width="880">
 </picture>
 
 ### AskUserQuestion interception
