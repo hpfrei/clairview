@@ -56,6 +56,7 @@ function listWorkflows(cwd) {
       workflows.push({
         name: entry.name,
         description: src.description || '',
+        inputMode: src.inputMode || 'none',
         status,
         stepCount: src.steps ? Object.keys(src.steps).length : 0,
       });
@@ -605,7 +606,10 @@ function generateWorkflow(description, feedback, { proxyPort, cwd, envContext })
       const parts = [];
       if (envContext.profiles?.length) {
         parts.push('Available profiles (use in step "profile" field):\n' +
-          envContext.profiles.map(p => `  - "${p.name}": ${p.description || '(no description)'}${p.model ? ` [model: ${p.model}]` : ''}`).join('\n'));
+          envContext.profiles.map(p => {
+            const caps = p.capabilities?.length ? p.capabilities.join(', ') : '(none)';
+            return `  - "${p.name}": ${p.description || '(no description)'}${p.model ? ` [model: ${p.model}]` : ''}\n    Tools: ${caps}`;
+          }).join('\n'));
       }
       if (envContext.tools?.length) {
         parts.push('Available MCP tools (Claude can call these during step execution):\n' +
@@ -647,7 +651,8 @@ Output ONLY valid JSON in this exact format (no markdown, no explanation):
 }
 
 Rules:
-- Each step's "do" field should be a clear instruction, as if you're telling a developer what to do
+- IMPORTANT: Each step spawns a full Claude Code agent session (claude -p). A single step can perform complex multi-file operations, multi-turn reasoning, read/write files, run shell commands, search the web, spawn sub-agents, and more. Do NOT over-decompose — combine related work into fewer, more capable steps rather than splitting into many trivial ones.
+- Each step's "do" field should be a clear, detailed instruction for the Claude Code agent that will execute it
 - Use "context" to reference outputs from previous steps that this step needs
 - Use "condition" for branching decisions
 - The first step in the object is the entry point
@@ -655,7 +660,12 @@ Rules:
 - When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool
 - If a step can leverage an existing MCP tool (listed above), mention the tool by name in the "do" instruction
 - If a step can delegate to another workflow, use the workflow_run MCP tool
-- Choose the most appropriate profile for each step based on what it needs to do
+- Match each step's profile to its requirements using the capabilities listed above:
+  - Steps that write or edit files MUST use a profile with Write/Edit tools
+  - Steps that run shell commands MUST use a profile with Bash
+  - Steps that search the web MUST use a profile with WebSearch/WebFetch
+  - Steps that only read/analyse code can use a read-only profile
+- Only use profiles from the "Available profiles" list above
 - Always include a final summary step`;
 
     const args = buildClaudeArgs(null);

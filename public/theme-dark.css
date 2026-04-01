@@ -28,4 +28,11 @@
   --scrollbar-track: var(--bg);
   --scrollbar-thumb: var(--border);
   --scrollbar-thumb-hover: var(--text-dim);
+
+  --paper-bg: #1e2030;
+  --paper-grid-color: rgba(100, 130, 200, 0.06);
+  --paper-border: #363d56;
+  --tab-inactive-bg: transparent;
+  --tab-inactive-text: #565f89;
+  --tab-active-shadow: 0 -1px 6px rgba(0, 0, 0, 0.15);
 }

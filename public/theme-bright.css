@@ -28,6 +28,13 @@
   --scrollbar-track: #eeeee8;
   --scrollbar-thumb: #c0c0b8;
   --scrollbar-thumb-hover: #999990;
+
+  --paper-bg: #ffffff;
+  --paper-grid-color: rgba(180, 200, 220, 0.22);
+  --paper-border: #d0d0c8;
+  --tab-inactive-bg: transparent;
+  --tab-inactive-text: #888880;
+  --tab-active-shadow: 0 -1px 4px rgba(0, 0, 0, 0.04);
 }
 
 /* Checker-paper grid background */

@@ -1543,6 +1543,18 @@ jq -r '.tool_input.command' |
           </label>
         </div>
         <div class="pm-field-row">
+          <label>Input:</label>
+          <div class="wf-input-mode-group">
+            <label class="wf-input-mode-opt">
+              <input type="radio" name="wfInputMode" value="none" id="wfInputModeNone" checked> None
+            </label>
+            <label class="wf-input-mode-opt">
+              <input type="radio" name="wfInputMode" value="prompt" id="wfInputModePrompt"> Prompt
+            </label>
+          </div>
+          <div class="wf-input-mode-help" id="wfInputModeHelp">Runs autonomously. Steps can still use AskUserQuestion, fetch from the web, read files, check git, etc.</div>
+        </div>
+        <div class="pm-field-row">
           <label>Profiles to use:</label>
           <div id="wfProfileList" class="wf-profile-checklist"></div>
         </div>
@@ -1565,6 +1577,7 @@ jq -r '.tool_input.command' |
               <pre class="wf-help-pre">{
   "name": "my-workflow",
   "description": "What this workflow does",
+  "inputMode": "none" or "prompt",
   "inputs": {
     "topic": "The topic to process"
   },
@@ -1573,6 +1586,7 @@ jq -r '.tool_input.command' |
     "step-id": { ... }
   }
 }</pre>
+              <p class="wf-help-note"><b>inputMode</b>: <code>none</code> (default) runs autonomously. <code>prompt</code> shows a text input when running &mdash; the value is available as <code>{{prompt}}</code> in step instructions.</p>
               <p class="wf-help-note">Steps execute in key order unless overridden by navigation fields.</p>
 
               <h4>Step fields</h4>
@@ -1701,10 +1715,6 @@ any of these formats in its response.</pre>
     <div class="chat-tab-strip" id="wfrunTabStrip">
       <button class="chat-tab active" data-tab-id="wfrun-1">Run 1</button>
       <button class="chat-tab-new" id="wfrunTabNew" title="New run tab">+</button>
-    </div>
-    <div class="wfrun-toolbar" id="wfrunToolbar">
-      <button class="chat-cwd-btn" id="wfrunCwdBtn" title="Working directory">&#128193;</button>
-      <span class="chat-cwd-label" id="wfrunCwdLabel"></span>
     </div>
     <div class="wfrun-container" id="wfrunContainer">
       <!-- Phase panels swapped here per tab -->

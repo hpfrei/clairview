@@ -44,6 +44,42 @@
   const wfLog = document.getElementById('wfLog');
   const wfModalCancel = document.getElementById('wfModalCancel');
   const wfModalClose = document.getElementById('wfModalClose');
+  const wfProfileList = document.getElementById('wfProfileList');
+  const wfInputModeNone = document.getElementById('wfInputModeNone');
+  const wfInputModePrompt = document.getElementById('wfInputModePrompt');
+  const wfInputModeHelp = document.getElementById('wfInputModeHelp');
+
+  const INPUT_MODE_HELP = {
+    none: 'Runs autonomously. Steps can still use AskUserQuestion, fetch from the web, read files, check git, etc.',
+    prompt: 'Shows a prompt input when running. The user\u2019s message is available as {{prompt}} in step instructions.',
+  };
+
+  function syncInputModeRadio(mode) {
+    if (mode === 'prompt') {
+      if (wfInputModePrompt) wfInputModePrompt.checked = true;
+    } else {
+      if (wfInputModeNone) wfInputModeNone.checked = true;
+    }
+    if (wfInputModeHelp) wfInputModeHelp.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
+  }
+
+  function onInputModeChange() {
+    const mode = wfInputModePrompt?.checked ? 'prompt' : 'none';
+    if (wfInputModeHelp) wfInputModeHelp.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
+    // Sync into JSON source
+    try {
+      const json = JSON.parse(wfTextarea?.value || '{}');
+      json.inputMode = mode;
+      const updated = JSON.stringify(json, null, 2);
+      if (wfTextarea) wfTextarea.value = updated;
+      wf.sourceContent = updated;
+      wf.jsonDirty = true;
+      updateSaveButtons();
+    } catch {}
+  }
+
+  wfInputModeNone?.addEventListener('change', onInputModeChange);
+  wfInputModePrompt?.addEventListener('change', onInputModeChange);
 
   // --- Error display (page-level) ---
   function showWfError(message) {
@@ -111,6 +147,17 @@
     if (wfModalTitle) wfModalTitle.textContent = name ? `Edit: ${name}` : 'New Workflow';
     if (wfName) { wfName.value = workflow?.name || name || ''; wfName.disabled = !!name; }
     if (wfDesc) wfDesc.value = workflow?.description || '';
+
+    // Sync inputMode radio
+    syncInputModeRadio(workflow?.inputMode || 'none');
+
+    // Populate profile checklist
+    if (wfProfileList) {
+      const profiles = state.profiles || [];
+      wfProfileList.innerHTML = profiles.map(p =>
+        `<label><input type="checkbox" value="${escHtml(p.name)}" checked> ${escHtml(p.label || p.name)}</label>`
+      ).join('');
+    }
 
     // Tab content
     wf.sourceContent = JSON.stringify(workflow || {}, null, 2);
@@ -336,7 +383,7 @@
     setGenerateBusy(true);
     clearWfError();
     setLog('Generating workflow\u2026', 'log-busy');
-    sendWs({ type: 'workflow:generate', description: desc });
+    sendWs({ type: 'workflow:generate', description: desc, selectedProfiles: getSelectedProfiles() });
   });
 
   // Redo
@@ -349,7 +396,7 @@
     setLog('Regenerating workflow\u2026', 'log-busy');
     // Pass current source as context + feedback
     if (wf.activeTab === 'source') wf.sourceContent = wfTextarea?.value || '';
-    sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback });
+    sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback, selectedProfiles: getSelectedProfiles() });
   });
 
   // Regenerate (for existing workflows — regenerates JSON from description)
@@ -360,7 +407,7 @@
     wf.generating = true;
     updateBusyState();
     setLog('Regenerating source JSON\u2026', 'log-busy');
-    sendWs({ type: 'workflow:generate', description: desc });
+    sendWs({ type: 'workflow:generate', description: desc, selectedProfiles: getSelectedProfiles() });
   });
 
   // New workflow
@@ -368,6 +415,7 @@
     openEditModal(null, {
       name: '',
       description: '',
+      inputMode: 'none',
       inputs: {},
       steps: {
         'step-1': { profile: 'full', do: 'Describe what to do', produces: 'description of output' },
@@ -396,6 +444,11 @@
   });
 
   // --- Helpers ---
+
+  function getSelectedProfiles() {
+    if (!wfProfileList) return [];
+    return [...wfProfileList.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+  }
 
   function isModalOpen() {
     return wfModal && !wfModal.classList.contains('hidden');

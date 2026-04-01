@@ -78,7 +78,7 @@ async function handleMessage(ws, msg, bc) {
 
       case 'workflow:generate':
         try {
-          const envContext = buildEnvContext(cwd);
+          const envContext = buildEnvContext(cwd, msg.selectedProfiles);
           const generated = await workflows.generateWorkflow(
             msg.description,
             msg.feedback || null,
@@ -149,13 +149,31 @@ async function handleMessage(ws, msg, bc) {
   }
 }
 
-function buildEnvContext(cwd) {
-  const profiles = caps.listProfiles(cwd).map(p => ({
-    name: p.name,
-    description: p.description || '',
-    model: p.model || null,
-    builtin: p.builtin || false,
-  }));
+function buildEnvContext(cwd, selectedProfiles) {
+  const allProfiles = caps.listProfiles(cwd);
+  const knownTools = caps.KNOWN_TOOLS;
+
+  // Filter to selected profiles if provided, otherwise use all
+  const filtered = selectedProfiles?.length
+    ? allProfiles.filter(p => selectedProfiles.includes(p.name))
+    : allProfiles;
+
+  const profiles = filtered.map(p => {
+    const full = caps.loadProfile(cwd, p.name);
+    if (!full) return { name: p.name, description: p.description || '', model: null, capabilities: [] };
+
+    // Compute effective tools: allowedTools if set, otherwise KNOWN_TOOLS minus disabledTools
+    const disabled = new Set(full.disabledTools || []);
+    const allowed = (full.allowedTools?.length ? full.allowedTools : knownTools).filter(t => !disabled.has(t));
+
+    return {
+      name: p.name,
+      description: p.description || '',
+      model: full.model || null,
+      permissionMode: full.permissionMode || 'default',
+      capabilities: allowed,
+    };
+  });
 
   const tools = mcpServers.listTools().filter(t => t.enabled).map(t => ({
     name: t.name,

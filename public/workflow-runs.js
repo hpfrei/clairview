@@ -41,8 +41,6 @@
   // --- DOM refs ---
   const tabStrip = document.getElementById('wfrunTabStrip');
   const tabNewBtn = document.getElementById('wfrunTabNew');
-  const cwdBtn = document.getElementById('wfrunCwdBtn');
-  const cwdLabel = document.getElementById('wfrunCwdLabel');
   const container = document.getElementById('wfrunContainer');
 
   // --- Tab strip ---
@@ -82,7 +80,6 @@
     if (!tabs.has(tabId)) return;
     activeTabId = tabId;
     const tab = tabs.get(tabId);
-    if (cwdLabel) cwdLabel.textContent = tab.cwd || defaultCwd();
     renderTabStrip();
     renderPhase();
   }
@@ -102,22 +99,6 @@
     renderTabStrip();
     renderPhase();
   }
-
-  // --- CWD toolbar ---
-  async function openWfrunDirPicker() {
-    const tab = tabs.get(activeTabId);
-    const currentCwd = tab?.cwd || defaultCwd();
-    const outputsDir = state.outputsDir || '';
-    const relative = currentCwd.startsWith(outputsDir)
-      ? currentCwd.slice(outputsDir.length).replace(/^\//, '') : '';
-    const picked = await window.dashboard.openDirPicker({ initialPath: relative });
-    if (picked !== null) {
-      if (tab) tab.cwd = picked;
-      if (cwdLabel) cwdLabel.textContent = picked;
-    }
-  }
-  cwdBtn?.addEventListener('click', openWfrunDirPicker);
-  cwdLabel?.addEventListener('click', openWfrunDirPicker);
 
   // --- Phase rendering ---
   function renderPhase() {
@@ -163,8 +144,15 @@
     const wf = tab.workflowData;
     if (!wf) return;
 
+    const isPromptMode = wf.inputMode === 'prompt';
     const inputs = wf.inputs || {};
     const keys = Object.keys(inputs);
+
+    const cwdDisplay = escHtml(tab.cwd || defaultCwd());
+    const cwdRow = `<div class="wfrun-input-cwd" id="wfrunInputCwd" title="Click to change working directory">
+      <span class="wfrun-input-cwd-icon">&#128193;</span>
+      <span class="wfrun-input-cwd-path">${cwdDisplay}</span>
+    </div>`;
 
     let html = `<div class="wfrun-input-panel">
       <div class="wfrun-input-header">
@@ -172,7 +160,19 @@
         <p class="wfrun-input-desc">${escHtml(wf.description || '')}</p>
       </div>`;
 
-    if (keys.length > 0) {
+    if (isPromptMode) {
+      // Prompt mode: chat-like textarea + inline Run button
+      const val = tab.inputValues.prompt || '';
+      html += `<div class="wfrun-prompt-row">
+        <textarea class="wfrun-prompt-input" id="wfrunPromptInput" rows="2"
+          placeholder="Type your prompt\u2026">${escHtml(val)}</textarea>
+        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
+      </div>`;
+      html += `<div class="wfrun-input-actions">
+        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
+        ${cwdRow}
+      </div>`;
+    } else if (keys.length > 0) {
       html += '<div class="wfrun-input-fields">';
       for (const key of keys) {
         const desc = inputs[key] || '';
@@ -184,15 +184,21 @@
         </div>`;
       }
       html += '</div>';
+      html += `<div class="wfrun-input-actions">
+        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
+        ${cwdRow}
+        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
+      </div>`;
     } else {
       html += '<p class="wfrun-no-inputs">This workflow has no inputs.</p>';
+      html += `<div class="wfrun-input-actions">
+        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
+        ${cwdRow}
+        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
+      </div>`;
     }
 
-    html += `<div class="wfrun-input-actions">
-      <button class="wfrun-back-btn" id="wfrunBack">Back</button>
-      <button class="wfrun-run-btn" id="wfrunRun">Run</button>
-    </div></div>`;
-
+    html += '</div>';
     container.innerHTML = html;
 
     // Back button
@@ -205,12 +211,32 @@
       renderTabStrip();
     });
 
+    // Inline directory picker
+    container.querySelector('#wfrunInputCwd')?.addEventListener('click', async () => {
+      const currentCwd = tab.cwd || defaultCwd();
+      const outputsDir = state.outputsDir || '';
+      const relative = currentCwd.startsWith(outputsDir)
+        ? currentCwd.slice(outputsDir.length).replace(/^\//, '') : '';
+      const picked = await window.dashboard.openDirPicker({ initialPath: relative });
+      if (picked !== null) {
+        tab.cwd = picked;
+        const pathEl = container.querySelector('.wfrun-input-cwd-path');
+        if (pathEl) pathEl.textContent = picked;
+      }
+    });
+
     // Run button
     container.querySelector('#wfrunRun')?.addEventListener('click', () => {
-      const collected = {};
-      container.querySelectorAll('.wfrun-field-input').forEach(inp => {
-        collected[inp.dataset.key] = inp.value || inp.placeholder || '';
-      });
+      let collected = {};
+      if (isPromptMode) {
+        const promptVal = container.querySelector('#wfrunPromptInput')?.value?.trim() || '';
+        if (!promptVal) return; // require prompt input
+        collected = { prompt: promptVal };
+      } else {
+        container.querySelectorAll('.wfrun-field-input').forEach(inp => {
+          collected[inp.dataset.key] = inp.value || inp.placeholder || '';
+        });
+      }
       tab.inputValues = collected;
       tab.phase = 'active';
       tab.steps = [];
@@ -231,6 +257,18 @@
       renderPhase();
       renderTabStrip();
     });
+
+    // Focus prompt input and handle Enter to run
+    if (isPromptMode) {
+      const promptInput = container.querySelector('#wfrunPromptInput');
+      promptInput?.focus();
+      promptInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          container.querySelector('#wfrunRun')?.click();
+        }
+      });
+    }
   }
 
   // --- Step detail modal ---
@@ -650,12 +688,10 @@
       for (const [, tab] of tabs) {
         if (!tab.cwd) tab.cwd = dir;
       }
-      if (cwdLabel && !cwdLabel.textContent) cwdLabel.textContent = dir;
     }
   }
 
   // --- Init ---
-  if (cwdLabel) cwdLabel.textContent = defaultCwd();
   renderTabStrip();
   renderPhase();
 

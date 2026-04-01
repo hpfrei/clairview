@@ -480,46 +480,87 @@ The auth token is printed to the console when the server starts, or can be set v
 </svg>
 \`\`\`
 
+---
+
 ## POST /api/run
 
 Start a chat or workflow. Returns a **Server-Sent Events** stream.
 
-**Request body:**
+### Chat mode
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| \`type\` | string | yes | \`"chat"\` or \`"workflow"\` |
-| \`prompt\` | string | for chat | The user message to send to Claude |
-| \`workflow\` | string | for workflow | Name of the workflow to run |
-| \`inputs\` | object | no | Input variables for the workflow (key-value pairs matching the workflow's \`inputs\` definition) |
-| \`cwd\` | string | no | Working directory override (defaults to server cwd) |
-| \`profile\` | string | no | Profile name to use (e.g. \`"full"\`, \`"safe"\`, \`"readonly"\`, or a custom profile). Does not change the globally active profile. |
-| \`sessionId\` | string | no | Chat only -- resume an existing session for multi-turn conversation |
+| \`type\` | string | yes | \`"chat"\` |
+| \`prompt\` | string | yes | The user message to send to Claude |
+| \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`). Defaults to \`outputs/\`. |
+| \`profile\` | string | no | Profile name (\`"full"\`, \`"safe"\`, \`"readonly"\`, or custom). Does not change the global active profile. |
+| \`sessionId\` | string | no | Resume an existing session for multi-turn conversation. Returned in the \`done\` event. |
 
-**SSE events:**
+### Workflow mode
 
-| Event | Payload | Description |
-|-------|---------|-------------|
-| \`text\` | \`{ text }\` | Streamed text delta from Claude |
-| \`ask\` | \`{ toolUseId, questions }\` | AskUserQuestion -- the session needs user input to continue |
-| \`step\` | \`{ stepId, status, text? }\` | Workflow step progress update |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| \`type\` | string | yes | \`"workflow"\` |
+| \`workflow\` | string | yes | Name of the workflow to run (e.g. \`"code-review"\`) |
+| \`inputs\` | object | no | Key-value input variables. For prompt-mode workflows, pass \`{ "prompt": "your message" }\`. |
+| \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`) |
+| \`profile\` | string | no | Profile override for all steps |
+
+### SSE events
+
+All responses stream as Server-Sent Events (\`Content-Type: text/event-stream\`).
+
+| Event | Payload | When |
+|-------|---------|------|
+| \`text\` | \`{ text }\` | Streamed text delta from Claude (both chat and workflow steps) |
+| \`ask\` | \`{ toolUseId, questions }\` | AskUserQuestion -- the session needs user input to continue. Answer via \`POST /api/run/answer\`. |
+| \`step\` | \`{ stepId, status, text? }\` | Workflow only: step started (\`status: "running"\`), progress (\`text\` included), or completed (\`status: "done"\` / \`"failed"\`) |
 | \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId? }\` (chat) or \`{ result, runId }\` (workflow) | Completion with final result |
+| \`done\` | \`{ result, sessionId? }\` (chat) or \`{ result, runId }\` (workflow) | Final result. Chat includes \`sessionId\` for multi-turn. Workflow includes \`runId\`. |
+
+---
 
 ## POST /api/run/answer
 
-Answer a pending AskUserQuestion that arrived via the \`ask\` SSE event.
-
-**Request body:**
+Answer a pending \`AskUserQuestion\` that arrived via the \`ask\` SSE event. The run resumes after the answer.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | \`toolUseId\` | string | yes | The \`toolUseId\` from the \`ask\` event |
-| \`answer\` | any | yes | The answer value |
+| \`answer\` | any | yes | The answer value (string or structured response) |
 
-**Response:** \`{ ok: true }\` on success, \`404\` if no pending question matches.
+**Response:** \`{ ok: true }\` on success. \`404\` if no pending question matches the \`toolUseId\`.
 
-## Example: chat with curl
+---
+
+## GET /api/dirs
+
+List subdirectories within the \`outputs/\` sandbox.
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| \`path\` | string (query) | no | Relative path within \`outputs/\`. Defaults to root. |
+
+**Response:** \`{ current, absolute, dirs }\` -- \`dirs\` is a sorted array of subdirectory names (hidden dirs excluded).
+
+---
+
+## POST /api/dirs
+
+Create a new directory within \`outputs/\`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| \`path\` | string | no | Parent directory (relative to \`outputs/\`) |
+| \`name\` | string | yes | Folder name. Alphanumeric, spaces, dots, hyphens, underscores. Max 100 chars. |
+
+**Response:** \`{ ok: true, created: "relative/path" }\` on success.
+
+---
+
+## Examples
+
+### Chat -- single turn
 
 \`\`\`bash
 curl -N -X POST http://localhost:3457/api/run \\
@@ -528,25 +569,74 @@ curl -N -X POST http://localhost:3457/api/run \\
   -d '{"type":"chat","prompt":"List all TODO comments in the codebase","profile":"readonly"}'
 \`\`\`
 
-This streams SSE events. The \`text\` events contain Claude's response as it generates. The final \`done\` event includes the complete result and a \`sessionId\` you can use to continue the conversation:
+### Chat -- multi-turn (resume session)
+
+\`\`\`bash
+# First message -- capture the sessionId from the done event
+curl -N -X POST http://localhost:3457/api/run \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"chat","prompt":"Explain the auth middleware"}'
+
+# Continue the conversation
+curl -N -X POST http://localhost:3457/api/run \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"chat","prompt":"Now add rate limiting to it","sessionId":"SESSION_ID"}'
+\`\`\`
+
+### Workflow -- with inputs
 
 \`\`\`bash
 curl -N -X POST http://localhost:3457/api/run \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"Now fix the first one","profile":"full","sessionId":"SESSION_ID"}'
+  -d '{"type":"workflow","workflow":"explain-topic","inputs":{"topic":"WebSockets"}}'
 \`\`\`
 
-## Example: run a workflow
+### Workflow -- prompt mode
+
+For workflows with \`inputMode: "prompt"\`, pass the user message as \`inputs.prompt\`:
 
 \`\`\`bash
 curl -N -X POST http://localhost:3457/api/run \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"type":"workflow","workflow":"code-review","inputs":{"branch":"feature/auth"},"cwd":"/path/to/repo"}'
+  -d '{"type":"workflow","workflow":"research-assistant","inputs":{"prompt":"Compare React and Vue for our use case"}}'
 \`\`\`
 
-The \`step\` events track each workflow step's progress. The \`done\` event includes the workflow result and a \`runId\`.
+### Answering an AskUserQuestion
+
+When you receive an \`ask\` SSE event, answer it in a separate request:
+
+\`\`\`bash
+# Received: event: ask
+# data: {"toolUseId":"toolu_abc123","questions":[{"question":"Which database?"}]}
+
+curl -X POST http://localhost:3457/api/run/answer \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"toolUseId":"toolu_abc123","answer":"PostgreSQL"}'
+\`\`\`
+
+### Directory listing
+
+\`\`\`bash
+# List root of outputs/
+curl http://localhost:3457/api/dirs -H "Authorization: Bearer YOUR_TOKEN"
+
+# List a subdirectory
+curl "http://localhost:3457/api/dirs?path=my-project" -H "Authorization: Bearer YOUR_TOKEN"
+\`\`\`
+
+### Create a directory
+
+\`\`\`bash
+curl -X POST http://localhost:3457/api/dirs \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"path":"","name":"my-new-project"}'
+\`\`\`
 `;
 
   // --- Render sections ---

@@ -269,17 +269,28 @@ The dashboard server (`:3457`) exposes a REST API for programmatic access. All e
 Start a chat or workflow. Returns a **Server-Sent Events** stream.
 
 <details>
-<summary><b>Request body</b></summary>
+<summary><b>Chat mode</b></summary>
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `type` | `string` | **yes** | `"chat"` or `"workflow"` |
-| `prompt` | `string` | for chat | The user message to send to Claude |
-| `workflow` | `string` | for workflow | Name of the workflow to run |
-| `inputs` | `object` | no | Input variables for the workflow |
-| `cwd` | `string` | no | Working directory override |
-| `profile` | `string` | no | Profile name (e.g. `"full"`, `"safe"`, or a custom profile). Does not change the global active profile. |
-| `sessionId` | `string` | no | Chat only -- resume an existing session for multi-turn |
+| `type` | `string` | **yes** | `"chat"` |
+| `prompt` | `string` | **yes** | The user message to send to Claude |
+| `cwd` | `string` | no | Working directory (sandboxed into `outputs/`) |
+| `profile` | `string` | no | Profile name (e.g. `"full"`, `"safe"`, or custom). Does not change the global active profile. |
+| `sessionId` | `string` | no | Resume an existing session for multi-turn. Returned in the `done` event. |
+
+</details>
+
+<details>
+<summary><b>Workflow mode</b></summary>
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | **yes** | `"workflow"` |
+| `workflow` | `string` | **yes** | Name of the workflow to run |
+| `inputs` | `object` | no | Key-value input variables. For prompt-mode workflows, pass `{ "prompt": "your message" }`. |
+| `cwd` | `string` | no | Working directory (sandboxed into `outputs/`) |
+| `profile` | `string` | no | Profile override for all steps |
 
 </details>
 
@@ -289,37 +300,58 @@ Start a chat or workflow. Returns a **Server-Sent Events** stream.
 | Event | Payload | Description |
 |---|---|---|
 | `text` | `{ text }` | Streamed text delta from Claude |
-| `ask` | `{ toolUseId, questions }` | AskUserQuestion -- session needs user input |
-| `step` | `{ stepId, status, text? }` | Workflow step progress |
+| `ask` | `{ toolUseId, questions }` | AskUserQuestion -- answer via `POST /api/run/answer` |
+| `step` | `{ stepId, status, text? }` | Workflow step progress (started, progress with text, completed) |
 | `error` | `{ error }` | Error message |
-| `done` | `{ result, sessionId? }` or `{ result, runId }` | Completion with final result |
+| `done` | `{ result, sessionId? }` (chat) or `{ result, runId }` (workflow) | Completion with final result |
 
 </details>
 
 ### $\texttt{POST /api/run/answer}$
 
-Answer a pending `AskUserQuestion`.
+Answer a pending `AskUserQuestion` from the `ask` SSE event. The run resumes after the answer.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `toolUseId` | `string` | **yes** | From the `ask` SSE event |
+| `toolUseId` | `string` | **yes** | The `toolUseId` from the `ask` event |
 | `answer` | `any` | **yes** | The answer value |
 
 Returns `{ ok: true }` or `404` if no pending question matches.
 
+### $\texttt{GET /api/dirs}$
+
+List subdirectories within `outputs/`.
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `path` | query string | no | Relative path within `outputs/`. Defaults to root. |
+
+Returns `{ current, absolute, dirs }` -- `dirs` is a sorted array of subdirectory names.
+
+### $\texttt{POST /api/dirs}$
+
+Create a new directory within `outputs/`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | `string` | no | Parent directory (relative to `outputs/`) |
+| `name` | `string` | **yes** | Folder name (alphanumeric, spaces, dots, hyphens, underscores; max 100 chars) |
+
+Returns `{ ok: true, created: "relative/path" }`.
+
 ### Examples
 
 <details>
-<summary><b>Chat with curl</b></summary>
+<summary><b>Chat -- single and multi-turn</b></summary>
 
 ```bash
-# Start a chat (streams SSE events)
+# Single turn
 curl -N -X POST http://localhost:3457/api/run \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"type":"chat","prompt":"List all TODO comments in the codebase","profile":"readonly"}'
 
-# Continue the conversation using the sessionId from the done event
+# Multi-turn: use sessionId from the done event
 curl -N -X POST http://localhost:3457/api/run \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
@@ -329,16 +361,58 @@ curl -N -X POST http://localhost:3457/api/run \
 </details>
 
 <details>
-<summary><b>Run a workflow with curl</b></summary>
+<summary><b>Workflow -- with inputs</b></summary>
 
 ```bash
 curl -N -X POST http://localhost:3457/api/run \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"type":"workflow","workflow":"code-review","inputs":{"branch":"feature/auth"},"cwd":"/path/to/repo"}'
+  -d '{"type":"workflow","workflow":"explain-topic","inputs":{"topic":"WebSockets"}}'
 ```
 
-The `step` events track each step's progress. The `done` event includes the workflow result and `runId`.
+</details>
+
+<details>
+<summary><b>Workflow -- prompt mode</b></summary>
+
+For workflows with `inputMode: "prompt"`, pass the user message as `inputs.prompt`:
+
+```bash
+curl -N -X POST http://localhost:3457/api/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"workflow","workflow":"research-assistant","inputs":{"prompt":"Compare React and Vue"}}'
+```
+
+</details>
+
+<details>
+<summary><b>Answer an AskUserQuestion</b></summary>
+
+```bash
+# After receiving: event: ask  data: {"toolUseId":"toolu_abc123","questions":[...]}
+curl -X POST http://localhost:3457/api/run/answer \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"toolUseId":"toolu_abc123","answer":"PostgreSQL"}'
+```
+
+</details>
+
+<details>
+<summary><b>Directory management</b></summary>
+
+```bash
+# List directories
+curl "http://localhost:3457/api/dirs?path=my-project" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Create directory
+curl -X POST http://localhost:3457/api/dirs \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"path":"","name":"my-new-project"}'
+```
 
 </details>
 
