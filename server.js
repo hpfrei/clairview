@@ -52,6 +52,10 @@ dashboardApp.use(express.json());
 dashboardApp.use(express.urlencoded({ extended: false }));
 
 // Auth: cookie parser helper
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function isLoopback(req) { return LOOPBACK.has(req.socket?.remoteAddress); }
+function isLoopbackSocket(socket) { return LOOPBACK.has(socket.remoteAddress); }
+
 function getTokenFromCookies(cookieHeader) {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(/(?:^|;\s*)token=([^;]+)/);
@@ -100,6 +104,8 @@ dashboardApp.use('/landing_page', express.static(path.join(__dirname, 'public', 
 
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
+  // Allow internal requests from MCP tools (localhost + internal header)
+  if (req.headers['x-clairview-internal'] === 'true' && isLoopback(req)) return next();
   const token = getTokenFromCookies(req.headers.cookie);
   if (token === AUTH_TOKEN) return next();
   // Also accept Authorization: Bearer <token> for API clients
@@ -126,8 +132,10 @@ const wss = new WebSocketServer({ noServer: true });
 broadcaster = new DashboardBroadcaster(wss, store, sessionManager);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
+  // Allow internal requests from MCP tools (localhost + internal header)
+  const internal = req.headers['x-clairview-internal'] === 'true' && isLoopbackSocket(socket);
   const token = getTokenFromCookies(req.headers.cookie);
-  if (token !== AUTH_TOKEN) {
+  if (!internal && token !== AUTH_TOKEN) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;

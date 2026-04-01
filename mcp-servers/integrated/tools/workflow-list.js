@@ -13,18 +13,11 @@ export default function register(server) {
   const http = await import('http');
   const { WebSocket } = await import('ws');
   const dashPort = process.env.CLAIRVIEW_DASHBOARD_PORT || '3457';
-  const token = process.env.CLAIRVIEW_AUTH_TOKEN || '';
+  const internalHeaders = { 'X-Clairview-Internal': 'true' };
 
   return new Promise((resolve) => {
-    const req = http.request({
-      hostname: '127.0.0.1', port: dashPort, path: '/login',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': 'token=' + token }
-    }, () => {});
-    req.end();
-
     // Use WebSocket to query
-    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });
+    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: internalHeaders });
     const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Timeout waiting for workflow list' }] }); }, 5000);
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());

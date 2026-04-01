@@ -547,6 +547,11 @@ section#detail {
   margin-top: 0;
 }
 
+.tokens-panel {
+  padding: 8px 16px;
+  border-bottom: 4px solid var(--border);
+}
+
 .request-panel {
   border-bottom: 4px solid var(--border);
   background: var(--request-panel-bg);
@@ -633,6 +638,7 @@ section#detail {
 }
 
 .section-title {
+  position: relative;
   font-size: 12px;
   font-weight: 700;
   color: var(--accent);
@@ -668,6 +674,7 @@ details {
   overflow: hidden;
 }
 details > summary {
+  position: relative;
   padding: 8px 12px;
   cursor: pointer;
   background: var(--bg-surface);
@@ -677,6 +684,28 @@ details > summary {
 }
 details > summary:hover { background: var(--bg-hover); }
 details[open] > summary { border-bottom: 1px solid var(--border); }
+
+.char-gauge {
+  position: absolute;
+  left: 180px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.char-gauge svg { vertical-align: middle; }
+.char-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.char-gauge-suffix {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .json-block {
   background: var(--bg);
@@ -777,6 +806,11 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
 .usage-dot.cache-read { background: var(--cyan); }
 .usage-dot.cache-create { background: var(--yellow); }
 .usage-dot.reasoning { background: var(--magenta, #c084fc); }
+.usage-cost {
+  font-weight: 700;
+  color: var(--accent);
+  margin-left: 4px;
+}
 
 footer {
   display: flex;
@@ -1872,6 +1906,18 @@ footer {
   color: var(--cyan);
 }
 
+.cap-action-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.cap-action-btn:hover { background: var(--bg-hover); }
+.cap-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .cap-new-btn {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -2717,6 +2763,15 @@ footer {
 .cap-model-specs {
   font-size: 10px;
   color: var(--text-dim);
+  margin-left: 4px;
+}
+
+.cap-model-pricing {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  color: var(--green);
   margin-left: 4px;
 }
 

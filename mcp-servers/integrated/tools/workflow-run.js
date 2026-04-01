@@ -15,7 +15,6 @@ export default function register(server) {
   const { name, inputs, cwd } = input;
   const http = await import('http');
   const dashPort = process.env.CLAIRVIEW_DASHBOARD_PORT || '3457';
-  const token = process.env.CLAIRVIEW_AUTH_TOKEN || '';
 
   const body = JSON.stringify({ type: 'workflow', workflow: name, inputs: inputs || {}, cwd: cwd || undefined });
 
@@ -24,7 +23,7 @@ export default function register(server) {
     let text = '', steps = [], questions = [];
 
     const req = http.request({ hostname: '127.0.0.1', port: dashPort, path: '/api/run', method: 'POST', headers: {
-      'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'Content-Length': Buffer.byteLength(body),
+      'Content-Type': 'application/json', 'X-Clairview-Internal': 'true', 'Content-Length': Buffer.byteLength(body),
     }}, (res) => {
       let buf = '';
       res.on('data', (chunk) => {

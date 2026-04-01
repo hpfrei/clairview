@@ -976,7 +976,9 @@
         </div>
         <div class="cap-section-header">
           <span>Providers &amp; Models</span>
+          <button class="cap-action-btn" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
         </div>
+        <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
         <div id="capModelList"></div>
       </div><!-- /ref-models -->
 
@@ -1428,6 +1430,14 @@ jq -r '.tool_input.command' |
                 <div class="pm-field-row">
                   <label>Context window: <input type="number" id="mmContextWindow" placeholder="1000000" min="0"></label>
                   <label>Max output tokens: <input type="number" id="mmMaxOutputTokens" placeholder="128000" min="0"></label>
+                </div>
+                <div class="pm-field-row">
+                  <label>Input $/MTok: <input type="number" id="mmInputCost" step="0.001" min="0" placeholder="0"></label>
+                  <label>Output $/MTok: <input type="number" id="mmOutputCost" step="0.001" min="0" placeholder="0"></label>
+                </div>
+                <div class="pm-field-row">
+                  <label>Cache read $/MTok: <input type="number" id="mmCacheReadCost" step="0.001" min="0" placeholder="0"></label>
+                  <label>Cache create $/MTok: <input type="number" id="mmCacheCreateCost" step="0.001" min="0" placeholder="0"></label>
                 </div>
                 <div class="pm-field-row mm-custom-fields hidden" id="mmCustomFields">
                   <label class="pm-wide">API Base URL: <input type="text" id="mmApiBaseUrl" placeholder="https://api.openai.com/v1"></label>

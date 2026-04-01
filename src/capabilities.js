@@ -753,6 +753,10 @@ function validateModel(m) {
     contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
     maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : null,
     useMaxCompletionTokens: !!m.useMaxCompletionTokens,
+    inputCostPerMTok: typeof m.inputCostPerMTok === 'number' ? m.inputCostPerMTok : null,
+    outputCostPerMTok: typeof m.outputCostPerMTok === 'number' ? m.outputCostPerMTok : null,
+    cacheReadCostPerMTok: typeof m.cacheReadCostPerMTok === 'number' ? m.cacheReadCostPerMTok : null,
+    cacheCreateCostPerMTok: typeof m.cacheCreateCostPerMTok === 'number' ? m.cacheCreateCostPerMTok : null,
   };
   // Custom provider models can have their own apiBaseUrl/apiKey
   if (m.providerKey === 'custom') {
@@ -844,6 +848,44 @@ function extractFrontmatterField(content, field) {
   return null;
 }
 
+// --- Pricing lookup ---
+
+function getModelPricing(baseDir, modelName) {
+  if (!modelName) return null;
+  // 1. Check models.json by name, label, or modelId
+  const data = readModelsFile(baseDir);
+  const model = data.models.find(m =>
+    m.name === modelName || m.label === modelName || m.modelId === modelName
+  );
+  if (model && model.inputCostPerMTok != null) {
+    return {
+      inputCostPerMTok: model.inputCostPerMTok,
+      outputCostPerMTok: model.outputCostPerMTok,
+      cacheReadCostPerMTok: model.cacheReadCostPerMTok,
+      cacheCreateCostPerMTok: model.cacheCreateCostPerMTok,
+    };
+  }
+  // 2. Fall back to anthropic-pricing.json with prefix matching
+  const pricingPath = path.join(baseDir, 'capabilities', 'anthropic-pricing.json');
+  try {
+    const pricing = JSON.parse(fs.readFileSync(pricingPath, 'utf-8'));
+    // Sort keys by length descending for longest-prefix match
+    const prefixes = Object.keys(pricing).sort((a, b) => b.length - a.length);
+    for (const prefix of prefixes) {
+      if (modelName.startsWith(prefix)) return pricing[prefix];
+    }
+  } catch {}
+  return null;
+}
+
+function updateAnthropicPricing(baseDir, updates) {
+  const pricingPath = path.join(baseDir, 'capabilities', 'anthropic-pricing.json');
+  let pricing = {};
+  try { pricing = JSON.parse(fs.readFileSync(pricingPath, 'utf-8')); } catch {}
+  Object.assign(pricing, updates);
+  fs.writeFileSync(pricingPath, JSON.stringify(pricing, null, 2) + '\n');
+}
+
 module.exports = {
   KNOWN_TOOLS,
   WEB_SEARCH_PROVIDERS,
@@ -886,4 +928,6 @@ module.exports = {
   saveProvider,
   deleteProvider,
   getDefaultSystemPrompt,
+  getModelPricing,
+  updateAnthropicPricing,
 };

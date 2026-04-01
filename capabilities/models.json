@@ -29,7 +29,11 @@
       "reasoning": false,
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "useMaxCompletionTokens": true
+      "useMaxCompletionTokens": true,
+      "inputCostPerMTok": 2.5,
+      "outputCostPerMTok": 15,
+      "cacheReadCostPerMTok": 0.25,
+      "cacheCreateCostPerMTok": 2.5
     },
     {
       "name": "gpt-5.4-pro",
@@ -42,7 +46,11 @@
       "reasoning": false,
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "useMaxCompletionTokens": true
+      "useMaxCompletionTokens": true,
+      "inputCostPerMTok": 30,
+      "outputCostPerMTok": 180,
+      "cacheReadCostPerMTok": 3,
+      "cacheCreateCostPerMTok": 30
     },
     {
       "name": "gpt-5.4-mini",
@@ -55,7 +63,11 @@
       "reasoning": false,
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
-      "useMaxCompletionTokens": true
+      "useMaxCompletionTokens": true,
+      "inputCostPerMTok": 0.75,
+      "outputCostPerMTok": 4.5,
+      "cacheReadCostPerMTok": 0.075,
+      "cacheCreateCostPerMTok": 0.75
     },
     {
       "name": "gpt-5.4-nano",
@@ -68,7 +80,11 @@
       "reasoning": false,
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
-      "useMaxCompletionTokens": true
+      "useMaxCompletionTokens": true,
+      "inputCostPerMTok": 0.2,
+      "outputCostPerMTok": 1.25,
+      "cacheReadCostPerMTok": 0.02,
+      "cacheCreateCostPerMTok": 0.2
     },
     {
       "name": "gemini-3.1-pro",
@@ -80,7 +96,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 1048576,
-      "maxOutputTokens": 65536
+      "maxOutputTokens": 65536,
+      "inputCostPerMTok": 2,
+      "outputCostPerMTok": 12,
+      "cacheReadCostPerMTok": 0.5,
+      "cacheCreateCostPerMTok": 2
     },
     {
       "name": "gemini-3-flash",
@@ -92,7 +112,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 1048576,
-      "maxOutputTokens": 65536
+      "maxOutputTokens": 65536,
+      "inputCostPerMTok": 0.5,
+      "outputCostPerMTok": 3,
+      "cacheReadCostPerMTok": 0.125,
+      "cacheCreateCostPerMTok": 0.5
     },
     {
       "name": "gemini-2.5-flash",
@@ -104,7 +128,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 1048576,
-      "maxOutputTokens": 65536
+      "maxOutputTokens": 65536,
+      "inputCostPerMTok": 0.3,
+      "outputCostPerMTok": 2.5,
+      "cacheReadCostPerMTok": 0.075,
+      "cacheCreateCostPerMTok": 0.3
     },
     {
       "name": "deepseek-v3",
@@ -116,7 +144,11 @@
       "systemPromptMode": "replace",
       "reasoning": false,
       "contextWindow": 128000,
-      "maxOutputTokens": 8192
+      "maxOutputTokens": 8192,
+      "inputCostPerMTok": 0.28,
+      "outputCostPerMTok": 0.42,
+      "cacheReadCostPerMTok": 0.028,
+      "cacheCreateCostPerMTok": 0.28
     },
     {
       "name": "deepseek-r1",
@@ -128,7 +160,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 128000,
-      "maxOutputTokens": 64000
+      "maxOutputTokens": 64000,
+      "inputCostPerMTok": 0.28,
+      "outputCostPerMTok": 0.42,
+      "cacheReadCostPerMTok": 0.028,
+      "cacheCreateCostPerMTok": 0.28
     },
     {
       "name": "kimi-k2.5",
@@ -140,7 +176,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 262144,
-      "maxOutputTokens": 65535
+      "maxOutputTokens": 65535,
+      "inputCostPerMTok": 0.6,
+      "outputCostPerMTok": 2.5,
+      "cacheReadCostPerMTok": 0.1,
+      "cacheCreateCostPerMTok": 0.6
     },
     {
       "name": "kimi-k2-thinking",
@@ -152,7 +192,11 @@
       "systemPromptMode": "replace",
       "reasoning": true,
       "contextWindow": 262144,
-      "maxOutputTokens": 65535
+      "maxOutputTokens": 65535,
+      "inputCostPerMTok": 0.6,
+      "outputCostPerMTok": 2.5,
+      "cacheReadCostPerMTok": 0.1,
+      "cacheCreateCostPerMTok": 0.6
     }
   ]
 }

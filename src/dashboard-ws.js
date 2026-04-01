@@ -250,6 +250,10 @@ class DashboardBroadcaster {
             } else {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete model: ${msg.name}` }));
             }
+          } else if (msg.type === 'anthropic:pricing:save') {
+            if (msg.pricing && typeof msg.pricing === 'object') {
+              caps.updateAnthropicPricing(PROJECT_ROOT, msg.pricing);
+            }
           // --- Providers ---
           } else if (msg.type === 'provider:list') {
             const cwd = this.sessionManager?.cwd || process.cwd();

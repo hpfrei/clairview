@@ -13,10 +13,9 @@ export default function register(server) {
   const { run_id } = input;
   const { WebSocket } = await import('ws');
   const dashPort = process.env.CLAIRVIEW_DASHBOARD_PORT || '3457';
-  const token = process.env.CLAIRVIEW_AUTH_TOKEN || '';
-  
+
   return new Promise((resolve) => {
-    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { Cookie: 'token=' + token } });
+    const ws = new WebSocket('ws://127.0.0.1:' + dashPort, { headers: { 'X-Clairview-Internal': 'true' } });
     const timeout = setTimeout(() => { ws.close(); resolve({ content: [{ type: 'text', text: 'Cancel sent' }] }); }, 3000);
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'workflow:run:cancel', runId: run_id }));

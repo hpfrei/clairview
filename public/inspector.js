@@ -260,7 +260,7 @@
     if (eventType === 'message_start') {
       const statusVal = document.getElementById('resp-status');
       if (statusVal) { statusVal.textContent = '200'; statusVal.className = 'info-value status-ok'; }
-      if (data?.message?.usage) updateUsageDisplay(data.message.usage);
+      if (data?.message?.usage) updateUsageDisplay(data.message.usage, interaction.pricing);
       _streamBlockMap = new Map();
       _lastStreamTextBodyEl = null;
       _pendingMarkdownBodyEl = null;
@@ -372,7 +372,7 @@
     if (eventType === 'message_delta') {
       if (data?.usage) {
         interaction.usage = { ...interaction.usage, ...data.usage };
-        updateUsageDisplay(interaction.usage);
+        updateUsageDisplay(interaction.usage, interaction.pricing);
       }
       if (interaction.timing) {
         interaction.timing.duration = Date.now() - interaction.timing.startedAt;
@@ -412,7 +412,7 @@
       const durationEl = document.getElementById('resp-duration');
       if (ttfbEl && updated.timing?.ttfb) ttfbEl.textContent = formatDuration(updated.timing.ttfb);
       if (durationEl && updated.timing?.duration) durationEl.textContent = formatDuration(updated.timing.duration);
-      if (updated.usage) updateUsageDisplay(updated.usage);
+      if (updated.usage) updateUsageDisplay(updated.usage, updated.pricing);
     }
   }
 
@@ -843,7 +843,7 @@
       const systemText = typeof req.system === 'string' ? req.system : JSON.stringify(req.system, null, 2);
       const charLen = typeof req.system === 'string' ? req.system.length : JSON.stringify(req.system).length;
       html += `<details>
-        <summary>System Prompt (${charLen} chars)</summary>
+        <summary>System Prompt ${charGauge(charLen)}</summary>
         <div class="json-block">${escHtml(systemText)}</div>
       </details>`;
     }
@@ -856,16 +856,18 @@
     }
 
     if (req.messages?.length > 0) {
+      const msgChars = JSON.stringify(req.messages).length;
       html += `<details>
-        <summary>Messages (${req.messages.length})</summary>
+        <summary>Messages ${req.messages.length} ${charGauge(msgChars)}</summary>
         <div class="json-block">${renderMessages(req.messages)}</div>
       </details>`;
     }
 
     if (req.tools?.length > 0) {
+      const toolChars = JSON.stringify(req.tools).length;
       const toolNames = req.tools.map(t => t.name || 'unnamed').join(', ');
       html += `<details>
-        <summary>Tools (${req.tools.length}): ${escHtml(truncate(toolNames, 100))}</summary>
+        <summary>Tools ${req.tools.length} ${charGauge(toolChars, escHtml(truncate(toolNames, 100)))}</summary>
         ${jsonBlock(req.tools)}</pre>
       </details>`;
     }
@@ -886,8 +888,13 @@
 
     html += `</div>`;
 
+    html += `<div class="detail-panel tokens-panel">`;
+    html += `<div class="usage-bar" id="usage-bar">${interaction.usage ? renderUsage(interaction.usage, interaction.pricing) : '<span class="info-label">--</span>'}</div>`;
+    html += `</div>`;
+
     html += `<div class="detail-panel response-panel">`;
-    html += `<div class="section-title">Response</div>`;
+    const respChars = resp.body ? JSON.stringify(resp.body).length : (resp.sseEvents ? resp.sseEvents.reduce((n, e) => n + JSON.stringify(e.data || '').length, 0) : 0);
+    html += `<div class="section-title">Response ${respChars ? charGauge(respChars) : ''}</div>`;
 
     const statusOk = resp.status >= 200 && resp.status < 300;
     html += `<div class="info-grid">
@@ -895,8 +902,6 @@
       <span class="info-label">TTFB</span><span class="info-value" id="resp-ttfb">${timing.ttfb ? formatDuration(timing.ttfb) : '--'}</span>
       <span class="info-label">Duration</span><span class="info-value" id="resp-duration">${timing.duration ? formatDuration(timing.duration) : '--'}</span>
     </div>`;
-
-    html += `<div class="usage-bar" id="usage-bar">${interaction.usage ? renderUsage(interaction.usage) : '<span class="info-label">Tokens: --</span>'}</div>`;
 
     html += `<div id="response-blocks">`;
 
@@ -1128,37 +1133,86 @@
     }).join('');
   }
 
-  function renderUsage(usage) {
+  function charGauge(chars, suffix) {
+    // chars in thousands; gauge 0-200k, green->yellow->red->darkred
+    const k = chars / 1000;
+    const pct = Math.min(k / 200, 1);
+    const w = 40, h = 10, fill = pct * w;
+    // green(120) -> yellow(60) -> red(0) -> darkred
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    const trail = suffix ? `<span class="char-gauge-suffix">${suffix}</span>` : '';
+    return `<span class="char-gauge"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" rx="2" fill="var(--bg)" stroke="var(--border)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span class="char-count">${chars.toLocaleString()}</span>${trail}</span>`;
+  }
+
+  function computeCost(usage, pricing) {
+    if (!pricing || !usage) return null;
+    let cost = 0;
+    cost += (usage.input_tokens || 0) * (pricing.inputCostPerMTok || 0) / 1e6;
+    cost += (usage.output_tokens || 0) * (pricing.outputCostPerMTok || 0) / 1e6;
+    cost += (usage.cache_read_input_tokens || 0) * (pricing.cacheReadCostPerMTok || pricing.inputCostPerMTok || 0) / 1e6;
+    cost += (usage.cache_creation_input_tokens || 0) * (pricing.cacheCreateCostPerMTok || pricing.inputCostPerMTok || 0) / 1e6;
+    return cost;
+  }
+
+  function formatCost(cost) {
+    if (cost == null) return '';
+    if (cost < 0.001) return '$' + cost.toFixed(6);
+    if (cost < 0.01) return '$' + cost.toFixed(4);
+    if (cost < 1) return '$' + cost.toFixed(3);
+    return '$' + cost.toFixed(2);
+  }
+
+  function renderUsage(usage, pricing) {
     let html = '';
     if (usage.input_tokens !== undefined)
       html += `<div class="usage-item"><span class="usage-dot input"></span>${usage.input_tokens.toLocaleString()} input</div>`;
-    if (usage.output_tokens !== undefined)
-      html += `<div class="usage-item"><span class="usage-dot output"></span>${usage.output_tokens.toLocaleString()} output</div>`;
-    if (usage.cache_read_input_tokens)
-      html += `<div class="usage-item"><span class="usage-dot cache-read"></span>${usage.cache_read_input_tokens.toLocaleString()} cache read</div>`;
     if (usage.cache_creation_input_tokens)
       html += `<div class="usage-item"><span class="usage-dot cache-create"></span>${usage.cache_creation_input_tokens.toLocaleString()} cache create</div>`;
+    if (usage.cache_read_input_tokens)
+      html += `<div class="usage-item"><span class="usage-dot cache-read"></span>${usage.cache_read_input_tokens.toLocaleString()} cache read</div>`;
+    if (usage.output_tokens !== undefined)
+      html += `<div class="usage-item"><span class="usage-dot output"></span>${usage.output_tokens.toLocaleString()} output</div>`;
     if (usage.reasoning_tokens)
       html += `<div class="usage-item"><span class="usage-dot reasoning"></span>${usage.reasoning_tokens.toLocaleString()} reasoning</div>`;
+    const cost = computeCost(usage, pricing);
+    if (cost != null)
+      html += `<div class="usage-item usage-cost">${formatCost(cost)}</div>`;
     return html;
   }
 
-  function updateUsageDisplay(usage) {
+  function updateUsageDisplay(usage, pricing) {
     const bar = document.getElementById('usage-bar');
-    if (bar) bar.innerHTML = renderUsage(usage);
+    if (bar) bar.innerHTML = renderUsage(usage, pricing);
   }
 
   function updateStats() {
     const total = state.interactions.length;
-    let inputTokens = 0, outputTokens = 0, toolCallCount = 0;
+    let inputTokens = 0, outputTokens = 0, cacheRead = 0, cacheCreate = 0, toolCallCount = 0, totalCost = 0;
+    let hasCost = false;
     for (const i of state.interactions) {
       if (i.usage) {
         inputTokens += i.usage.input_tokens || 0;
         outputTokens += i.usage.output_tokens || 0;
+        cacheRead += i.usage.cache_read_input_tokens || 0;
+        cacheCreate += i.usage.cache_creation_input_tokens || 0;
+        const cost = computeCost(i.usage, i.pricing);
+        if (cost != null) { totalCost += cost; hasCost = true; }
       }
       toolCallCount += extractToolCalls(i).length;
     }
-    statsEl.textContent = `${total} turn${total !== 1 ? 's' : ''} | ${toolCallCount} tool call${toolCallCount !== 1 ? 's' : ''} | ${inputTokens.toLocaleString()} in / ${outputTokens.toLocaleString()} out tokens`;
+    let parts = [
+      `${total} turn${total !== 1 ? 's' : ''}`,
+      `${toolCallCount} tool call${toolCallCount !== 1 ? 's' : ''}`,
+      `${inputTokens.toLocaleString()} in`,
+      `${outputTokens.toLocaleString()} out`,
+    ];
+    if (cacheRead) parts.push(`${cacheRead.toLocaleString()} cache read`);
+    if (cacheCreate) parts.push(`${cacheCreate.toLocaleString()} cache create`);
+    if (hasCost) parts.push(formatCost(totalCost));
+    statsEl.textContent = parts.join(' | ');
   }
 
   // --- Session list in empty state ---

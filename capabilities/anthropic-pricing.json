@@ -1,0 +1,32 @@
+{
+  "claude-opus-4": {
+    "inputCostPerMTok": 5,
+    "outputCostPerMTok": 25,
+    "cacheReadCostPerMTok": 0.5,
+    "cacheCreateCostPerMTok": 6.25
+  },
+  "claude-sonnet-4": {
+    "inputCostPerMTok": 3,
+    "outputCostPerMTok": 15,
+    "cacheReadCostPerMTok": 0.3,
+    "cacheCreateCostPerMTok": 3.75
+  },
+  "claude-haiku-4": {
+    "inputCostPerMTok": 1,
+    "outputCostPerMTok": 5,
+    "cacheReadCostPerMTok": 0.1,
+    "cacheCreateCostPerMTok": 1.25
+  },
+  "claude-3-5-sonnet": {
+    "inputCostPerMTok": 3,
+    "outputCostPerMTok": 15,
+    "cacheReadCostPerMTok": 0.3,
+    "cacheCreateCostPerMTok": 3.75
+  },
+  "claude-3-5-haiku": {
+    "inputCostPerMTok": 1,
+    "outputCostPerMTok": 5,
+    "cacheReadCostPerMTok": 0.1,
+    "cacheCreateCostPerMTok": 1.25
+  }
+}

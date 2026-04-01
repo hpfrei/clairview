@@ -1,9 +1,13 @@
 const express = require('express');
+const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream');
 const SSEPassthrough = require('./sse-passthrough');
 const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard } = require('./utils');
 const { getProvider } = require('./providers/registry');
+const { getModelPricing } = require('./capabilities');
+
+const PROJECT_ROOT = path.dirname(__dirname);
 
 // Shared state: pending AskUserQuestion interceptions
 // Map<tool_use_id, { questions, resolve, reject }>
@@ -194,6 +198,10 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
     if (modelDef && !provider) {
       console.warn(`[proxy] Unknown provider "${modelDef.provider}" for model "${modelDef.name}" — falling through to Anthropic`);
     }
+
+    // Attach pricing for cost calculation
+    const pricingKey = modelDef ? (modelDef.name || modelDef.modelId) : body.model;
+    interaction.pricing = getModelPricing(PROJECT_ROOT, pricingKey);
 
     if (provider && modelDef) {
       // --- Translation path: route through non-Anthropic provider ---

@@ -770,6 +770,9 @@ Available templates in this skill directory:
         const ctx = model.contextWindow ? Math.round(model.contextWindow / 1000) + 'K' : '';
         const out = model.maxOutputTokens ? Math.round(model.maxOutputTokens / 1000) + 'K' : '';
         const specs = [ctx ? ctx + ' ctx' : '', out ? out + ' out' : ''].filter(Boolean).join(', ');
+        const pricing = model.inputCostPerMTok != null
+          ? `$${model.inputCostPerMTok}/${model.outputCostPerMTok}`
+          : '';
         const item = document.createElement('div');
         item.className = 'cap-list-item';
         item.innerHTML = `<span class="cap-item-name">${escHtml(model.label || model.name)}</span>
@@ -777,6 +780,7 @@ Available templates in this skill directory:
             <code>${escHtml(model.modelId || '')}</code>
             ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
             ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
+            ${pricing ? '<span class="cap-model-pricing">' + escHtml(pricing) + ' /MTok</span>' : ''}
           </span>
           <span class="cap-list-actions">
             <button class="cap-edit-btn" data-name="${escHtml(model.name)}" data-kind="model" title="Edit">&#9998;</button>
@@ -859,6 +863,16 @@ Available templates in this skill directory:
     const maxOutInput = document.getElementById('mmMaxOutputTokens');
     if (maxOutInput) maxOutInput.value = model.maxOutputTokens || '';
 
+    // Cost fields
+    const mmInputCost = document.getElementById('mmInputCost');
+    if (mmInputCost) mmInputCost.value = model.inputCostPerMTok ?? '';
+    const mmOutputCost = document.getElementById('mmOutputCost');
+    if (mmOutputCost) mmOutputCost.value = model.outputCostPerMTok ?? '';
+    const mmCacheReadCost = document.getElementById('mmCacheReadCost');
+    if (mmCacheReadCost) mmCacheReadCost.value = model.cacheReadCostPerMTok ?? '';
+    const mmCacheCreateCost = document.getElementById('mmCacheCreateCost');
+    if (mmCacheCreateCost) mmCacheCreateCost.value = model.cacheCreateCostPerMTok ?? '';
+
     // Provider key dropdown
     populateProviderKeyDropdown(model.providerKey || 'openai');
 
@@ -930,6 +944,11 @@ Available templates in this skill directory:
     const ctxVal = parseInt(document.getElementById('mmContextWindow')?.value);
     const maxOutVal = parseInt(document.getElementById('mmMaxOutputTokens')?.value);
 
+    const inCost = parseFloat(document.getElementById('mmInputCost')?.value);
+    const outCost = parseFloat(document.getElementById('mmOutputCost')?.value);
+    const crCost = parseFloat(document.getElementById('mmCacheReadCost')?.value);
+    const ccCost = parseFloat(document.getElementById('mmCacheCreateCost')?.value);
+
     const model = {
       name,
       label: document.getElementById('mmLabel')?.value?.trim() || name,
@@ -942,6 +961,10 @@ Available templates in this skill directory:
       reasoning: !!document.getElementById('mmReasoning')?.checked,
       contextWindow: ctxVal > 0 ? ctxVal : null,
       maxOutputTokens: maxOutVal > 0 ? maxOutVal : null,
+      inputCostPerMTok: inCost >= 0 ? inCost : null,
+      outputCostPerMTok: outCost >= 0 ? outCost : null,
+      cacheReadCostPerMTok: crCost >= 0 ? crCost : null,
+      cacheCreateCostPerMTok: ccCost >= 0 ? ccCost : null,
     };
 
     // Only send custom system prompt if user opted out of default
@@ -961,6 +984,104 @@ Available templates in this skill directory:
 
   document.getElementById('capModelCancel')?.addEventListener('click', closeModelModal);
   document.getElementById('capModelCancel2')?.addEventListener('click', closeModelModal);
+
+  // --- Refresh Pricing via claude -p ---
+  document.getElementById('capRefreshPricing')?.addEventListener('click', () => {
+    const btn = document.getElementById('capRefreshPricing');
+    const statusEl = document.getElementById('capRefreshStatus');
+    if (!btn || !statusEl) return;
+    btn.disabled = true;
+    btn.textContent = 'Looking up prices...';
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = 'Starting pricing lookup via Claude...';
+
+    // Build model list for the prompt
+    const modelList = state.models.map(m => `${m.label || m.name} (modelId: ${m.modelId}, provider: ${m.providerKey})`).join('\n');
+    const prompt = `Look up the current official API pricing (as of today) for these models:\n${modelList}\n\nAlso include these Anthropic Claude models: claude-opus-4, claude-sonnet-4, claude-haiku-4.\n\nFor each model, return the cost per 1 million tokens in USD for: input, output, cache_read (if available), cache_create (if available).\n\nReturn ONLY a valid JSON object with this exact structure (no markdown, no explanation):\n{\n  "models": {\n    "<name from the list above>": { "inputCostPerMTok": <number>, "outputCostPerMTok": <number>, "cacheReadCostPerMTok": <number or null>, "cacheCreateCostPerMTok": <number or null> },\n    ...\n  },\n  "anthropic": {\n    "claude-opus-4": { ... },\n    "claude-sonnet-4": { ... },\n    "claude-haiku-4": { ... }\n  }\n}`;
+
+    const body = JSON.stringify({ type: 'chat', prompt });
+    fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).then(async res => {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        while (buf.includes('\n\n')) {
+          const idx = buf.indexOf('\n\n');
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let ev = null, data = null;
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event: ')) ev = line.slice(7);
+            else if (line.startsWith('data: ')) data = line.slice(6);
+          }
+          if (!ev || !data) continue;
+          try { data = JSON.parse(data); } catch { continue; }
+          if (ev === 'text') {
+            fullText += data.text || '';
+            statusEl.textContent = 'Receiving pricing data...';
+          } else if (ev === 'done') {
+            applyPricingResult(fullText, statusEl, btn);
+            return;
+          } else if (ev === 'error') {
+            statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+            btn.disabled = false;
+            btn.textContent = 'Refresh Pricing';
+            return;
+          }
+        }
+      }
+      // Stream ended without done event
+      applyPricingResult(fullText, statusEl, btn);
+    }).catch(err => {
+      statusEl.textContent = 'Fetch error: ' + err.message;
+      btn.disabled = false;
+      btn.textContent = 'Refresh Pricing';
+    });
+  });
+
+  function applyPricingResult(text, statusEl, btn) {
+    try {
+      // Extract JSON from response (may be wrapped in markdown code blocks)
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found in response');
+      const result = JSON.parse(jsonMatch[0]);
+
+      let updated = 0;
+      // Update models.json models
+      if (result.models) {
+        for (const [name, costs] of Object.entries(result.models)) {
+          const model = state.models.find(m => m.name === name || m.label === name);
+          if (!model || !costs) continue;
+          model.inputCostPerMTok = costs.inputCostPerMTok;
+          model.outputCostPerMTok = costs.outputCostPerMTok;
+          model.cacheReadCostPerMTok = costs.cacheReadCostPerMTok;
+          model.cacheCreateCostPerMTok = costs.cacheCreateCostPerMTok;
+          sendWs({ type: 'model:save', model });
+          updated++;
+        }
+      }
+      // Update anthropic pricing
+      if (result.anthropic) {
+        sendWs({ type: 'anthropic:pricing:save', pricing: result.anthropic });
+        updated += Object.keys(result.anthropic).length;
+      }
+
+      statusEl.textContent = `Updated pricing for ${updated} model${updated !== 1 ? 's' : ''}.`;
+      renderModelsPanel();
+    } catch (err) {
+      statusEl.textContent = 'Failed to parse pricing: ' + err.message;
+    }
+    btn.disabled = false;
+    btn.textContent = 'Refresh Pricing';
+  }
 
   // Close modals on backdrop click
   document.querySelectorAll('.cap-modal-backdrop').forEach(backdrop => {
