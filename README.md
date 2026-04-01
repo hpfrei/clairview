@@ -229,4 +229,4 @@ outputs/                 Sandboxed working directory for Claude sessions
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). Copyright (c) 2026 hpfreilabs.com
+Business Source License 1.1 -- see [LICENSE](LICENSE). Copyright (c) 2026 hpfreilabs.com
