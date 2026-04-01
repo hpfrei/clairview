@@ -80,6 +80,24 @@ function loadCompiledSource(cwd, name) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
 }
 
+function loadCompiledModule(cwd, name) {
+  const compiledPath = path.join(workflowsDir(cwd), name, 'compiled.js');
+  if (!fs.existsSync(compiledPath)) return null;
+  try {
+    // Bust require cache so re-compilations are picked up
+    delete require.cache[require.resolve(compiledPath)];
+    const mod = require(compiledPath);
+    if (!mod || !Array.isArray(mod.steps)) {
+      console.warn(`[workflow] compiled.js for "${name}" has no steps array — ignoring`);
+      return null;
+    }
+    return mod;
+  } catch (err) {
+    console.warn(`[workflow] Failed to load compiled.js for "${name}": ${err.message}`);
+    return null;
+  }
+}
+
 function saveWorkflow(cwd, name, workflow) {
   if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) return false;
   const dir = path.join(workflowsDir(cwd), name);
@@ -114,6 +132,18 @@ function hashContent(content) {
 // Active runs: runId → { status, name, steps, ctx, cancel, procs }
 const activeRuns = new Map();
 
+function getStepField(compiledStep, jsonStepDef, field) {
+  if (compiledStep && compiledStep[field] !== undefined) return compiledStep[field];
+  return jsonStepDef ? jsonStepDef[field] : undefined;
+}
+
+function safeCall(fn, fallback, label) {
+  try { return fn(); } catch (err) {
+    console.warn(`[workflow] ${label}: ${err.message}`);
+    return typeof fallback === 'function' ? fallback() : fallback;
+  }
+}
+
 function generateRunId() {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -125,6 +155,14 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
   const workflow = loadWorkflow(PROJECT_ROOT, name);
   if (!workflow) throw new Error(`Workflow not found: ${name}`);
 
+  // Prefer compiled module when available
+  const compiled = loadCompiledModule(PROJECT_ROOT, name);
+  const useCompiled = !!compiled;
+  const compiledStepMap = new Map();
+  if (compiled) {
+    for (const step of compiled.steps) compiledStepMap.set(step.id, step);
+  }
+
   const runId = generateRunId();
   const stepEntries = Object.entries(workflow.steps || {});
   if (stepEntries.length === 0) throw new Error('Workflow has no steps');
@@ -135,8 +173,10 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
     steps: {},
   };
 
-  // Resolve input template values
-  for (const [key, desc] of Object.entries(workflow.inputs || {})) {
+  // Resolve input template values — handle both JSON ("desc") and compiled ({ type, description }) formats
+  const inputDefs = useCompiled && compiled.inputs ? compiled.inputs : (workflow.inputs || {});
+  for (const [key, def] of Object.entries(inputDefs)) {
+    const desc = typeof def === 'string' ? def : (def?.description || '');
     if (!ctx.inputs[key] || ctx.inputs[key] === desc) {
       ctx.inputs[key] = inputs[key] || '';
     }
@@ -160,6 +200,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
     type: 'workflow:run:started',
     runId,
     name,
+    compiled: useCompiled,
     tabId: tabId || undefined,
     steps: run.steps.map(s => ({ id: s.id, status: s.status, profile: s.profile || null })),
   });
@@ -170,41 +211,59 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
 
   try {
     while (currentStepId && !run.cancel) {
-      const stepDef = workflow.steps[currentStepId];
-      if (!stepDef) break;
+      const jsonStepDef = workflow.steps[currentStepId];
+      const compiledStep = compiledStepMap.get(currentStepId);
+      if (!jsonStepDef && !compiledStep) break;
+
+      const parallel = getStepField(compiledStep, jsonStepDef, 'parallel');
+      const onError = getStepField(compiledStep, jsonStepDef, 'onError');
 
       // --- Fan-out: parallel step spawns multiple steps concurrently ---
-      if (stepDef.parallel && Array.isArray(stepDef.parallel)) {
+      if (parallel && Array.isArray(parallel)) {
         updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
         broadcaster.broadcast({
           type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId: currentStepId,
-          text: `Fan-out: spawning ${stepDef.parallel.length} parallel steps: ${stepDef.parallel.join(', ')}`,
+          text: `Fan-out: spawning ${parallel.length} parallel steps: ${parallel.join(', ')}`,
         });
 
         const parallelResults = await Promise.allSettled(
-          stepDef.parallel.map(async (pStepId) => {
-            const pStepDef = workflow.steps[pStepId];
-            if (!pStepDef || !pStepDef.do) return { id: pStepId, output: null, status: 'skipped' };
+          parallel.map(async (pStepId) => {
+            const pJsonDef = workflow.steps[pStepId];
+            const pCompiled = compiledStepMap.get(pStepId);
+            if (!pCompiled && (!pJsonDef || !pJsonDef.do)) return { id: pStepId, output: null, status: 'skipped' };
 
             updateStepStatus(run, pStepId, 'running', broadcaster, runId);
-            const prompt = buildPrompt(pStepDef, ctx, workflow);
+            const prompt = safeCall(
+              () => pCompiled?.buildPrompt ? pCompiled.buildPrompt(ctx) : buildPrompt(pJsonDef, ctx, workflow),
+              () => buildPrompt(pJsonDef, ctx, workflow),
+              `buildPrompt failed for parallel step "${pStepId}"`
+            );
+            const execDef = {
+              profile: getStepField(pCompiled, pJsonDef, 'profile'),
+              timeout: getStepField(pCompiled, pJsonDef, 'timeout'),
+            };
             const t0 = Date.now();
             try {
-              const output = await executeStep(pStepId, prompt, pStepDef, {
+              const rawOutput = await executeStep(pStepId, prompt, execDef, {
                 sessionManager, broadcaster, cwd,
                 proxyPort, runId, tabId, dashboardPort, authToken,
               });
               const elapsed = Date.now() - t0;
-              ctx.steps[pStepId] = { output };
+              const parsed = safeCall(
+                () => pCompiled?.parseOutput ? pCompiled.parseOutput(rawOutput) : rawOutput,
+                rawOutput,
+                `parseOutput failed for parallel step "${pStepId}"`
+              );
+              ctx.steps[pStepId] = { output: parsed };
               updateStepStatus(run, pStepId, 'done', broadcaster, runId, elapsed);
-              return { id: pStepId, output, status: 'done' };
+              return { id: pStepId, output: parsed, status: 'done' };
             } catch (err) {
               const elapsed = Date.now() - t0;
               ctx.steps[pStepId] = { output: null, error: err.message };
-              // Check for onError handler
-              if (pStepDef.onError) {
+              const pOnError = getStepField(pCompiled, pJsonDef, 'onError');
+              if (pOnError) {
                 updateStepStatus(run, pStepId, 'failed', broadcaster, runId, elapsed);
-                return { id: pStepId, status: 'failed', error: err.message, onError: pStepDef.onError };
+                return { id: pStepId, status: 'failed', error: err.message, onError: pOnError };
               }
               updateStepStatus(run, pStepId, 'failed', broadcaster, runId, elapsed);
               throw err;
@@ -216,7 +275,7 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
         const failures = parallelResults.filter(r => r.status === 'rejected');
         ctx.steps[currentStepId] = {
           output: {
-            parallel: stepDef.parallel,
+            parallel,
             results: parallelResults.map(r => r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason?.message }),
           },
         };
@@ -229,9 +288,8 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
 
         if (failures.length > 0) {
           updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, 0);
-          // Check for onError on the fan-out step itself
-          if (stepDef.onError && workflow.steps[stepDef.onError]) {
-            currentStepId = stepDef.onError;
+          if (onError && workflow.steps[onError]) {
+            currentStepId = onError;
             continue;
           }
           run.status = 'failed';
@@ -239,96 +297,121 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
         }
 
         updateStepStatus(run, currentStepId, 'done', broadcaster, runId, 0);
-        // Fan-in: jump to join step or next
-        currentStepId = stepDef.join || stepDef.next || getNextStepId(stepEntries, currentStepId);
+        currentStepId = getStepField(compiledStep, jsonStepDef, 'join')
+          || getStepField(compiledStep, jsonStepDef, 'next')
+          || getNextStepId(stepEntries, currentStepId);
         continue;
       }
 
-      // --- Condition-only step (no "do" field) ---
-      if (stepDef.condition && !stepDef.do) {
+      // --- Condition-only step (no agent work) ---
+      const isConditionOnly = compiledStep?.type === 'condition' || (jsonStepDef?.condition && !jsonStepDef?.do);
+      if (isConditionOnly) {
         updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
-        const result = evaluateCondition(stepDef.condition, ctx);
-        const branch = result ? (stepDef.then || null) : (stepDef.else || null);
+        const result = safeCall(
+          () => compiledStep?.evaluate ? compiledStep.evaluate(ctx) : evaluateCondition(jsonStepDef.condition, ctx),
+          () => evaluateCondition(jsonStepDef?.condition || '', ctx),
+          `evaluate failed for condition step "${currentStepId}"`
+        );
+        const branch = result
+          ? (getStepField(compiledStep, jsonStepDef, 'then') || null)
+          : (getStepField(compiledStep, jsonStepDef, 'else') || null);
         ctx.steps[currentStepId] = { output: { branch: result ? 'then' : 'else' } };
         updateStepStatus(run, currentStepId, 'done', broadcaster, runId, 0);
         broadcaster.broadcast({
-          type: 'workflow:step:progress',
-          runId,
-          stepId: currentStepId,
-          text: `Condition "${stepDef.condition}" → ${result ? 'then' : 'else'} → ${branch || 'end'}`,
+          type: 'workflow:step:progress', runId, stepId: currentStepId,
+          text: `Condition → ${result ? 'then' : 'else'} → ${branch || 'end'}`,
         });
         currentStepId = branch;
         continue;
       }
 
       // --- Agent step — spawn claude -p ---
-      if (stepDef.do) {
+      const hasAgent = compiledStep?.type === 'agent' || compiledStep?.buildPrompt || jsonStepDef?.do;
+      if (hasAgent) {
         updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
-        const prompt = buildPrompt(stepDef, ctx, workflow);
+        const prompt = safeCall(
+          () => compiledStep?.buildPrompt ? compiledStep.buildPrompt(ctx) : buildPrompt(jsonStepDef, ctx, workflow),
+          () => buildPrompt(jsonStepDef, ctx, workflow),
+          `buildPrompt failed for step "${currentStepId}"`
+        );
+        const execDef = {
+          profile: getStepField(compiledStep, jsonStepDef, 'profile'),
+          timeout: getStepField(compiledStep, jsonStepDef, 'timeout'),
+        };
         const stepStartTime = Date.now();
 
         try {
-          const output = await executeStep(currentStepId, prompt, stepDef, {
+          const rawOutput = await executeStep(currentStepId, prompt, execDef, {
             sessionManager, broadcaster, cwd,
             proxyPort, runId, tabId, dashboardPort, authToken,
           });
           const elapsed = Date.now() - stepStartTime;
-          ctx.steps[currentStepId] = { output };
-          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, output);
+          const parsed = safeCall(
+            () => compiledStep?.parseOutput ? compiledStep.parseOutput(rawOutput) : rawOutput,
+            rawOutput,
+            `parseOutput failed for step "${currentStepId}"`
+          );
+          ctx.steps[currentStepId] = { output: parsed };
+          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, rawOutput);
         } catch (err) {
           const elapsed = Date.now() - stepStartTime;
           ctx.steps[currentStepId] = { output: null, error: err.message };
           updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, elapsed);
 
-          // If cancelled, break immediately — no retry/onError
           if (run.cancel) break;
 
-          // Check for onError handler
-          if (stepDef.onError && workflow.steps[stepDef.onError]) {
-            currentStepId = stepDef.onError;
+          if (onError && workflow.steps[onError]) {
+            currentStepId = onError;
             continue;
           }
 
-          // Check for retry
-          if (stepDef.maxRetries) {
+          const maxRetries = getStepField(compiledStep, jsonStepDef, 'maxRetries');
+          if (maxRetries) {
             retryCount[currentStepId] = (retryCount[currentStepId] || 0) + 1;
-            if (retryCount[currentStepId] < stepDef.maxRetries) {
-              continue; // Retry same step
+            if (retryCount[currentStepId] < maxRetries) {
+              continue;
             }
           }
-          // No retry — workflow failed
           run.status = 'failed';
           break;
         }
 
-        // Determine next step
-        if (stepDef.condition) {
-          const result = evaluateCondition(stepDef.condition, ctx);
+        // Determine next step — check for post-agent condition
+        const hasCondition = compiledStep?.evaluate || jsonStepDef?.condition;
+        if (hasCondition) {
+          const result = safeCall(
+            () => compiledStep?.evaluate ? compiledStep.evaluate(ctx) : evaluateCondition(jsonStepDef.condition, ctx),
+            () => evaluateCondition(jsonStepDef?.condition || '', ctx),
+            `evaluate failed for step "${currentStepId}"`
+          );
           if (result) {
-            currentStepId = stepDef.then || stepDef.next || getNextStepId(stepEntries, currentStepId);
+            currentStepId = getStepField(compiledStep, jsonStepDef, 'then')
+              || getStepField(compiledStep, jsonStepDef, 'next')
+              || getNextStepId(stepEntries, currentStepId);
           } else {
-            // Check retry
-            if (stepDef.else) {
-              if (stepDef.maxRetries) {
+            const elseStep = getStepField(compiledStep, jsonStepDef, 'else');
+            if (elseStep) {
+              const maxRetries = getStepField(compiledStep, jsonStepDef, 'maxRetries');
+              if (maxRetries) {
                 retryCount[currentStepId] = (retryCount[currentStepId] || 0) + 1;
-                if (retryCount[currentStepId] >= stepDef.maxRetries) {
-                  currentStepId = stepDef.then || getNextStepId(stepEntries, currentStepId);
+                if (retryCount[currentStepId] >= maxRetries) {
+                  currentStepId = getStepField(compiledStep, jsonStepDef, 'then') || getNextStepId(stepEntries, currentStepId);
                   continue;
                 }
               }
-              currentStepId = stepDef.else;
+              currentStepId = elseStep;
             } else {
-              currentStepId = stepDef.then || getNextStepId(stepEntries, currentStepId);
+              currentStepId = getStepField(compiledStep, jsonStepDef, 'then') || getNextStepId(stepEntries, currentStepId);
             }
           }
         } else {
-          currentStepId = stepDef.next || getNextStepId(stepEntries, currentStepId);
+          currentStepId = getStepField(compiledStep, jsonStepDef, 'next') || getNextStepId(stepEntries, currentStepId);
         }
         continue;
       }
 
       // Unknown step type — skip
-      currentStepId = stepDef.next || getNextStepId(stepEntries, currentStepId);
+      currentStepId = getStepField(compiledStep, jsonStepDef, 'next') || getNextStepId(stepEntries, currentStepId);
     }
   } catch (err) {
     run.status = 'failed';
@@ -645,7 +728,14 @@ Output ONLY valid JSON in this exact format (no markdown, no explanation):
       "then": "step-if-true",
       "else": "step-if-false",
       "next": "explicit-next-step",
-      "maxRetries": 3
+      "maxRetries": 3,
+      "timeout": 120000,
+      "onError": "error-handler-step"
+    },
+    "fan-out-step": {
+      "parallel": ["step-a", "step-b", "step-c"],
+      "join": "merge-step",
+      "onError": "error-handler-step"
     }
   }
 }
@@ -657,6 +747,9 @@ Rules:
 - Use "condition" for branching decisions
 - The first step in the object is the entry point
 - Steps execute in order unless overridden by "next", "then", or "else"
+- Use "parallel" to fan out: the step has no "do", only a list of step IDs to run concurrently. Use "join" to specify where to converge after all parallel branches complete.
+- Use "timeout" (milliseconds) on steps that may hang (e.g., long computations, web fetches)
+- Use "onError" to redirect to a fallback step if the current step fails
 - When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool
 - If a step can leverage an existing MCP tool (listed above), mention the tool by name in the "do" instruction
 - If a step can delegate to another workflow, use the workflow_run MCP tool
@@ -776,6 +869,12 @@ module.exports = {
       then: "step-id" || null,  // if condition is true
       else: "step-id" || null,  // if condition is false
       maxRetries: N || undefined,
+      // Parallel fan-out/fan-in (preserve from source JSON if present):
+      parallel: ["step-id", ...] || null,  // list of step IDs to run concurrently
+      join: "step-id" || null,             // step to proceed to after all parallel steps complete
+      // Error handling (preserve from source JSON if present):
+      timeout: 60000 || null,              // step-level timeout in ms
+      onError: "step-id" || null,          // step to jump to on failure
     }
   ]
 };
@@ -785,6 +884,7 @@ Rules:
 - Convert "condition" text into evaluate(ctx) JS predicate — deterministic, no AI call needed
 - Convert "produces" into parseOutput(raw) that extracts the expected shape
 - Wire data flow explicitly: if step B has context: ["A"], then B's buildPrompt must reference ctx.steps.A.output
+- If the source JSON step has "parallel", "join", "timeout", or "onError" fields, preserve them exactly in the compiled output. Parallel steps dispatch child steps — they have no buildPrompt, only parallel/join/onError fields.
 - The steps array must be in execution order
 - Use the exact sourceHash provided
 - Output rendering supports full Markdown, MathJax ($...$ and $$...$$), and fenced code blocks. When a step produces visual output (diagrams, UI, formulas), use these formats:

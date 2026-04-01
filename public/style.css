@@ -26,47 +26,35 @@ body>*{
 
 header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 6px 12px 0;
   background: var(--bg-surface);
-  border-bottom: 3px solid;
-  border-image: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb) 1;
+  position: relative;
+  z-index: 2;
 }
 
-header h1 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-bright);
+.header-gradient-bar {
+  height: 3px;
+  background: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb);
+  background-attachment: fixed;
+  flex-shrink: 0;
 }
+
 h1.header-brand {
   cursor: pointer;
-  padding: 4px 12px;
-  border-radius: 6px;
   margin: 0;
-  transition: background 0.15s;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.3px;
-  background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  -webkit-text-fill-color: var(--text-dim);
 }
-.brand-logo {
-  flex-shrink: 0;
-}
-h1.header-brand:hover { background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%); -webkit-background-clip: text; background-clip: text; opacity: 0.8; }
-h1.header-brand.active {
-  background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  border-color: transparent;
-}
+.brand-logo { flex-shrink: 0; }
+h1.header-brand:hover { -webkit-text-fill-color: var(--text); }
+h1.header-brand.active { -webkit-text-fill-color: #fff; }
 
 /* Home view */
 #view-home {
@@ -128,12 +116,6 @@ h1.header-brand.active {
 .home-section.active { display: block; }
 .home-section .markdown-body { max-width: none; }
 
-.header-center {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .session-picker {
   background: var(--bg);
   color: var(--text);
@@ -170,7 +152,9 @@ h1.header-brand.active {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  padding-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .task-launcher {
@@ -1401,7 +1385,7 @@ footer {
   animation: pulse 1.5s infinite;
 }
 .header-tab.active.busy::after {
-  background: var(--bg);
+  background: #fff;
 }
 
 /* Theme toggle */
@@ -1433,26 +1417,29 @@ footer {
 
 .header-left {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-end;
+  gap: 2px;
 }
 
 .header-tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  align-items: flex-end;
 }
 
 .header-tab {
-  background: transparent;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--tab-inactive-bg);
   border: 1px solid transparent;
-  color: var(--text-dim);
-  padding: 3px 12px;
-  border-radius: 4px;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--tab-inactive-text);
   cursor: pointer;
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
+  position: relative;
 }
 
 .header-tab:hover {
@@ -1461,9 +1448,14 @@ footer {
 }
 
 .header-tab.active {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
+  background: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb);
+  background-attachment: fixed;
+  color: #fff;
+  border-color: transparent;
+  font-weight: 600;
+  margin-bottom: -3px;
+  padding-bottom: 9px;
+  z-index: 1;
 }
 
 /* ============================================================
