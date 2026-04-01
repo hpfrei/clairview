@@ -1,7 +1,7 @@
 (function() {
   'use strict';
   const { state, escHtml, highlightJSON, renderJSON, jsonBlock, formatDuration, truncate,
-          renderMarkdown, renderMarkdownDebounced, sendWs,
+          renderMarkdown, renderMarkdownDebounced, cancelRenderDebounce, sendWs,
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
 
   let cachedSessions = [];
@@ -16,7 +16,8 @@
 
   function flushPendingMarkdown() {
     if (_pendingMarkdownBodyEl) {
-      const rawText = _pendingMarkdownBodyEl.textContent;
+      cancelRenderDebounce(_pendingMarkdownBodyEl);
+      const rawText = _pendingMarkdownBodyEl._rawText || _pendingMarkdownBodyEl.textContent;
       if (rawText) {
         _pendingMarkdownBodyEl.classList.add('markdown-body');
         renderMarkdown(rawText, _pendingMarkdownBodyEl);
@@ -180,17 +181,15 @@
 
   function toolSummary(name, input) {
     if (!input) return '';
-    if (name === 'Skill') {
-      return truncate(input.args || '', 45);
-    }
-    if (input.file_path) return truncate(input.file_path, 35);
-    if (input.command) return truncate(input.command, 35);
-    if (input.pattern) return truncate(input.pattern, 35);
-    if (input.query) return truncate(input.query, 35);
-    if (input.url) return truncate(input.url, 35);
-    if (input.content) return truncate(typeof input.content === 'string' ? input.content : '', 35);
+    if (name === 'Skill') return input.args || '';
+    if (input.file_path) return input.file_path;
+    if (input.command) return input.command;
+    if (input.pattern) return input.pattern;
+    if (input.query) return input.query;
+    if (input.url) return input.url;
+    if (input.content) return typeof input.content === 'string' ? input.content : '';
     for (const v of Object.values(input)) {
-      if (typeof v === 'string' && v.length > 0) return truncate(v, 35);
+      if (typeof v === 'string' && v.length > 0) return v;
     }
     return '';
   }
@@ -285,50 +284,62 @@
         return;
       }
 
-      const blockEl = document.createElement('div');
-      blockEl.className = 'content-block';
-      blockEl.id = `block-${data.index}`;
-
-      const header = document.createElement('div');
-      header.className = 'content-block-header';
-
-      const body = document.createElement('div');
-      body.className = 'content-block-body';
-      body.id = `block-body-${data.index}`;
-
-      if (block.type === 'thinking') {
-        header.textContent = 'Thinking';
-        body.classList.add('thinking');
-      } else if (block.type === 'text') {
-        header.textContent = 'Text';
+      if (block.type === 'text') {
+        // Text blocks: just the body, no container/header
+        const body = document.createElement('div');
+        body.className = 'content-block-body';
+        body.id = `block-body-${data.index}`;
         _lastStreamTextBodyEl = body;
         _streamBlockMap.set(data.index, { bodyEl: body, needsSeparator: false });
+        container.appendChild(body);
       } else if (block.type === 'tool_use') {
-        header.textContent = `Tool Use: ${block.name || ''}`;
-        body.classList.add('tool-use');
-        body.innerHTML = `<div class="tool-name">${escHtml(block.name || '')}</div><div class="json-block jt-root" id="tool-input-${data.index}"></div>`;
+        // Tool use blocks: just the body, no container/header
+        const body = document.createElement('div');
+        body.className = 'content-block-body tool-use';
+        body.id = `block-body-${data.index}`;
+        body.innerHTML = `<div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div><div class="json-block jt-root" id="tool-input-${data.index}"></div>`;
+        container.appendChild(body);
       } else {
-        header.textContent = block.type;
-      }
+        // Other blocks (thinking, etc.): keep container/header
+        const blockEl = document.createElement('div');
+        blockEl.className = 'content-block';
+        blockEl.id = `block-${data.index}`;
 
-      blockEl.appendChild(header);
-      blockEl.appendChild(body);
-      container.appendChild(blockEl);
+        const header = document.createElement('div');
+        header.className = 'content-block-header';
+        header.textContent = block.type === 'thinking' ? 'Thinking' : block.type;
+
+        const body = document.createElement('div');
+        body.className = 'content-block-body';
+        body.id = `block-body-${data.index}`;
+        if (block.type === 'thinking') body.classList.add('thinking');
+
+        blockEl.appendChild(header);
+        blockEl.appendChild(body);
+        container.appendChild(blockEl);
+      }
     }
 
     if (eventType === 'content_block_delta') {
       const delta = data?.delta;
       if (!delta) return;
 
-      if (delta.type === 'thinking_delta' || delta.type === 'text_delta') {
+      if (delta.type === 'thinking_delta') {
+        const bodyEl = document.getElementById(`block-body-${data.index}`);
+        if (!bodyEl) return;
+        bodyEl.appendChild(document.createTextNode(delta.thinking || ''));
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      } else if (delta.type === 'text_delta') {
         const entry = _streamBlockMap.get(data.index);
         const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
         if (!bodyEl) return;
         if (entry?.needsSeparator) {
-          bodyEl.appendChild(document.createTextNode('\n'));
+          bodyEl._rawText = (bodyEl._rawText || '') + '\n';
           entry.needsSeparator = false;
         }
-        bodyEl.appendChild(document.createTextNode(delta.thinking || delta.text || ''));
+        bodyEl._rawText = (bodyEl._rawText || '') + (delta.text || '');
+        bodyEl.classList.add('markdown-body');
+        renderMarkdownDebounced(bodyEl._rawText, bodyEl);
         bodyEl.scrollTop = bodyEl.scrollHeight;
       } else if (delta.type === 'input_json_delta') {
         const inputEl = document.getElementById(`tool-input-${data.index}`);
@@ -344,10 +355,16 @@
           inputEl.innerHTML = renderJSON(parsed);
         } catch {}
       }
-      // Defer markdown rendering for text blocks (may be followed by more text blocks to merge)
+      // Immediate markdown render for completed text blocks; still defer for possible merge
       const entry = _streamBlockMap.get(data.index);
       const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
       if (bodyEl && !bodyEl.classList.contains('tool-use') && !bodyEl.classList.contains('thinking')) {
+        cancelRenderDebounce(bodyEl);
+        const rawText = bodyEl._rawText || bodyEl.textContent;
+        if (rawText) {
+          bodyEl.classList.add('markdown-body');
+          renderMarkdown(rawText, bodyEl);
+        }
         _pendingMarkdownBodyEl = bodyEl;
       }
     }
@@ -469,8 +486,10 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
       _userPinnedSelection = true;
-      select({ type: 'turn', id: interaction.id });
+      select(sel);
     });
 
     group.appendChild(el);
@@ -517,8 +536,10 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
       _userPinnedSelection = true;
-      select({ type: 'turn', id: interaction.id });
+      select(sel);
     });
 
     group.appendChild(el);
@@ -551,8 +572,10 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
       _userPinnedSelection = true;
-      select({ type: 'turn', id: interaction.id });
+      select(sel);
     });
 
     group.appendChild(el);
@@ -581,8 +604,10 @@
     `;
     toolEl.addEventListener('click', (e) => {
       e.stopPropagation();
+      const sel = { type: 'tool', interactionId, toolIndex: toolIdx };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
       _userPinnedSelection = true;
-      select({ type: 'tool', interactionId, toolIndex: toolIdx });
+      select(sel);
     });
     return toolEl;
   }
@@ -651,6 +676,27 @@
   // ============================================================
   // SELECTION + DETAIL PANEL
   // ============================================================
+
+  function selectLastAndFollow() {
+    _userPinnedSelection = false;
+    const last = state.interactions[state.interactions.length - 1];
+    if (last) {
+      select({ type: 'turn', id: last.id });
+    } else {
+      state.selection = null;
+      document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
+      detailContent.classList.add('hidden');
+      emptyState.classList.remove('hidden');
+    }
+  }
+
+  function isAlreadySelected(sel) {
+    const cur = state.selection;
+    if (!cur) return false;
+    if (sel.type === 'turn' && cur.type === 'turn') return cur.id === sel.id;
+    if (sel.type === 'tool' && cur.type === 'tool') return cur.interactionId === sel.interactionId && cur.toolIndex === sel.toolIndex;
+    return false;
+  }
 
   function select(sel) {
     state.selection = sel;
@@ -1012,19 +1058,13 @@
           <div class="content-block-body thinking">${escHtml(b.text)}</div>
         </div>`;
       } else if (b.type === 'text') {
-        return `<div class="content-block">
-          <div class="content-block-header">Text</div>
-          <div class="content-block-body markdown-body" data-md-pending="${escHtml(b.text)}">${escHtml(b.text)}</div>
-        </div>`;
+        return `<div class="content-block-body markdown-body" data-md-pending="${escHtml(b.text)}">${escHtml(b.text)}</div>`;
       } else if (b.type === 'tool_use') {
         let inputHtml;
         try { inputHtml = jsonBlock(JSON.parse(b.text)); } catch { inputHtml = `<pre class="json-block">${escHtml(b.text)}</pre>`; }
-        return `<div class="content-block">
-          <div class="content-block-header">Tool Use: ${escHtml(b.name)}</div>
-          <div class="content-block-body tool-use">
-            <div class="tool-name">${escHtml(b.name)}</div>
-            ${inputHtml}
-          </div>
+        return `<div class="content-block-body tool-use">
+          <div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(b.name)}</div>
+          ${inputHtml}
         </div>`;
       }
       return `<div class="content-block">
@@ -1046,10 +1086,7 @@
 
   function renderStaticBlock(block) {
     if (block.type === 'text') {
-      return `<div class="content-block">
-        <div class="content-block-header">Text</div>
-        <div class="content-block-body markdown-body" data-md-pending="${escHtml(block.text || '')}">${escHtml(block.text || '')}</div>
-      </div>`;
+      return `<div class="content-block-body markdown-body" data-md-pending="${escHtml(block.text || '')}">${escHtml(block.text || '')}</div>`;
     }
     if (block.type === 'thinking') {
       return `<div class="content-block">
@@ -1058,12 +1095,9 @@
       </div>`;
     }
     if (block.type === 'tool_use') {
-      return `<div class="content-block">
-        <div class="content-block-header">Tool Use: ${escHtml(block.name || '')}</div>
-        <div class="content-block-body tool-use">
-          <div class="tool-name">${escHtml(block.name || '')}</div>
-          ${jsonBlock(block.input || {})}</pre>
-        </div>
+      return `<div class="content-block-body tool-use">
+        <div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div>
+        ${jsonBlock(block.input || {})}</pre>
       </div>`;
     }
     return `<div class="content-block">

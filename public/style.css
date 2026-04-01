@@ -374,9 +374,6 @@ aside#timeline {
   color: var(--purple);
   font-weight: 600;
   flex-shrink: 0;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -392,7 +389,7 @@ aside#timeline {
 .tool-entry.selected .tool-entry-name { color: var(--purple); }
 .tool-entry.selected .tool-entry-summary { color: var(--text); }
 
-.tool-entry.skill-call .tool-entry-name { color: var(--cyan); max-width: 120px; }
+.tool-entry.skill-call .tool-entry-name { color: var(--cyan); }
 .tool-entry.skill-call .tool-connector { background: var(--cyan); }
 .tool-entry.skill-call.selected .tool-entry-name { color: var(--cyan); }
 
@@ -687,8 +684,6 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
-  word-wrap: break-word;
 }
 
 .json-key { color: var(--blue); }
@@ -737,11 +732,10 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
   text-transform: uppercase;
 }
 .content-block-body {
-  padding: 10px 12px;
-  white-space: pre-wrap;
+  padding: 4px 8px;
+  white-space: normal;
   word-wrap: break-word;
   font-size: 12px;
-  line-height: 1.6;
   max-height: 500px;
   overflow-y: auto;
 }
@@ -750,10 +744,16 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
   font-style: italic;
 }
 .content-block-body.tool-use .tool-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--purple);
   font-weight: 700;
   font-size: 13px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+}
+.content-block-body.tool-use .tool-name svg {
+  flex-shrink: 0;
 }
 
 .usage-bar {
@@ -916,7 +916,6 @@ footer {
   padding: 10px 14px;
   border-radius: 8px;
   font-size: 13px;
-  line-height: 1.6;
   white-space: pre-wrap;
   word-wrap: break-word;
   max-width: 100%;
@@ -944,7 +943,7 @@ footer {
 }
 
 /* Markdown body rendering */
-.markdown-body { line-height: 1.6; word-wrap: break-word; }
+.markdown-body { word-wrap: break-word; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
   margin: 12px 0 6px; font-weight: 600;
 }
@@ -1747,7 +1746,6 @@ footer {
   overflow-x: auto;
   font-size: 11px;
   color: var(--text-dim);
-  line-height: 1.6;
   margin-top: 4px;
 }
 
