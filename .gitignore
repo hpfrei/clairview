@@ -7,12 +7,8 @@ docs/
 .mcp.json
 .mcp.json.bak
 
-# Claude settings — ignore internal state, track user content
-.claude/*
-!.claude/skills/
-!.claude/agents/
-!.claude/commands/
-!.claude/settings.local.json
+# Claude settings
+.claude/
 
 # Capabilities — ignore runtime state and secrets, track definitions
 capabilities/secrets.json
