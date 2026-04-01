@@ -168,7 +168,8 @@ function renderValue(val, key) {
     const more = val.length > 1 ? '<span class="jt-comma">, </span>…' : '';
     const count = ` <span class="jt-count">// ${val.length}</span>`;
     const summary = `${pv}${more} <span class="jt-bracket">]</span>${count}`;
-    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">[</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">]</span></details>`;
+    const openAttr = JSON.stringify(val, null, 2).split('\n').length <= 3 ? ' open' : '';
+    return `${keyHtml}<details class="jt-node"${openAttr}><summary><span class="jt-bracket">[</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">]</span></details>`;
   }
   if (typeof val === 'object') {
     const keys = Object.keys(val);
@@ -178,7 +179,8 @@ function renderValue(val, key) {
     ).join('');
     const pv = preview(val, 60);
     const summary = `${pv} <span class="jt-bracket">}</span>`;
-    return `${keyHtml}<details class="jt-node"><summary><span class="jt-bracket">{</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">}</span></details>`;
+    const openAttr = JSON.stringify(val, null, 2).split('\n').length <= 3 ? ' open' : '';
+    return `${keyHtml}<details class="jt-node"${openAttr}><summary><span class="jt-bracket">{</span><span class="jt-summary">${summary}</span><span class="jt-expand-btn"></span></summary><div class="jt-children">${children}</div><span class="jt-bracket jt-close">}</span></details>`;
   }
   return keyHtml + escHtml(String(val));
 }

@@ -95,6 +95,9 @@ dashboardApp.post('/api/hook-report', (req, res) => {
   res.status(200).end();
 });
 
+// Landing page (public, no auth)
+dashboardApp.use('/landing_page', express.static(path.join(__dirname, 'public', 'landing_page')));
+
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
   const token = getTokenFromCookies(req.headers.cookie);

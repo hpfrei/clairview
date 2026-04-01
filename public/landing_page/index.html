@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clairview &mdash; The control room for AI coding</title>
+  <meta name="description" content="Inspect, route, automate, extend Claude Code from a single browser dashboard. One local install, zero cloud infrastructure.">
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ====== HERO ====== -->
+  <section class="hero">
+    <div class="landing">
+      <div class="hero-grid">
+        <div class="hero-text">
+          <h1>The control room<br>for AI coding.</h1>
+          <p class="hero-sub">Inspect, route, automate, extend.<br>One local install.</p>
+          <p class="hero-body">clairview sits between Claude Code and the LLM, giving you a browser dashboard over everything. Zero cloud infrastructure.</p>
+          <ul class="hero-highlights">
+            <li>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#1a8a3a" stroke-width="1.5"/><path d="M5.5 9.5l2 2 5-5" stroke="#1a8a3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span><strong>All Claude Code traffic</strong> proxied and recorded &mdash; every API call, every response, fully transparent</span>
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#7744bb" stroke-width="1.5"/><circle cx="6" cy="9" r="2" fill="#7744bb"/><line x1="8" y1="8" x2="13" y2="5" stroke="#7744bb" stroke-width="1.2"/><line x1="8" y1="9" x2="13" y2="9" stroke="#7744bb" stroke-width="1.2"/><line x1="8" y1="10" x2="13" y2="13" stroke="#7744bb" stroke-width="1.2"/></svg>
+              <span><strong>LLM switchable</strong> between Anthropic (default), OpenAI, Gemini, DeepSeek, and Kimi &mdash; one dropdown, automatic protocol translation</span>
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#2255aa" stroke-width="1.5"/><rect x="5" y="7" width="5" height="3" rx="1" fill="#dde4f0"/><rect x="7" y="11" width="6" height="3" rx="1" fill="#f0f0ea" stroke="#c0c0b8" stroke-width="0.5"/></svg>
+              <span><strong>User interactions intercepted</strong> &mdash; AskUserQuestion, confirmations, and prompts appear in the browser and answers flow back to Claude Code</span>
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#cc3344" stroke-width="1.5"/><circle cx="7" cy="7" r="3" stroke="#cc3344" stroke-width="1.2"/><line x1="9.5" y1="9.5" x2="13" y2="13" stroke="#cc3344" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span><strong>Inspector</strong> shows text interactions, tool calls, MCP calls, hooks &mdash; with token counts, timing, and full payloads</span>
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#1088aa" stroke-width="1.5"/><rect x="3" y="7" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><rect x="10" y="4" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><rect x="10" y="11" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><line x1="7" y1="8" x2="10" y2="6.5" stroke="#1088aa" stroke-width="1"/><line x1="7" y1="10" x2="10" y2="12" stroke="#1088aa" stroke-width="1"/></svg>
+              <span><strong>Workflow steps</strong> can use different models per step, with configurable context piped from previous steps</span>
+            </li>
+          </ul>
+          <div class="hero-cta">
+            <button class="cta-primary" id="cta-copy" title="Copy to clipboard">
+              <span>npm install &amp;&amp; npm start</span>
+              <svg class="copy-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.5"/>
+              </svg>
+            </button>
+            <a class="cta-secondary" href="https://github.com/hpfrei/clairview">View on GitHub &rarr;</a>
+          </div>
+        </div>
+        <div class="hero-illustration">
+          <!-- Hero SVG: The Control Room -->
+          <svg viewBox="0 0 480 380" xmlns="http://www.w3.org/2000/svg" fill="none">
+            <!-- Browser chrome -->
+            <rect x="20" y="20" width="420" height="310" rx="10" fill="#fff" stroke="#c0c0b8" stroke-width="1.5"/>
+            <rect x="20" y="20" width="420" height="32" rx="10" fill="#eeeee8"/>
+            <rect x="20" y="42" width="420" height="10" fill="#eeeee8"/>
+            <!-- Window dots -->
+            <circle cx="38" cy="36" r="5" fill="#cc3344"/>
+            <circle cx="54" cy="36" r="5" fill="#c07020"/>
+            <circle cx="70" cy="36" r="5" fill="#1a8a3a"/>
+            <!-- URL bar -->
+            <rect x="90" y="28" width="180" height="16" rx="4" fill="#fff" stroke="#c0c0b8" stroke-width="0.8"/>
+            <text x="100" y="40" font-family="'SF Mono',monospace" font-size="8" fill="#777770">localhost:3457</text>
+
+            <!-- 2x2 panel grid -->
+            <!-- Inspector panel (red) -->
+            <rect x="36" y="64" width="192" height="120" rx="6" fill="#fff" stroke="#cc3344" stroke-width="1.5"/>
+            <rect x="36" y="64" width="192" height="22" rx="6" fill="#cc334410"/>
+            <rect x="36" y="80" width="192" height="6" fill="#cc334410"/>
+            <text x="48" y="79" font-family="'SF Mono',monospace" font-size="9" fill="#cc3344" font-weight="700">Inspector</text>
+            <!-- Data stream lines -->
+            <rect x="48" y="98" width="120" height="3" rx="1.5" fill="#2255aa" opacity="0.6"/>
+            <rect x="48" y="108" width="90" height="3" rx="1.5" fill="#4466cc" opacity="0.5"/>
+            <rect x="48" y="118" width="140" height="3" rx="1.5" fill="#2255aa" opacity="0.4"/>
+            <rect x="48" y="128" width="70" height="3" rx="1.5" fill="#4466cc" opacity="0.3"/>
+            <!-- SSE event dots -->
+            <circle cx="198" cy="100" r="3" fill="#1a8a3a" opacity="0.7"/>
+            <circle cx="198" cy="112" r="3" fill="#cc3344" opacity="0.7"/>
+            <circle cx="198" cy="124" r="3" fill="#2255aa" opacity="0.7"/>
+            <!-- Token counter -->
+            <rect x="48" y="148" width="60" height="14" rx="3" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <text x="58" y="158" font-family="'SF Mono',monospace" font-size="7" fill="#777770">12.4k tok</text>
+
+            <!-- Chat panel (blue) -->
+            <rect x="240" y="64" width="186" height="120" rx="6" fill="#fff" stroke="#2255aa" stroke-width="1.5"/>
+            <rect x="240" y="64" width="186" height="22" rx="6" fill="#2255aa10"/>
+            <rect x="240" y="80" width="186" height="6" fill="#2255aa10"/>
+            <text x="252" y="79" font-family="'SF Mono',monospace" font-size="9" fill="#2255aa" font-weight="700">Chat</text>
+            <!-- Chat bubbles -->
+            <rect x="252" y="96" width="100" height="20" rx="6" fill="#dde4f0"/>
+            <text x="262" y="110" font-family="'SF Mono',monospace" font-size="7" fill="#2c2c2c">refactor auth</text>
+            <rect x="292" y="124" width="120" height="28" rx="6" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <text x="300" y="137" font-family="'SF Mono',monospace" font-size="7" fill="#555">I'll update the</text>
+            <text x="300" y="147" font-family="'SF Mono',monospace" font-size="7" fill="#555">middleware...</text>
+            <!-- Tab indicators -->
+            <rect x="252" y="160" width="16" height="4" rx="2" fill="#2255aa"/>
+            <rect x="272" y="160" width="16" height="4" rx="2" fill="#c0c0b8"/>
+            <rect x="292" y="160" width="16" height="4" rx="2" fill="#c0c0b8"/>
+
+            <!-- Workflows panel (cyan) -->
+            <rect x="36" y="196" width="192" height="120" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
+            <rect x="36" y="196" width="192" height="22" rx="6" fill="#1088aa10"/>
+            <rect x="36" y="212" width="192" height="6" fill="#1088aa10"/>
+            <text x="48" y="211" font-family="'SF Mono',monospace" font-size="9" fill="#1088aa" font-weight="700">Workflows</text>
+            <!-- Step boxes -->
+            <rect x="52" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
+            <text x="62" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">lint</text>
+            <rect x="112" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
+            <text x="118" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">test</text>
+            <rect x="172" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
+            <text x="174" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">deploy</text>
+            <!-- Arrows between steps -->
+            <line x1="96" y1="244" x2="110" y2="244" stroke="#1088aa" stroke-width="1.2"/>
+            <polygon points="110,241 110,247 115,244" fill="#1088aa"/>
+            <line x1="156" y1="244" x2="170" y2="244" stroke="#1088aa" stroke-width="1.2"/>
+            <polygon points="170,241 170,247 175,244" fill="#1088aa"/>
+            <!-- Conditional branch -->
+            <polygon points="134,266 142,274 134,282 126,274" fill="none" stroke="#c07020" stroke-width="1"/>
+            <text x="115" y="290" font-family="'SF Mono',monospace" font-size="7" fill="#c07020">if tests pass</text>
+            <!-- Status -->
+            <circle cx="64" cy="300" r="4" fill="#1a8a3a"/>
+            <text x="72" y="303" font-family="'SF Mono',monospace" font-size="7" fill="#1a8a3a">running</text>
+
+            <!-- Tools panel (green) -->
+            <rect x="240" y="196" width="186" height="120" rx="6" fill="#fff" stroke="#1a8a3a" stroke-width="1.5"/>
+            <rect x="240" y="196" width="186" height="22" rx="6" fill="#1a8a3a10"/>
+            <rect x="240" y="212" width="186" height="6" fill="#1a8a3a10"/>
+            <text x="252" y="211" font-family="'SF Mono',monospace" font-size="9" fill="#1a8a3a" font-weight="700">MCP Tools</text>
+            <!-- Tool items -->
+            <rect x="252" y="230" width="160" height="22" rx="4" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <circle cx="264" cy="241" r="4" fill="#1a8a3a" opacity="0.8"/>
+            <text x="274" y="244" font-family="'SF Mono',monospace" font-size="8" fill="#2c2c2c">fetch_weather</text>
+            <rect x="252" y="258" width="160" height="22" rx="4" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <circle cx="264" cy="269" r="4" fill="#1a8a3a" opacity="0.8"/>
+            <text x="274" y="272" font-family="'SF Mono',monospace" font-size="8" fill="#2c2c2c">query_database</text>
+            <rect x="252" y="286" width="160" height="22" rx="4" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <circle cx="264" cy="297" r="4" fill="#c0c0b8"/>
+            <text x="274" y="300" font-family="'SF Mono',monospace" font-size="8" fill="#777770">parse_csv</text>
+
+            <!-- Floating accents -->
+            <!-- Magnifying glass (red) - top right -->
+            <g transform="translate(438, 10)">
+              <circle cx="14" cy="14" r="10" fill="none" stroke="#cc3344" stroke-width="2"/>
+              <line x1="21" y1="21" x2="30" y2="30" stroke="#cc3344" stroke-width="2.5" stroke-linecap="round"/>
+              <line x1="10" y1="14" x2="18" y2="14" stroke="#cc3344" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+            </g>
+            <!-- Router arrows (purple) - bottom left -->
+            <g transform="translate(2, 300)">
+              <circle cx="8" cy="18" r="4" fill="#7744bb"/>
+              <line x1="12" y1="14" x2="28" y2="6" stroke="#7744bb" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="12" y1="18" x2="28" y2="18" stroke="#7744bb" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="12" y1="22" x2="28" y2="30" stroke="#7744bb" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="30" cy="6" r="3" fill="#1a8a3a" opacity="0.7"/>
+              <circle cx="30" cy="18" r="3" fill="#cc3344" opacity="0.7"/>
+              <circle cx="30" cy="30" r="3" fill="#2255aa" opacity="0.7"/>
+            </g>
+            <!-- Gear (green) - bottom right -->
+            <g transform="translate(446, 310)">
+              <circle cx="14" cy="14" r="6" fill="none" stroke="#1a8a3a" stroke-width="2"/>
+              <circle cx="14" cy="14" r="2" fill="#1a8a3a"/>
+              <!-- gear teeth -->
+              <line x1="14" y1="4" x2="14" y2="8" stroke="#1a8a3a" stroke-width="2" stroke-linecap="round"/>
+              <line x1="14" y1="20" x2="14" y2="24" stroke="#1a8a3a" stroke-width="2" stroke-linecap="round"/>
+              <line x1="4" y1="14" x2="8" y2="14" stroke="#1a8a3a" stroke-width="2" stroke-linecap="round"/>
+              <line x1="20" y1="14" x2="24" y2="14" stroke="#1a8a3a" stroke-width="2" stroke-linecap="round"/>
+            </g>
+
+            <!-- Dashed connectors from floating icons to panels -->
+            <line x1="438" y1="30" x2="426" y2="64" stroke="#cc3344" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+            <line x1="30" y1="318" x2="36" y2="300" stroke="#7744bb" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+            <line x1="456" y1="330" x2="426" y2="316" stroke="#1a8a3a" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== POSITIONING RIBBON ====== -->
+  <section class="ribbon fade-in-section">
+    <div class="landing">
+      <div class="ribbon-items">
+
+        <div class="ribbon-pill" style="border-color: #cc3344">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <circle cx="10" cy="10" r="6" stroke="#cc3344" stroke-width="1.5"/>
+            <line x1="14.5" y1="14.5" x2="20" y2="20" stroke="#cc3344" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <div class="ribbon-pill-text">
+            <span class="ribbon-pill-label" style="color:#cc3344">API Inspector</span>
+            <span class="ribbon-pill-replaces">replaces Langfuse, Helicone</span>
+          </div>
+        </div>
+
+        <div class="ribbon-pill" style="border-color: #7744bb">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <circle cx="6" cy="12" r="3" fill="#7744bb"/>
+            <line x1="9" y1="10" x2="17" y2="5" stroke="#7744bb" stroke-width="1.5"/>
+            <line x1="9" y1="12" x2="17" y2="12" stroke="#7744bb" stroke-width="1.5"/>
+            <line x1="9" y1="14" x2="17" y2="19" stroke="#7744bb" stroke-width="1.5"/>
+            <circle cx="19" cy="5" r="2" fill="#1a8a3a"/>
+            <circle cx="19" cy="12" r="2" fill="#cc3344"/>
+            <circle cx="19" cy="19" r="2" fill="#2255aa"/>
+          </svg>
+          <div class="ribbon-pill-text">
+            <span class="ribbon-pill-label" style="color:#7744bb">Provider Router</span>
+            <span class="ribbon-pill-replaces">replaces LiteLLM, OpenRouter</span>
+          </div>
+        </div>
+
+        <div class="ribbon-pill" style="border-color: #1088aa">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <rect x="2" y="9" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
+            <rect x="12" y="4" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
+            <rect x="12" y="14" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
+            <line x1="8" y1="11" x2="12" y2="8" stroke="#1088aa" stroke-width="1.5"/>
+            <line x1="8" y1="13" x2="12" y2="16" stroke="#1088aa" stroke-width="1.5"/>
+            <line x1="18" y1="10" x2="22" y2="14" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="2,2"/>
+          </svg>
+          <div class="ribbon-pill-text">
+            <span class="ribbon-pill-label" style="color:#1088aa">Workflow Engine</span>
+            <span class="ribbon-pill-replaces">replaces LangGraph, CrewAI</span>
+          </div>
+        </div>
+
+        <div class="ribbon-pill" style="border-color: #1a8a3a">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M10 4L7 8l3 4" stroke="#1a8a3a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M7 8h7a3 3 0 010 6H9" stroke="#1a8a3a" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="18" cy="6" r="4" fill="#1a8a3a"/>
+            <line x1="16" y1="6" x2="20" y2="6" stroke="#fff" stroke-width="1.5"/>
+            <line x1="18" y1="4" x2="18" y2="8" stroke="#fff" stroke-width="1.5"/>
+          </svg>
+          <div class="ribbon-pill-text">
+            <span class="ribbon-pill-label" style="color:#1a8a3a">MCP Tool Manager</span>
+            <span class="ribbon-pill-replaces">replaces custom MCP servers</span>
+          </div>
+        </div>
+
+        <div class="ribbon-pill" style="border-color: #2255aa">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="5" width="18" height="14" rx="2" stroke="#2255aa" stroke-width="1.5"/>
+            <rect x="5" y="10" width="8" height="3" rx="1.5" fill="#dde4f0"/>
+            <rect x="9" y="14" width="9" height="3" rx="1.5" fill="#f0f0ea" stroke="#c0c0b8" stroke-width="0.5"/>
+          </svg>
+          <div class="ribbon-pill-text">
+            <span class="ribbon-pill-label" style="color:#2255aa">Browser Chat</span>
+            <span class="ribbon-pill-replaces">replaces terminal tabs</span>
+          </div>
+        </div>
+
+      </div>
+      <p class="ribbon-tagline">No competitor combines all five. clairview does, in one <code>npm install</code>.</p>
+    </div>
+  </section>
+
+  <!-- ====== FEATURES ====== -->
+  <section class="features fade-in-section">
+    <div class="landing">
+      <h2>Everything in one dashboard</h2>
+      <div class="feature-grid">
+
+        <!-- Inspector -->
+        <div class="feature-card" data-color="red">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <circle cx="20" cy="20" r="12" stroke="#cc3344" stroke-width="2.5"/>
+            <line x1="29" y1="29" x2="40" y2="40" stroke="#cc3344" stroke-width="3" stroke-linecap="round"/>
+            <rect x="12" y="16" width="14" height="2" rx="1" fill="#2255aa" opacity="0.7"/>
+            <rect x="12" y="21" width="10" height="2" rx="1" fill="#4466cc" opacity="0.6"/>
+            <rect x="12" y="26" width="16" height="2" rx="1" fill="#2255aa" opacity="0.5"/>
+          </svg>
+          <h3>Wire-level API inspection</h3>
+          <p>See every request, response, SSE event, and tool call between Claude Code and the LLM. Token usage, timing, headers &mdash; nothing hidden.</p>
+        </div>
+
+        <!-- Routing -->
+        <div class="feature-card" data-color="purple">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <circle cx="10" cy="24" r="6" fill="#7744bb"/>
+            <text x="10" y="27" text-anchor="middle" font-family="monospace" font-size="7" fill="#fff" font-weight="700">API</text>
+            <line x1="16" y1="20" x2="30" y2="10" stroke="#1a8a3a" stroke-width="2"/>
+            <line x1="16" y1="24" x2="30" y2="24" stroke="#cc3344" stroke-width="2"/>
+            <line x1="16" y1="28" x2="30" y2="38" stroke="#2255aa" stroke-width="2"/>
+            <circle cx="34" cy="10" r="5" fill="none" stroke="#1a8a3a" stroke-width="1.5"/>
+            <text x="34" y="13" text-anchor="middle" font-family="monospace" font-size="5" fill="#1a8a3a">OAI</text>
+            <circle cx="34" cy="24" r="5" fill="none" stroke="#cc3344" stroke-width="1.5"/>
+            <text x="34" y="27" text-anchor="middle" font-family="monospace" font-size="5" fill="#cc3344">Gem</text>
+            <circle cx="34" cy="38" r="5" fill="none" stroke="#2255aa" stroke-width="1.5"/>
+            <text x="34" y="41" text-anchor="middle" font-family="monospace" font-size="5" fill="#2255aa">DS</text>
+          </svg>
+          <h3>Route through any model</h3>
+          <p>Send Claude Code traffic through OpenAI, Gemini, DeepSeek, Moonshot, or local Ollama models. Automatic protocol translation. Switch with a dropdown.</p>
+        </div>
+
+        <!-- Workflows -->
+        <div class="feature-card" data-color="cyan">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect x="2" y="16" width="12" height="10" rx="2" fill="none" stroke="#1088aa" stroke-width="1.5"/>
+            <text x="8" y="23" text-anchor="middle" font-family="monospace" font-size="6" fill="#1088aa">1</text>
+            <rect x="20" y="16" width="12" height="10" rx="2" fill="none" stroke="#1088aa" stroke-width="1.5"/>
+            <text x="26" y="23" text-anchor="middle" font-family="monospace" font-size="6" fill="#1088aa">2</text>
+            <rect x="38" y="8" width="10" height="10" rx="2" fill="none" stroke="#1a8a3a" stroke-width="1.5"/>
+            <text x="43" y="15" text-anchor="middle" font-family="monospace" font-size="6" fill="#1a8a3a">3a</text>
+            <rect x="38" y="26" width="10" height="10" rx="2" fill="none" stroke="#c07020" stroke-width="1.5"/>
+            <text x="43" y="33" text-anchor="middle" font-family="monospace" font-size="6" fill="#c07020">3b</text>
+            <!-- arrows -->
+            <line x1="14" y1="21" x2="20" y2="21" stroke="#1088aa" stroke-width="1.5"/>
+            <polygon points="19,19 19,23 22,21" fill="#1088aa"/>
+            <line x1="32" y1="18" x2="38" y2="13" stroke="#1a8a3a" stroke-width="1.5"/>
+            <line x1="32" y1="24" x2="38" y2="31" stroke="#c07020" stroke-width="1.5"/>
+            <!-- diamond -->
+            <polygon points="33,21 36,18 39,21 36,24" fill="none" stroke="#c07020" stroke-width="1"/>
+            <!-- NL label -->
+            <text x="8" y="40" font-family="monospace" font-size="6" fill="#777770">describe in English</text>
+          </svg>
+          <h3>NL-to-workflow pipelines</h3>
+          <p>Describe a workflow in plain English, get a compiled multi-step pipeline. Branching, parallelism, retries, per-step profiles. Each step is a full <code>claude -p</code> session.</p>
+        </div>
+
+        <!-- MCP Tools -->
+        <div class="feature-card" data-color="green">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <!-- wrench body -->
+            <path d="M12 36L28 20" stroke="#1a8a3a" stroke-width="3" stroke-linecap="round"/>
+            <path d="M26 22c-1-3 0-7 3-10 1 3 4 4 7 3-1 4-4 7-8 7z" fill="#1a8a3a" opacity="0.3" stroke="#1a8a3a" stroke-width="1.5"/>
+            <circle cx="12" cy="36" r="3" fill="none" stroke="#1a8a3a" stroke-width="1.5"/>
+            <!-- plus badge -->
+            <circle cx="38" cy="10" r="7" fill="#1a8a3a"/>
+            <line x1="35" y1="10" x2="41" y2="10" stroke="#fff" stroke-width="2"/>
+            <line x1="38" y1="7" x2="38" y2="13" stroke="#fff" stroke-width="2"/>
+            <!-- param lines -->
+            <text x="4" y="46" font-family="monospace" font-size="6" fill="#777770">name: string</text>
+            <text x="28" y="46" font-family="monospace" font-size="6" fill="#777770">type: number</text>
+          </svg>
+          <h3>Custom tools from the browser</h3>
+          <p>Form-driven editor for MCP tools. Define parameters, write the handler, test inline. Auto-generated server &mdash; Claude gets the capability instantly.</p>
+        </div>
+
+        <!-- Chat -->
+        <div class="feature-card" data-color="blue">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <!-- browser frame -->
+            <rect x="4" y="4" width="40" height="34" rx="4" fill="none" stroke="#2255aa" stroke-width="1.5"/>
+            <line x1="4" y1="12" x2="44" y2="12" stroke="#2255aa" stroke-width="1"/>
+            <circle cx="10" cy="8" r="1.5" fill="#cc3344"/>
+            <circle cx="16" cy="8" r="1.5" fill="#c07020"/>
+            <circle cx="22" cy="8" r="1.5" fill="#1a8a3a"/>
+            <!-- chat bubbles -->
+            <rect x="8" y="16" width="18" height="6" rx="3" fill="#dde4f0"/>
+            <rect x="18" y="26" width="22" height="8" rx="3" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="0.5"/>
+            <!-- tab indicators -->
+            <rect x="10" y="42" width="8" height="3" rx="1.5" fill="#2255aa"/>
+            <rect x="21" y="42" width="8" height="3" rx="1.5" fill="#c0c0b8"/>
+            <rect x="32" y="42" width="8" height="3" rx="1.5" fill="#c0c0b8"/>
+          </svg>
+          <h3>Multi-tab Claude sessions</h3>
+          <p>Run Claude Code from any device. Multiple parallel sessions, each with its own profile and working directory. AskUserQuestion interception, live task tracking.</p>
+        </div>
+
+        <!-- Profiles -->
+        <div class="feature-card" data-color="orange">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <!-- slider tracks -->
+            <line x1="8" y1="12" x2="40" y2="12" stroke="#c0c0b8" stroke-width="2" stroke-linecap="round"/>
+            <line x1="8" y1="24" x2="40" y2="24" stroke="#c0c0b8" stroke-width="2" stroke-linecap="round"/>
+            <line x1="8" y1="36" x2="40" y2="36" stroke="#c0c0b8" stroke-width="2" stroke-linecap="round"/>
+            <!-- slider knobs -->
+            <circle cx="30" cy="12" r="5" fill="#c07020"/>
+            <circle cx="18" cy="24" r="5" fill="#1088aa"/>
+            <circle cx="36" cy="36" r="5" fill="#7744bb"/>
+            <!-- labels -->
+            <text x="8" y="8" font-family="monospace" font-size="6" fill="#777770">model</text>
+            <text x="8" y="20" font-family="monospace" font-size="6" fill="#777770">effort</text>
+            <text x="8" y="32" font-family="monospace" font-size="6" fill="#777770">perms</text>
+          </svg>
+          <h3>Profiles, skills, agents, hooks</h3>
+          <p>Named capability bundles control model, effort, permissions, budget. Create skills, agents, and lifecycle hooks from a visual editor. Stored in <code>.claude/</code> for auto-discovery.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== ARCHITECTURE ====== -->
+  <section class="architecture fade-in-section">
+    <div class="landing">
+      <h2>How it works</h2>
+      <svg class="architecture-svg" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" fill="none">
+        <defs>
+          <marker id="ah-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#2255aa"/>
+          </marker>
+          <marker id="ah-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#7744bb"/>
+          </marker>
+          <marker id="ah-cyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#1088aa"/>
+          </marker>
+        </defs>
+
+        <!-- Browser UI box -->
+        <rect x="20" y="40" width="200" height="120" rx="8" fill="#fff" stroke="#2255aa" stroke-width="2"/>
+        <text x="120" y="68" text-anchor="middle" font-family="'SF Mono',monospace" font-size="16" fill="#2255aa" font-weight="700">Browser UI</text>
+        <text x="120" y="86" text-anchor="middle" font-family="'SF Mono',monospace" font-size="11" fill="#777770">Dashboard :3457</text>
+        <line x1="40" y1="96" x2="200" y2="96" stroke="#c0c0b8" stroke-width="0.5"/>
+        <text x="120" y="114" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#777770">Inspector | Chat</text>
+        <text x="120" y="130" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#777770">Workflows | Tools</text>
+
+        <!-- clairview server box -->
+        <rect x="310" y="20" width="280" height="160" rx="8" fill="#fff" stroke="#1a8a3a" stroke-width="2"/>
+        <text x="450" y="48" text-anchor="middle" font-family="'SF Mono',monospace" font-size="16" fill="#1a8a3a" font-weight="700">clairview server</text>
+        <line x1="330" y1="58" x2="570" y2="58" stroke="#c0c0b8" stroke-width="0.5"/>
+        <!-- Sub-boxes -->
+        <rect x="325" y="68" width="120" height="48" rx="4" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="385" y="88" text-anchor="middle" font-family="'SF Mono',monospace" font-size="11" fill="#2c2c2c" font-weight="600">Proxy :3456</text>
+        <text x="385" y="104" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">SSE passthrough</text>
+        <rect x="455" y="68" width="120" height="48" rx="4" fill="#f5f5f0" stroke="#c0c0b8" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="515" y="88" text-anchor="middle" font-family="'SF Mono',monospace" font-size="11" fill="#2c2c2c" font-weight="600">WS :3457</text>
+        <text x="515" y="104" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">broadcast hub</text>
+        <!-- Provider routing label -->
+        <rect x="340" y="130" width="220" height="36" rx="4" fill="#7744bb10" stroke="#7744bb" stroke-width="0.8"/>
+        <text x="450" y="148" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#7744bb" font-weight="600">Provider Adapter Layer</text>
+        <text x="450" y="160" text-anchor="middle" font-family="'SF Mono',monospace" font-size="8" fill="#7744bb">translate Anthropic ↔ any provider</text>
+
+        <!-- LLM APIs box -->
+        <rect x="680" y="40" width="200" height="120" rx="8" fill="#fff" stroke="#7744bb" stroke-width="2"/>
+        <text x="780" y="68" text-anchor="middle" font-family="'SF Mono',monospace" font-size="16" fill="#7744bb" font-weight="700">LLM APIs</text>
+        <line x1="700" y1="78" x2="860" y2="78" stroke="#c0c0b8" stroke-width="0.5"/>
+        <text x="780" y="96" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#2c2c2c">Anthropic</text>
+        <text x="780" y="112" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#2c2c2c">OpenAI  &middot;  Gemini</text>
+        <text x="780" y="128" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#2c2c2c">DeepSeek  &middot;  Ollama</text>
+
+        <!-- Arrows -->
+        <!-- Browser -> Server (WebSocket) -->
+        <line x1="220" y1="100" x2="308" y2="100" stroke="#2255aa" stroke-width="2" marker-end="url(#ah-blue)"/>
+        <rect x="233" y="88" width="66" height="18" rx="3" fill="#fff" stroke="#2255aa" stroke-width="0.8"/>
+        <text x="266" y="101" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#2255aa" font-weight="600">WebSocket</text>
+
+        <!-- Server -> APIs (HTTP/SSE) -->
+        <line x1="590" y1="100" x2="678" y2="100" stroke="#7744bb" stroke-width="2" marker-end="url(#ah-purple)"/>
+        <rect x="603" y="88" width="62" height="18" rx="3" fill="#fff" stroke="#7744bb" stroke-width="0.8"/>
+        <text x="634" y="101" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#7744bb" font-weight="600">HTTP/SSE</text>
+
+        <!-- Below server: sessions and workflows -->
+        <rect x="330" y="210" width="110" height="44" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
+        <text x="385" y="234" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#1088aa" font-weight="600">claude -p</text>
+        <text x="385" y="246" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">sessions</text>
+
+        <rect x="460" y="210" width="110" height="44" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
+        <text x="515" y="234" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#1088aa" font-weight="600">Workflows</text>
+        <text x="515" y="246" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">pipelines</text>
+
+        <!-- Server -> sessions (spawn) -->
+        <line x1="385" y1="180" x2="385" y2="208" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
+        <line x1="515" y1="180" x2="515" y2="208" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
+
+        <!-- Extensions note -->
+        <rect x="330" y="270" width="240" height="24" rx="4" fill="#c0702010" stroke="#c07020" stroke-width="0.8" stroke-dasharray="4,3"/>
+        <text x="450" y="286" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#c07020">.claude/ &mdash; skills, agents, hooks (auto-discovered)</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ====== GET STARTED ====== -->
+  <section class="get-started fade-in-section">
+    <div class="landing">
+      <h2>Running in 60 seconds</h2>
+      <div class="steps">
+        <div class="step">
+          <span class="step-num">1</span>
+          <div class="step-code">git clone https://github.com/hpfrei/clairview.git &amp;&amp; cd clairview</div>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <div class="step-code">npm install</div>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <div class="step-code">npm start <span class="dim"># open localhost:3457</span></div>
+        </div>
+      </div>
+      <div class="env-callout">
+        <strong>Inspect external sessions</strong>
+        Point any Claude Code instance at the proxy:<br>
+        <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TARGET USERS ====== -->
+  <section class="personas fade-in-section">
+    <div class="landing">
+      <h2>Who is this for?</h2>
+      <div class="persona-grid">
+
+        <div class="persona-card">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <rect x="4" y="4" width="32" height="24" rx="3" stroke="#2255aa" stroke-width="1.5"/>
+            <line x1="4" y1="10" x2="36" y2="10" stroke="#2255aa" stroke-width="0.8"/>
+            <rect x="8" y="14" width="12" height="2" rx="1" fill="#2255aa" opacity="0.5"/>
+            <rect x="8" y="19" width="18" height="2" rx="1" fill="#2255aa" opacity="0.3"/>
+            <line x1="14" y1="32" x2="26" y2="32" stroke="#c0c0b8" stroke-width="1.5"/>
+            <line x1="20" y1="28" x2="20" y2="32" stroke="#c0c0b8" stroke-width="1.5"/>
+          </svg>
+          <h4>Solo devs using Claude Code</h4>
+          <p>"Finally see what your AI is actually doing"</p>
+        </div>
+
+        <div class="persona-card">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <circle cx="16" cy="16" r="8" stroke="#cc3344" stroke-width="1.5"/>
+            <line x1="22" y1="22" x2="32" y2="32" stroke="#cc3344" stroke-width="2" stroke-linecap="round"/>
+            <rect x="10" y="14" width="10" height="1.5" rx="0.75" fill="#2255aa" opacity="0.6"/>
+            <rect x="10" y="17" width="7" height="1.5" rx="0.75" fill="#2255aa" opacity="0.4"/>
+          </svg>
+          <h4>AI tool builders</h4>
+          <p>"Wire-level inspection without Wireshark"</p>
+        </div>
+
+        <div class="persona-card">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <circle cx="20" cy="20" r="14" stroke="#1a8a3a" stroke-width="1.5"/>
+            <text x="20" y="24" text-anchor="middle" font-family="monospace" font-size="10" fill="#1a8a3a" font-weight="700">$</text>
+            <line x1="20" y1="10" x2="20" y2="12" stroke="#1a8a3a" stroke-width="1.5"/>
+            <line x1="20" y1="28" x2="20" y2="30" stroke="#1a8a3a" stroke-width="1.5"/>
+          </svg>
+          <h4>Cost-conscious teams</h4>
+          <p>"Try cheaper models with one dropdown change"</p>
+        </div>
+
+        <div class="persona-card">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <rect x="8" y="6" width="24" height="28" rx="3" stroke="#7744bb" stroke-width="1.5"/>
+            <circle cx="20" cy="18" r="5" stroke="#7744bb" stroke-width="1.5"/>
+            <line x1="20" y1="15" x2="20" y2="21" stroke="#7744bb" stroke-width="1.5"/>
+            <line x1="17" y1="18" x2="23" y2="18" stroke="#7744bb" stroke-width="1.5"/>
+            <rect x="14" y="26" width="12" height="4" rx="2" fill="#7744bb" opacity="0.2"/>
+          </svg>
+          <h4>Privacy-sensitive developers</h4>
+          <p>"Everything runs on localhost. No cloud telemetry."</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== FOOTER ====== -->
+  <footer>
+    <div class="landing">
+      <p>clairview &mdash; open source under BUSL-1.1</p>
+      <nav>
+        <a href="https://github.com/hpfrei/clairview">GitHub</a>
+        <a href="https://github.com/hpfrei/clairview#readme">README</a>
+        <a href="https://github.com/hpfrei/clairview/issues">Report an issue</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- Scroll animation observer -->
+  <script>
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.fade-in-section').forEach(s => observer.observe(s));
+
+    document.getElementById('cta-copy').addEventListener('click', function() {
+      navigator.clipboard.writeText('npm install && npm start').then(() => {
+        this.classList.add('copied');
+        this.querySelector('span').textContent = 'copied!';
+        setTimeout(() => { this.classList.remove('copied'); this.querySelector('span').textContent = 'npm install && npm start'; }, 1500);
+      });
+    });
+  </script>
+
+</body>
+</html>

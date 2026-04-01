@@ -6,6 +6,25 @@
 
   let cachedSessions = [];
 
+  // --- Auto-select suppression: don't jump away from user-selected turns ---
+  let _userPinnedSelection = false;
+
+  // --- Streaming text block merge state ---
+  let _streamBlockMap = new Map();   // index -> { bodyEl, needsSeparator }
+  let _lastStreamTextBodyEl = null;
+  let _pendingMarkdownBodyEl = null;
+
+  function flushPendingMarkdown() {
+    if (_pendingMarkdownBodyEl) {
+      const rawText = _pendingMarkdownBodyEl.textContent;
+      if (rawText) {
+        _pendingMarkdownBodyEl.classList.add('markdown-body');
+        renderMarkdown(rawText, _pendingMarkdownBodyEl);
+      }
+      _pendingMarkdownBodyEl = null;
+    }
+  }
+
   // --- Timeline filter ---
   let activeTimelineFilter = 'all';
   const timelineFilter = document.getElementById('timelineFilter');
@@ -243,6 +262,9 @@
       const statusVal = document.getElementById('resp-status');
       if (statusVal) { statusVal.textContent = '200'; statusVal.className = 'info-value status-ok'; }
       if (data?.message?.usage) updateUsageDisplay(data.message.usage);
+      _streamBlockMap = new Map();
+      _lastStreamTextBodyEl = null;
+      _pendingMarkdownBodyEl = null;
     }
 
     if (eventType === 'content_block_start') {
@@ -250,6 +272,18 @@
       if (!block) return;
       const container = document.getElementById('response-blocks');
       if (!container) return;
+
+      // Flush pending markdown when a non-text block arrives
+      if (block.type !== 'text') {
+        flushPendingMarkdown();
+        _lastStreamTextBodyEl = null;
+      }
+
+      // Merge consecutive text blocks: reuse previous text block's body
+      if (block.type === 'text' && _lastStreamTextBodyEl) {
+        _streamBlockMap.set(data.index, { bodyEl: _lastStreamTextBodyEl, needsSeparator: true });
+        return;
+      }
 
       const blockEl = document.createElement('div');
       blockEl.className = 'content-block';
@@ -267,6 +301,8 @@
         body.classList.add('thinking');
       } else if (block.type === 'text') {
         header.textContent = 'Text';
+        _lastStreamTextBodyEl = body;
+        _streamBlockMap.set(data.index, { bodyEl: body, needsSeparator: false });
       } else if (block.type === 'tool_use') {
         header.textContent = `Tool Use: ${block.name || ''}`;
         body.classList.add('tool-use');
@@ -283,10 +319,15 @@
     if (eventType === 'content_block_delta') {
       const delta = data?.delta;
       if (!delta) return;
-      const bodyEl = document.getElementById(`block-body-${data.index}`);
-      if (!bodyEl) return;
 
       if (delta.type === 'thinking_delta' || delta.type === 'text_delta') {
+        const entry = _streamBlockMap.get(data.index);
+        const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
+        if (!bodyEl) return;
+        if (entry?.needsSeparator) {
+          bodyEl.appendChild(document.createTextNode('\n'));
+          entry.needsSeparator = false;
+        }
         bodyEl.appendChild(document.createTextNode(delta.thinking || delta.text || ''));
         bodyEl.scrollTop = bodyEl.scrollHeight;
       } else if (delta.type === 'input_json_delta') {
@@ -303,14 +344,11 @@
           inputEl.innerHTML = renderJSON(parsed);
         } catch {}
       }
-      // Render markdown for text blocks after streaming completes
-      const bodyEl = document.getElementById(`block-body-${data.index}`);
+      // Defer markdown rendering for text blocks (may be followed by more text blocks to merge)
+      const entry = _streamBlockMap.get(data.index);
+      const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
       if (bodyEl && !bodyEl.classList.contains('tool-use') && !bodyEl.classList.contains('thinking')) {
-        const rawText = bodyEl.textContent;
-        if (rawText) {
-          bodyEl.classList.add('markdown-body');
-          renderMarkdown(rawText, bodyEl);
-        }
+        _pendingMarkdownBodyEl = bodyEl;
       }
     }
 
@@ -327,6 +365,8 @@
     }
 
     if (eventType === 'message_stop') {
+      flushPendingMarkdown();
+      _lastStreamTextBodyEl = null;
       if (interaction.timing) {
         const durationEl = document.getElementById('resp-duration');
         if (durationEl) durationEl.textContent = formatDuration(interaction.timing.duration);
@@ -429,6 +469,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      _userPinnedSelection = true;
       select({ type: 'turn', id: interaction.id });
     });
 
@@ -476,6 +517,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      _userPinnedSelection = true;
       select({ type: 'turn', id: interaction.id });
     });
 
@@ -509,6 +551,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
+      _userPinnedSelection = true;
       select({ type: 'turn', id: interaction.id });
     });
 
@@ -538,6 +581,7 @@
     `;
     toolEl.addEventListener('click', (e) => {
       e.stopPropagation();
+      _userPinnedSelection = true;
       select({ type: 'tool', interactionId, toolIndex: toolIdx });
     });
     return toolEl;
@@ -814,7 +858,8 @@
       html += renderAccumulatedBlocks(resp.sseEvents);
     } else if (resp.body) {
       if (resp.body.content) {
-        for (const block of resp.body.content) html += renderStaticBlock(block);
+        const merged = mergeConsecutiveTextBlocks(resp.body.content);
+        for (const block of merged) html += renderStaticBlock(block);
       }
       if (resp.body.type === 'error') {
         html += `<div class="content-block">
@@ -915,6 +960,7 @@
     if (link) {
       link.addEventListener('click', (e) => {
         e.preventDefault();
+        _userPinnedSelection = true;
         select({ type: 'turn', id: link.dataset.turnId });
       });
     }
@@ -923,6 +969,21 @@
   // ============================================================
   // RENDERING HELPERS
   // ============================================================
+
+  function mergeConsecutiveTextBlocks(blocks) {
+    const merged = [];
+    for (const block of blocks) {
+      if (block.type === 'text') {
+        const prev = merged[merged.length - 1];
+        if (prev && prev.type === 'text') {
+          prev.text = (prev.text || '') + '\n' + (block.text || '');
+          continue;
+        }
+      }
+      merged.push({ ...block });
+    }
+    return merged;
+  }
 
   function renderAccumulatedBlocks(events) {
     const blocks = [];
@@ -943,7 +1004,8 @@
       }
     }
 
-    return blocks.map(b => {
+    const mergedBlocks = mergeConsecutiveTextBlocks(blocks);
+    return mergedBlocks.map(b => {
       if (b.type === 'thinking') {
         return `<div class="content-block">
           <div class="content-block-header">Thinking</div>
@@ -1073,7 +1135,8 @@
     let html = '<p>No interaction selected.</p>';
     if (cachedSessions.length > 0) {
       html += '<div class="session-list-empty">';
-      html += '<p class="session-list-title">Sessions</p>';
+      html += '<div class="session-list-header"><p class="session-list-title">Sessions</p>';
+      html += '<button class="session-list-delete-all">Delete All</button></div>';
       for (const s of cachedSessions) {
         const isActive = s.id === state.activeSessionId;
         html += `<div class="session-list-item${isActive ? ' active' : ''}" data-session-id="${s.id}">`;
@@ -1110,12 +1173,24 @@
         }
       });
     });
+    const deleteAllBtn = emptyState.querySelector('.session-list-delete-all');
+    if (deleteAllBtn) {
+      deleteAllBtn.addEventListener('click', () => {
+        if (state.ws?.readyState !== WebSocket.OPEN) return;
+        for (const s of cachedSessions) {
+          if (s.id !== state.activeSessionId) {
+            sendWs({ type: 'session:delete', id: s.id });
+          }
+        }
+      });
+    }
   }
 
   // --- Message handler ---
   function handleMessage(msg) {
     switch (msg.type) {
       case 'init':
+        _userPinnedSelection = false;
         state.interactions = msg.interactions || [];
         renderTimeline();
         updateStats();
@@ -1132,7 +1207,9 @@
         appendTurnToTimeline(msg.interaction);
         updateStats();
         updateInspectorBusy();
-        select({ type: 'turn', id: msg.interaction.id });
+        if (!_userPinnedSelection) {
+          select({ type: 'turn', id: msg.interaction.id });
+        }
         scrollTimelineToBottom();
         break;
 
@@ -1159,6 +1236,7 @@
         break;
 
       case 'session:switched':
+        _userPinnedSelection = false;
         state.interactions = msg.interactions || [];
         state.selection = null;
         renderTimeline();

@@ -441,13 +441,31 @@ section#detail {
   width: 100%;
   max-width: 360px;
 }
+.session-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
 .session-list-title {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-dim);
-  margin-bottom: 8px;
-  text-align: center;
+  margin: 0;
+}
+.session-list-delete-all {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--danger, #e55);
+  background: var(--bg-main);
+  color: var(--danger, #e55);
+  cursor: pointer;
+}
+.session-list-delete-all:hover {
+  background: var(--danger, #e55);
+  color: #fff;
 }
 .session-list-item {
   display: flex;
