@@ -40,16 +40,17 @@ function buildClaudeArgs(profile) {
 /**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
-function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemory, dashboardPort, authToken }) {
+// Live tracking of running Claude processes
+const _activeProcesses = new Set();
+let _processBroadcaster = null;
+function setProcessBroadcaster(broadcaster) { _processBroadcaster = broadcaster; }
+function getActiveProcessCount() { return _activeProcesses.size; }
+
+function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken }) {
   const env = { ...process.env };
   if (proxyPort) {
-    if (direct) {
-      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/direct`;
-    } else if (modelName) {
-      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/use-model/${modelName}`;
-    } else {
-      env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}`;
-    }
+    const profile = profileName ? `/p/${encodeURIComponent(profileName)}` : '';
+    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}${profile}`;
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
@@ -58,7 +59,22 @@ function spawnClaude(args, { cwd, proxyPort, direct, modelName, disableAutoMemor
   }
   if (dashboardPort) env.CLAIRVIEW_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.CLAIRVIEW_AUTH_TOKEN = authToken;
-  return spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+
+  _activeProcesses.add(proc);
+  _broadcastProcessCount();
+  proc.on('exit', () => {
+    _activeProcesses.delete(proc);
+    _broadcastProcessCount();
+  });
+
+  return proc;
+}
+
+function _broadcastProcessCount() {
+  if (_processBroadcaster) {
+    _processBroadcaster.broadcast({ type: 'claude:count', count: _activeProcesses.size });
+  }
 }
 
 /**
@@ -218,6 +234,8 @@ module.exports = {
   sanitizeForDashboard,
   buildClaudeArgs,
   spawnClaude,
+  setProcessBroadcaster,
+  getActiveProcessCount,
   createStreamJsonParser,
   OUTPUTS_DIR,
   resolveOutputDir,

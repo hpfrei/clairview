@@ -995,11 +995,30 @@ Available templates in this skill directory:
     statusEl.classList.remove('hidden');
     statusEl.textContent = 'Starting pricing lookup via Claude...';
 
+    // Derive project root from outputsDir (strip trailing /outputs)
+    const projectRoot = (state.outputsDir || '').replace(/\/outputs\/?$/, '');
+    const modelsPath = projectRoot + '/capabilities/models.json';
+    const anthropicPath = projectRoot + '/capabilities/anthropic-pricing.json';
+
     // Build model list for the prompt
     const modelList = state.models.map(m => `${m.label || m.name} (modelId: ${m.modelId}, provider: ${m.providerKey})`).join('\n');
-    const prompt = `Look up the current official API pricing (as of today) for these models:\n${modelList}\n\nAlso include these Anthropic Claude models: claude-opus-4, claude-sonnet-4, claude-haiku-4.\n\nFor each model, return the cost per 1 million tokens in USD for: input, output, cache_read (if available), cache_create (if available).\n\nReturn ONLY a valid JSON object with this exact structure (no markdown, no explanation):\n{\n  "models": {\n    "<name from the list above>": { "inputCostPerMTok": <number>, "outputCostPerMTok": <number>, "cacheReadCostPerMTok": <number or null>, "cacheCreateCostPerMTok": <number or null> },\n    ...\n  },\n  "anthropic": {\n    "claude-opus-4": { ... },\n    "claude-sonnet-4": { ... },\n    "claude-haiku-4": { ... }\n  }\n}`;
+    const prompt = `Update the pricing data for AI models by directly editing the pricing files on disk.
 
-    const body = JSON.stringify({ type: 'chat', prompt });
+Steps:
+1. Read ${modelsPath} to see the current model definitions.
+2. Read ${anthropicPath} to see the current Anthropic pricing entries.
+3. Look up the current official API pricing (per million tokens, in USD) for:
+   - Each model found in models.json (third-party models listed below).
+   - All current Anthropic Claude models. You are a Claude model yourself — you know which models Anthropic currently offers. Update existing entries in anthropic-pricing.json with correct current prefix keys (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5) and remove outdated entries that no longer match any current model.
+4. For each model in models.json, update the inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, and cacheCreateCostPerMTok fields directly in the file. Use null for cache fields if not available.
+5. For Anthropic models, update ${anthropicPath} with the same four fields per model.
+
+The third-party models to look up pricing for:
+${modelList}
+
+IMPORTANT: You MUST directly edit the files using your Edit or Write tools — do not just output JSON. After updating, briefly summarize which models were updated and their new prices.`;
+
+    const body = JSON.stringify({ type: 'chat', prompt, profile: 'full' });
     fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1026,7 +1045,7 @@ Available templates in this skill directory:
           try { data = JSON.parse(data); } catch { continue; }
           if (ev === 'text') {
             fullText += data.text || '';
-            statusEl.textContent = 'Receiving pricing data...';
+            statusEl.textContent = 'Claude is updating pricing files...';
           } else if (ev === 'done') {
             applyPricingResult(fullText, statusEl, btn);
             return;
@@ -1048,37 +1067,9 @@ Available templates in this skill directory:
   });
 
   function applyPricingResult(text, statusEl, btn) {
-    try {
-      // Extract JSON from response (may be wrapped in markdown code blocks)
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON found in response');
-      const result = JSON.parse(jsonMatch[0]);
-
-      let updated = 0;
-      // Update models.json models
-      if (result.models) {
-        for (const [name, costs] of Object.entries(result.models)) {
-          const model = state.models.find(m => m.name === name || m.label === name);
-          if (!model || !costs) continue;
-          model.inputCostPerMTok = costs.inputCostPerMTok;
-          model.outputCostPerMTok = costs.outputCostPerMTok;
-          model.cacheReadCostPerMTok = costs.cacheReadCostPerMTok;
-          model.cacheCreateCostPerMTok = costs.cacheCreateCostPerMTok;
-          sendWs({ type: 'model:save', model });
-          updated++;
-        }
-      }
-      // Update anthropic pricing
-      if (result.anthropic) {
-        sendWs({ type: 'anthropic:pricing:save', pricing: result.anthropic });
-        updated += Object.keys(result.anthropic).length;
-      }
-
-      statusEl.textContent = `Updated pricing for ${updated} model${updated !== 1 ? 's' : ''}.`;
-      renderModelsPanel();
-    } catch (err) {
-      statusEl.textContent = 'Failed to parse pricing: ' + err.message;
-    }
+    // Claude has directly updated the files — refresh model state from server
+    sendWs({ type: 'model:list' });
+    statusEl.textContent = text ? 'Pricing files updated. Refreshing...' : 'Pricing update completed.';
     btn.disabled = false;
     btn.textContent = 'Refresh Pricing';
   }

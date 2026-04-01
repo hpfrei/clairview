@@ -158,6 +158,7 @@ class ClaudeSession {
 
     this.proc = spawnClaude(args, {
       cwd: this.cwd, proxyPort: this.proxyPort,
+      profileName: this.capabilities?.name || 'full',
       disableAutoMemory: this.capabilities?.disableAutoMemory !== false,
       dashboardPort: this._dashboardPort, authToken: this._authToken,
     });

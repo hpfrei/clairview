@@ -687,6 +687,10 @@ function resolveModel(model, providers, secrets) {
     contextWindow: typeof model.contextWindow === 'number' ? model.contextWindow : null,
     maxOutputTokens: typeof model.maxOutputTokens === 'number' ? model.maxOutputTokens : null,
     useMaxCompletionTokens: !!model.useMaxCompletionTokens,
+    inputCostPerMTok: typeof model.inputCostPerMTok === 'number' ? model.inputCostPerMTok : null,
+    outputCostPerMTok: typeof model.outputCostPerMTok === 'number' ? model.outputCostPerMTok : null,
+    cacheReadCostPerMTok: typeof model.cacheReadCostPerMTok === 'number' ? model.cacheReadCostPerMTok : null,
+    cacheCreateCostPerMTok: typeof model.cacheCreateCostPerMTok === 'number' ? model.cacheCreateCostPerMTok : null,
   };
 }
 

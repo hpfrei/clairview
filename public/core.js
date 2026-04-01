@@ -296,6 +296,18 @@ function setupCwdToolbar({ editBtn, label, input, setBtn, onSave }) {
   });
 }
 
+// --- Claude process count indicator ---
+function updateClaudeCount(count) {
+  const el = document.getElementById('claude-count');
+  if (!el) return;
+  if (count > 0) {
+    el.textContent = count === 1 ? '1 claude' : `${count} claudes`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
 // --- Expose API for modules ---
 window.dashboard = {
   state,
@@ -442,6 +454,11 @@ function handleMessage(msg) {
     case 'workflow:step:complete':
     case 'workflow:run:complete':
       window.workflowRunModule?.handleMessage(msg);
+      break;
+
+    // Claude process count
+    case 'claude:count':
+      updateClaudeCount(msg.count);
       break;
 
     // MCP

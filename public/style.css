@@ -832,6 +832,12 @@ footer {
   color: var(--text);
   text-decoration: underline;
 }
+.claude-count {
+  font-size: 10px;
+  color: var(--cyan);
+  margin-right: 8px;
+}
+.claude-count.hidden { display: none; }
 
 /* ============================================================
    CLAUDE CHAT VIEW

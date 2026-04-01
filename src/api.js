@@ -15,10 +15,14 @@
  *   done     — { result, sessionId? }    final output
  */
 
+const path = require('path');
 const express = require('express');
 const { pendingQuestions } = require('./proxy');
 const { resolveOutputDir } = require('./utils');
+const caps = require('./capabilities');
 const workflows = require('./workflows');
+
+const PROJECT_ROOT = path.dirname(__dirname);
 
 function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort, authToken }) {
   const router = express.Router();
@@ -75,9 +79,12 @@ function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile,
   const tabId = `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const session = sessionManager.getOrCreate(tabId);
 
-  // Configure CWD and profile
+  // Configure CWD and profile (load profile without changing the global active profile)
   if (cwd) session.setCwd(cwd);
-  if (profile) session.switchProfile(profile);
+  if (profile) {
+    const loaded = caps.loadProfile(PROJECT_ROOT, profile);
+    if (loaded) session.capabilities = loaded;
+  }
   if (sessionId) {
     // Resume an existing Claude CLI session (not store session)
     session.sessionId = sessionId;

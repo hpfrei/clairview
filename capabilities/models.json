@@ -1,5 +1,8 @@
 {
   "providers": {
+    "anthropic": {
+      "label": "Anthropic"
+    },
     "openai": {
       "label": "OpenAI",
       "apiBaseUrl": "https://api.openai.com/v1"
@@ -18,6 +21,54 @@
     }
   },
   "models": [
+    {
+      "name": "claude-opus-4-6",
+      "label": "Claude Opus 4.6",
+      "description": "Anthropic's most capable model for complex analysis and extended agentic tasks",
+      "providerKey": "anthropic",
+      "provider": "anthropic",
+      "modelId": "claude-opus-4-6-20250515",
+      "systemPromptMode": "passthrough",
+      "reasoning": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "inputCostPerMTok": 15,
+      "outputCostPerMTok": 75,
+      "cacheReadCostPerMTok": 1.5,
+      "cacheCreateCostPerMTok": 18.75
+    },
+    {
+      "name": "claude-sonnet-4-6",
+      "label": "Claude Sonnet 4.6",
+      "description": "Anthropic's best balance of speed and intelligence for everyday coding tasks",
+      "providerKey": "anthropic",
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-6-20250514",
+      "systemPromptMode": "passthrough",
+      "reasoning": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 16000,
+      "inputCostPerMTok": 3,
+      "outputCostPerMTok": 15,
+      "cacheReadCostPerMTok": 0.3,
+      "cacheCreateCostPerMTok": 3.75
+    },
+    {
+      "name": "claude-haiku-4-5",
+      "label": "Claude Haiku 4.5",
+      "description": "Anthropic's fastest and most compact model for high-throughput tasks",
+      "providerKey": "anthropic",
+      "provider": "anthropic",
+      "modelId": "claude-haiku-4-5-20251001",
+      "systemPromptMode": "passthrough",
+      "reasoning": false,
+      "contextWindow": 200000,
+      "maxOutputTokens": 8192,
+      "inputCostPerMTok": 1,
+      "outputCostPerMTok": 5,
+      "cacheReadCostPerMTok": 0.1,
+      "cacheCreateCostPerMTok": 1.25
+    },
     {
       "name": "gpt-5.4",
       "label": "GPT-5.4",
@@ -49,8 +100,8 @@
       "useMaxCompletionTokens": true,
       "inputCostPerMTok": 30,
       "outputCostPerMTok": 180,
-      "cacheReadCostPerMTok": 3,
-      "cacheCreateCostPerMTok": 30
+      "cacheReadCostPerMTok": null,
+      "cacheCreateCostPerMTok": null
     },
     {
       "name": "gpt-5.4-mini",
@@ -99,7 +150,7 @@
       "maxOutputTokens": 65536,
       "inputCostPerMTok": 2,
       "outputCostPerMTok": 12,
-      "cacheReadCostPerMTok": 0.5,
+      "cacheReadCostPerMTok": 0.2,
       "cacheCreateCostPerMTok": 2
     },
     {
@@ -115,7 +166,7 @@
       "maxOutputTokens": 65536,
       "inputCostPerMTok": 0.5,
       "outputCostPerMTok": 3,
-      "cacheReadCostPerMTok": 0.125,
+      "cacheReadCostPerMTok": 0.05,
       "cacheCreateCostPerMTok": 0.5
     },
     {
@@ -131,7 +182,7 @@
       "maxOutputTokens": 65536,
       "inputCostPerMTok": 0.3,
       "outputCostPerMTok": 2.5,
-      "cacheReadCostPerMTok": 0.075,
+      "cacheReadCostPerMTok": 0.03,
       "cacheCreateCostPerMTok": 0.3
     },
     {
@@ -161,10 +212,10 @@
       "reasoning": true,
       "contextWindow": 128000,
       "maxOutputTokens": 64000,
-      "inputCostPerMTok": 0.28,
-      "outputCostPerMTok": 0.42,
-      "cacheReadCostPerMTok": 0.028,
-      "cacheCreateCostPerMTok": 0.28
+      "inputCostPerMTok": 0.55,
+      "outputCostPerMTok": 2.19,
+      "cacheReadCostPerMTok": 0.14,
+      "cacheCreateCostPerMTok": 0.55
     },
     {
       "name": "kimi-k2.5",
@@ -178,8 +229,8 @@
       "contextWindow": 262144,
       "maxOutputTokens": 65535,
       "inputCostPerMTok": 0.6,
-      "outputCostPerMTok": 2.5,
-      "cacheReadCostPerMTok": 0.1,
+      "outputCostPerMTok": 3,
+      "cacheReadCostPerMTok": 0.15,
       "cacheCreateCostPerMTok": 0.6
     },
     {
@@ -195,7 +246,7 @@
       "maxOutputTokens": 65535,
       "inputCostPerMTok": 0.6,
       "outputCostPerMTok": 2.5,
-      "cacheReadCostPerMTok": 0.1,
+      "cacheReadCostPerMTok": 0.15,
       "cacheCreateCostPerMTok": 0.6
     }
   ]

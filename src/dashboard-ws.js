@@ -1,6 +1,6 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR } = require('./utils');
+const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount } = require('./utils');
 const { pendingQuestions } = require('./proxy');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
@@ -64,6 +64,9 @@ class DashboardBroadcaster {
         ws.send(JSON.stringify({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) }));
         ws.send(JSON.stringify({ type: 'provider:list', providers: caps.listProviders(PROJECT_ROOT) }));
       }
+
+      // Send running Claude process count
+      ws.send(JSON.stringify({ type: 'claude:count', count: getActiveProcessCount() }));
 
       // Send session list and active session
       ws.send(JSON.stringify({

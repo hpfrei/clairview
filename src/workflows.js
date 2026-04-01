@@ -451,12 +451,11 @@ function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd
     const reporterPath = path.join(PROJECT_ROOT, 'lib', 'hook-reporter.js');
     caps.ensureHookReporters(cwd, reporterPath);
 
-    // Route through specific model if profile has one, otherwise direct to Anthropic
     const proc = spawnClaude(args, {
       cwd, proxyPort,
+      profileName: profile.name || 'full',
       disableAutoMemory: profile.disableAutoMemory !== false,
       dashboardPort, authToken,
-      ...(profile.modelDef ? { modelName: profile.modelDef } : { direct: true }),
     });
 
     const run = activeRuns.get(runId);
@@ -660,7 +659,7 @@ Rules:
 - Always include a final summary step`;
 
     const args = buildClaudeArgs(null);
-    const proc = spawnClaude(args, { cwd, proxyPort, direct: true });
+    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full' });
 
     const genTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
@@ -786,7 +785,7 @@ Rules:
   - Standard \`\`\`language for code snippets`;
 
     const args = buildClaudeArgs(null);
-    const proc = spawnClaude(args, { cwd, proxyPort, direct: true });
+    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full' });
 
     const compileTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}

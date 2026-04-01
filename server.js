@@ -11,7 +11,7 @@ const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 const workflowHandler = require('./src/workflow-handler');
 const createApiRouter = require('./src/api');
-const { OUTPUTS_DIR, ensureDir } = require('./src/utils');
+const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const DASHBOARD_PORT = parseInt(process.argv[2] || process.env.DASHBOARD_PORT || '3457');
@@ -28,21 +28,7 @@ const proxyApp = express();
 let broadcaster = { broadcast() {} };
 let sessionManager = null; // forward reference, assigned below
 
-// getModelDef: returns a resolved model definition by name, or the active profile's model if no name given
-function getModelDef(name) {
-  if (name) return caps.loadModel(__dirname, name) || null;
-  if (!sessionManager?.capabilities?.modelDef) return null;
-  return caps.loadModel(__dirname, sessionManager.capabilities.modelDef) || null;
-}
-
-function getProfileName() {
-  return sessionManager?.capabilities?.name || null;
-}
-function getProfileCaps() {
-  return sessionManager?.capabilities || null;
-}
-
-const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL, getModelDef, getProfileName, getProfileCaps);
+const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL);
 proxyApp.use(proxyRouter);
 const proxyServer = http.createServer(proxyApp);
 
@@ -130,6 +116,7 @@ sessionManager = new ClaudeSessionManager(PROXY_PORT, { broadcast: (...args) => 
 // WebSocket server on dashboard (with auth)
 const wss = new WebSocketServer({ noServer: true });
 broadcaster = new DashboardBroadcaster(wss, store, sessionManager);
+setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)

@@ -5,7 +5,8 @@ const { pipeline } = require('stream');
 const SSEPassthrough = require('./sse-passthrough');
 const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard } = require('./utils');
 const { getProvider } = require('./providers/registry');
-const { getModelPricing } = require('./capabilities');
+const caps = require('./capabilities');
+const { getModelPricing } = caps;
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
@@ -82,20 +83,20 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster) {
   });
 }
 
-function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfileName, getProfileCaps) {
+function createProxyRouter(store, broadcaster, targetUrl) {
   const router = express.Router();
 
   router.use(express.json({ limit: '50mb' }));
   router.use(express.raw({ limit: '50mb', type: () => false }));
 
-  // /direct prefix: log interactions but always use Anthropic (skip model translation)
-  router.use('/direct', (req, res, next) => { req.direct = true; next(); });
-
-  // /use-model/:name prefix: use a specific model instead of the globally active one
-  router.use('/use-model/:modelName', (req, res, next) => { req.modelOverride = req.params.modelName; next(); });
+  // /p/:profileName prefix: per-session profile-scoped routing
+  router.use('/p/:profileName', (req, res, next) => {
+    req.profileName = decodeURIComponent(req.params.profileName);
+    next();
+  });
 
   // POST /v1/messages - main endpoint
-  router.post(['/v1/messages', '/direct/v1/messages', '/use-model/:modelName/v1/messages'], async (req, res) => {
+  router.post(['/v1/messages', '/p/:profileName/v1/messages'], async (req, res) => {
     const body = req.body;
     const isStreaming = !!body.stream;
 
@@ -156,14 +157,18 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
       }
     }
 
+    // Resolve profile and model from per-request URL context
+    const profileName = req.profileName || null;
+    const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
+
     const wfCtx = _questionContext;
     const interaction = {
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages',
-      profile: wfCtx?.profile ?? (typeof getProfileName === 'function' ? getProfileName() : null),
-      bare: !!(typeof getProfileCaps === 'function' && getProfileCaps()?.bare),
-      disableAutoMemory: typeof getProfileCaps === 'function' ? getProfileCaps()?.disableAutoMemory !== false : true,
+      profile: profileName || wfCtx?.profile || null,
+      bare: !!profileData?.bare,
+      disableAutoMemory: profileData ? profileData.disableAutoMemory !== false : true,
       stepId: wfCtx?.stepId || null,
       runId: wfCtx?.runId || null,
       request: { ...body },
@@ -190,12 +195,11 @@ function createProxyRouter(store, broadcaster, targetUrl, getModelDef, getProfil
     });
 
     // --- Check for model translation ---
-    // /direct → always Anthropic; /use-model/:name → specific model; default → active profile's model
-    const modelDef = req.direct ? null
-      : typeof getModelDef === 'function' ? getModelDef(req.modelOverride || undefined) : null;
+    // Profile's modelDef determines routing: if set → translate, if null → direct to Anthropic
+    const modelDef = profileData?.modelDef ? caps.loadModel(PROJECT_ROOT, profileData.modelDef) : null;
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
-    if (modelDef && !provider) {
+    if (modelDef && !provider && modelDef.provider !== 'anthropic') {
       console.warn(`[proxy] Unknown provider "${modelDef.provider}" for model "${modelDef.name}" — falling through to Anthropic`);
     }
 
