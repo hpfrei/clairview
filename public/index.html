@@ -106,8 +106,6 @@
         <div class="chat-toolbar">
           <button class="chat-cwd-btn" id="chatCwdBtn" title="Change project directory">&#128193;</button>
           <span class="chat-cwd-label" id="chatCwdLabel"></span>
-          <input type="text" id="chatCwdInput" class="chat-cwd-input hidden" placeholder="/path/to/project">
-          <button id="chatCwdSetBtn" class="chat-cwd-set hidden">Set</button>
           <span class="chat-toolbar-sep"></span>
           <span class="chat-toolbar-label">profile:</span>
           <select class="chat-profile-select" id="chatProfileSelect" title="Switch active profile"></select>
@@ -1544,6 +1542,10 @@ jq -r '.tool_input.command' |
             <textarea id="wfDesc" rows="3" placeholder="Describe what this workflow does at a high level — its purpose, inputs, expected outcome. Used as the prompt when generating or regenerating the source JSON."></textarea>
           </label>
         </div>
+        <div class="pm-field-row">
+          <label>Profiles to use:</label>
+          <div id="wfProfileList" class="wf-profile-checklist"></div>
+        </div>
         <!-- Action bar -->
         <div class="wf-modal-tabbar">
           <button class="wf-modal-tab active" id="wfTabSource">Source JSON</button>
@@ -1703,16 +1705,41 @@ any of these formats in its response.</pre>
     <div class="wfrun-toolbar" id="wfrunToolbar">
       <button class="chat-cwd-btn" id="wfrunCwdBtn" title="Working directory">&#128193;</button>
       <span class="chat-cwd-label" id="wfrunCwdLabel"></span>
-      <input type="text" class="chat-cwd-input hidden" id="wfrunCwdInput" placeholder="Set working directory">
-      <button class="chat-cwd-set hidden" id="wfrunCwdSetBtn">Set</button>
     </div>
     <div class="wfrun-container" id="wfrunContainer">
       <!-- Phase panels swapped here per tab -->
     </div>
   </div>
 
+  <!-- Directory Picker Modal -->
+  <div class="cap-modal-backdrop hidden" id="dirPickerModal">
+    <div class="cap-modal dir-picker-modal">
+      <div class="cap-modal-header">
+        <h3>Select Directory</h3>
+        <button class="cap-modal-close" id="dirPickerClose">&times;</button>
+      </div>
+      <div class="cap-modal-body" style="padding:0">
+        <div class="dir-picker-breadcrumbs" id="dirPickerBreadcrumbs"></div>
+        <div class="dir-picker-list" id="dirPickerList"></div>
+        <div class="dir-picker-new hidden" id="dirPickerNew">
+          <input type="text" id="dirPickerNewName" class="dir-picker-new-input"
+                 placeholder="New folder name" maxlength="100">
+          <button class="dir-picker-new-ok" id="dirPickerNewOk">Create</button>
+          <button class="dir-picker-new-cancel" id="dirPickerNewCancel">&times;</button>
+        </div>
+      </div>
+      <div class="cap-modal-footer">
+        <button class="dir-picker-new-btn" id="dirPickerNewBtn">+ New Folder</button>
+        <span style="flex:1"></span>
+        <button class="cap-cancel-btn" id="dirPickerCancelBtn">Cancel</button>
+        <button class="cap-save-btn" id="dirPickerSelectBtn">Select</button>
+      </div>
+    </div>
+  </div>
+
   <div id="mcp-modal-root"></div>
   <script src="core.js"></script>
+  <script src="dir-picker.js"></script>
   <script src="inspector.js"></script>
   <script src="chat.js"></script>
   <script src="capabilities.js"></script>

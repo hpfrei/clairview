@@ -15,10 +15,11 @@
  *   done     — { result, sessionId? }    final output
  */
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { pendingQuestions } = require('./proxy');
-const { resolveOutputDir } = require('./utils');
+const { resolveOutputDir, OUTPUTS_DIR, ensureDir } = require('./utils');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
 
@@ -68,6 +69,51 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
 
     pending.resolve(answer);
     res.json({ ok: true });
+  });
+
+  // ── GET /api/dirs — list subdirectories within outputs/ ───────────
+  router.get('/dirs', (req, res) => {
+    try {
+      const userPath = req.query.path || '';
+      const abs = resolveOutputDir(userPath);
+      const relative = abs.startsWith(OUTPUTS_DIR)
+        ? abs.slice(OUTPUTS_DIR.length).replace(/^\//, '')
+        : '';
+      const entries = fs.readdirSync(abs, { withFileTypes: true });
+      const dirs = entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        .map(e => e.name)
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      res.json({ current: relative, absolute: abs, dirs });
+    } catch {
+      res.json({ current: '', absolute: OUTPUTS_DIR, dirs: [] });
+    }
+  });
+
+  // ── POST /api/dirs — create a new directory within outputs/ ──────
+  router.post('/dirs', (req, res) => {
+    const { path: parentPath, name } = req.body || {};
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'Missing folder name' });
+    }
+    if (name.length > 100 || !/^[a-zA-Z0-9][a-zA-Z0-9_. -]*$/.test(name)) {
+      return res.status(400).json({ error: 'Invalid folder name. Use letters, numbers, spaces, dots, hyphens, underscores.' });
+    }
+    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid folder name' });
+    }
+    try {
+      const parentAbs = resolveOutputDir(parentPath || '');
+      const target = path.join(parentAbs, name);
+      if (!target.startsWith(OUTPUTS_DIR)) {
+        return res.status(400).json({ error: 'Invalid path' });
+      }
+      ensureDir(target);
+      const relative = target.slice(OUTPUTS_DIR.length).replace(/^\//, '');
+      res.json({ ok: true, created: relative });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

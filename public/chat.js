@@ -256,14 +256,20 @@
 
   const chatCwdBtn = document.getElementById('chatCwdBtn');
   const chatCwdLabel = document.getElementById('chatCwdLabel');
-  const chatCwdInput = document.getElementById('chatCwdInput');
-  const chatCwdSetBtn = document.getElementById('chatCwdSetBtn');
   const chatProfileSelect = document.getElementById('chatProfileSelect');
 
-  setupCwdToolbar({
-    editBtn: chatCwdBtn, label: chatCwdLabel, input: chatCwdInput, setBtn: chatCwdSetBtn,
-    onSave: (cwd) => sendWs({ type: 'chat:setCwd', tabId: activeTabId, cwd }),
-  });
+  async function openChatDirPicker() {
+    const currentLabel = chatCwdLabel?.textContent || '';
+    const outputsDir = state.outputsDir || '';
+    const relative = currentLabel.startsWith(outputsDir)
+      ? currentLabel.slice(outputsDir.length).replace(/^\//, '') : '';
+    const picked = await window.dashboard.openDirPicker({ initialPath: relative });
+    if (picked !== null) {
+      sendWs({ type: 'chat:setCwd', tabId: activeTabId, cwd: picked });
+    }
+  }
+  chatCwdBtn?.addEventListener('click', openChatDirPicker);
+  chatCwdLabel?.addEventListener('click', openChatDirPicker);
 
   chatProfileSelect?.addEventListener('change', (e) => {
     const name = e.target.value;
@@ -297,7 +303,6 @@
     // State sync handled by core.js syncSettings(); just update UI here
     if (msg.cwd) {
       if (chatCwdLabel) chatCwdLabel.textContent = msg.cwd;
-      if (chatCwdInput) chatCwdInput.placeholder = msg.cwd;
     }
     if (msg.capabilities || msg.profiles) {
       renderChatProfileSelect();

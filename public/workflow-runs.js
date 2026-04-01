@@ -43,8 +43,6 @@
   const tabNewBtn = document.getElementById('wfrunTabNew');
   const cwdBtn = document.getElementById('wfrunCwdBtn');
   const cwdLabel = document.getElementById('wfrunCwdLabel');
-  const cwdInput = document.getElementById('wfrunCwdInput');
-  const cwdSetBtn = document.getElementById('wfrunCwdSetBtn');
   const container = document.getElementById('wfrunContainer');
 
   // --- Tab strip ---
@@ -106,14 +104,20 @@
   }
 
   // --- CWD toolbar ---
-  setupCwdToolbar({
-    editBtn: cwdBtn, label: cwdLabel, input: cwdInput, setBtn: cwdSetBtn,
-    onSave: (dir) => {
-      const tab = tabs.get(activeTabId);
-      if (tab) tab.cwd = dir;
-      if (cwdLabel) cwdLabel.textContent = dir;
-    },
-  });
+  async function openWfrunDirPicker() {
+    const tab = tabs.get(activeTabId);
+    const currentCwd = tab?.cwd || defaultCwd();
+    const outputsDir = state.outputsDir || '';
+    const relative = currentCwd.startsWith(outputsDir)
+      ? currentCwd.slice(outputsDir.length).replace(/^\//, '') : '';
+    const picked = await window.dashboard.openDirPicker({ initialPath: relative });
+    if (picked !== null) {
+      if (tab) tab.cwd = picked;
+      if (cwdLabel) cwdLabel.textContent = picked;
+    }
+  }
+  cwdBtn?.addEventListener('click', openWfrunDirPicker);
+  cwdLabel?.addEventListener('click', openWfrunDirPicker);
 
   // --- Phase rendering ---
   function renderPhase() {
