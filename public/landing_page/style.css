@@ -20,6 +20,13 @@
 /* === Base === */
 html { scroll-behavior: smooth; }
 
+body::before {
+  content: '';
+  display: block;
+  height: 4px;
+  background: linear-gradient(90deg, var(--red), var(--orange), var(--green), var(--cyan), var(--accent), var(--purple));
+}
+
 body {
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
@@ -47,6 +54,16 @@ h2 {
   letter-spacing: -0.5px;
 }
 
+h2::after {
+  content: '';
+  display: block;
+  width: 60px;
+  height: 3px;
+  margin: 12px auto 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--purple), var(--cyan));
+}
+
 h2 .dim {
   color: var(--text-dim);
   font-weight: 400;
@@ -71,6 +88,29 @@ code {
   grid-template-columns: 1fr 1fr;
   gap: 48px;
   align-items: center;
+}
+
+/* Hero brand lockup */
+.hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.hero-brand-logo {
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 6px rgba(34, 85, 170, 0.2));
+}
+
+.hero-brand-name {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--purple) 50%, var(--cyan) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .hero h1 {
@@ -136,7 +176,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--purple) 100%);
   color: #fff;
   padding: 12px 24px;
   border-radius: 6px;
@@ -145,13 +185,14 @@ code {
   font-weight: 600;
   border: none;
   cursor: pointer;
-  transition: background 0.15s, transform 0.15s;
+  transition: transform 0.15s, box-shadow 0.15s;
   text-decoration: none;
+  box-shadow: 0 2px 8px rgba(34, 85, 170, 0.3);
 }
 
 .cta-primary:hover {
-  background: #1a4488;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(34, 85, 170, 0.4);
 }
 
 .cta-primary .copy-icon {
@@ -210,8 +251,9 @@ code {
 }
 
 .ribbon-pill:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: var(--bg-surface);
 }
 
 .ribbon-pill svg {
@@ -426,7 +468,12 @@ code {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   text-align: center;
   transition: transform 0.15s, box-shadow 0.15s;
+  border-top: 3px solid var(--border);
 }
+.persona-card:nth-child(1) { border-top-color: var(--accent); }
+.persona-card:nth-child(2) { border-top-color: var(--red); }
+.persona-card:nth-child(3) { border-top-color: var(--green); }
+.persona-card:nth-child(4) { border-top-color: var(--purple); }
 
 .persona-card:hover {
   transform: translateY(-2px);
@@ -459,6 +506,8 @@ footer {
   padding: 28px 24px;
   text-align: center;
   font-size: 12px;
+  border-top: 3px solid;
+  border-image: linear-gradient(90deg, var(--red), var(--orange), var(--green), var(--cyan), var(--accent), var(--purple)) 1;
 }
 
 footer p {
@@ -513,6 +562,7 @@ footer a:hover {
 
   .hero-body { margin-left: auto; margin-right: auto; }
 
+  .hero-brand { justify-content: center; }
   .hero-cta { justify-content: center; }
 
   .feature-grid { grid-template-columns: repeat(2, 1fr); }

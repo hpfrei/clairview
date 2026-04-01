@@ -30,7 +30,8 @@ header {
   justify-content: space-between;
   padding: 8px 16px;
   background: var(--bg-surface);
-  border-bottom: none;
+  border-bottom: 3px solid;
+  border-image: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb) 1;
 }
 
 header h1 {
@@ -40,15 +41,30 @@ header h1 {
 }
 h1.header-brand {
   cursor: pointer;
-  padding: 4px 10px;
-  border-radius: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
   margin: 0;
   transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
-h1.header-brand:hover { background: var(--bg-hover); }
+.brand-logo {
+  flex-shrink: 0;
+}
+h1.header-brand:hover { background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%); -webkit-background-clip: text; background-clip: text; opacity: 0.8; }
 h1.header-brand.active {
-  color: var(--accent);
-  background: none;
+  background: linear-gradient(135deg, #2255aa 0%, #7744bb 50%, #1088aa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   border-color: transparent;
 }
 

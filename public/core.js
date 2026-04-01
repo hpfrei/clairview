@@ -513,6 +513,12 @@ function switchView(view) {
       el.classList.add('hidden');
     }
   }
+
+  // Show session picker only in Inspector and Chat views
+  const showSession = (view === 'dashboard' || view === 'claude');
+  if (sessionPicker) sessionPicker.style.display = showSession ? '' : 'none';
+  if (newSessionBtn) newSessionBtn.style.display = showSession ? '' : 'none';
+  if (deleteSessionBtn) deleteSessionBtn.style.display = showSession ? '' : 'none';
 }
 
 document.getElementById('headerTabs').addEventListener('click', e => {
