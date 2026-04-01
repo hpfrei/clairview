@@ -30,6 +30,7 @@ class ClaudeSessionManager {
       this.opts
     );
     session.tabId = tabId;
+    if (this._ready) session.setReady();
     this.sessions.set(tabId, session);
     return session;
   }
@@ -107,6 +108,7 @@ class ClaudeSessionManager {
 
   /** Set ready on all sessions */
   setReady() {
+    this._ready = true;
     for (const session of this.sessions.values()) {
       session.setReady();
     }

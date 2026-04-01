@@ -23,6 +23,7 @@ class DashboardBroadcaster {
     this.sessionManager = sessionManager;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
     this.workflowHandler = null; // Set externally by src/workflow-handler.js
+    this.apiListeners = new Set();
 
     this.wss.on('connection', (ws) => {
       // Send full history on connect
@@ -407,7 +408,14 @@ class DashboardBroadcaster {
         } catch (err) { console.error('WS broadcast error:', err); }
       }
     }
+    // Notify API listeners
+    for (const listener of this.apiListeners) {
+      try { listener(message); } catch {}
+    }
   }
+
+  addApiListener(fn) { this.apiListeners.add(fn); }
+  removeApiListener(fn) { this.apiListeners.delete(fn); }
 }
 
 module.exports = DashboardBroadcaster;

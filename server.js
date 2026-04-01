@@ -10,6 +10,7 @@ const ClaudeSessionManager = require('./src/claude-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 const workflowHandler = require('./src/workflow-handler');
+const createApiRouter = require('./src/api');
 const { OUTPUTS_DIR, ensureDir } = require('./src/utils');
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
@@ -98,6 +99,11 @@ dashboardApp.post('/api/hook-report', (req, res) => {
 dashboardApp.use((req, res, next) => {
   const token = getTokenFromCookies(req.headers.cookie);
   if (token === AUTH_TOKEN) return next();
+  // Also accept Authorization: Bearer <token> for API clients
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ') && authHeader.slice(7) === AUTH_TOKEN) return next();
+  // API routes get 401 JSON; browser routes get redirect
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
 });
 
@@ -153,6 +159,9 @@ for (const summary of caps.listProfiles(__dirname)) {
 // Initialize Workflow Handler
 workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
+// Mount REST API
+dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN }));
+
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
   dashboardServer.listen(DASHBOARD_PORT, () => {
@@ -162,6 +171,7 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
     console.log('');
     console.log(`  Proxy:     http://127.0.0.1:${PROXY_PORT} (localhost only)`);
     console.log(`  Dashboard: http://localhost:${DASHBOARD_PORT}`);
+    console.log(`  API:       http://localhost:${DASHBOARD_PORT}/api/run`);
     console.log(`  Upstream:  ${TARGET_URL}`);
     console.log('');
     if (AUTH_TOKEN_SOURCE === 'generated') {

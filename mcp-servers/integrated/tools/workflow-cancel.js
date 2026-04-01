@@ -10,6 +10,7 @@ export default function register(server) {
     },
     async (input) => {
   // input is an object with: { run_id }
+  const { run_id } = input;
   const { WebSocket } = await import('ws');
   const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';
   const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';

@@ -3,25 +3,26 @@ import { z } from "zod";
 
 export default function register(server) {
   server.tool(
-    "workflow_run",
-    "Execute a compiled workflow by name with the given inputs via the REST API. Returns the final status, run ID, and step outputs.",
+    "chat",
+    "Run a prompt through Claude Code via the dashboard and return the full response. Supports multi-turn via session_id.",
     {
-    name: z.string().describe("Name of the workflow to run"),
-    inputs: z.record(z.any()).describe("Input values for the workflow (key-value pairs)").optional(),
-    cwd: z.string().describe("Working directory for the workflow run").optional(),
+    prompt: z.string().describe("The prompt to send"),
+    cwd: z.string().describe("Working directory (inside outputs/)").optional(),
+    profile: z.string().describe("Capability profile name").optional(),
+    session_id: z.string().describe("Resume a previous session for multi-turn").optional(),
     },
     async (input) => {
-  // input is an object with: { name, inputs, cwd }
-  const { name, inputs, cwd } = input;
+  // input is an object with: { prompt, cwd, profile, session_id }
+  const { prompt, cwd, profile, session_id } = input;
   const http = await import('http');
   const dashPort = process.env.CLAUDE_DOC_DASHBOARD_PORT || '3457';
   const token = process.env.CLAUDE_DOC_AUTH_TOKEN || '';
 
-  const body = JSON.stringify({ type: 'workflow', workflow: name, inputs: inputs || {}, cwd: cwd || undefined });
+  const body = JSON.stringify({ type: 'chat', prompt, cwd: cwd || undefined, profile: profile || undefined, sessionId: session_id || undefined });
 
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve({ content: [{ type: 'text', text: 'Timeout waiting for workflow completion (5 min)' }] }), 300000);
-    let text = '', steps = [], questions = [];
+    const timeout = setTimeout(() => resolve({ content: [{ type: 'text', text: 'Timeout waiting for chat response (5 min)' }] }), 300000);
+    let text = '', sessionId = null, questions = [];
 
     const req = http.request({ hostname: '127.0.0.1', port: dashPort, path: '/api/run', method: 'POST', headers: {
       'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'Content-Length': Buffer.byteLength(body),
@@ -40,21 +41,19 @@ export default function register(server) {
           if (!ev || !data) continue;
           try { data = JSON.parse(data); } catch { continue; }
           if (ev === 'text') text += data.text || '';
-          else if (ev === 'step') steps.push(data);
           else if (ev === 'ask') questions.push(data);
           else if (ev === 'error') text += '\n[Error: ' + (data.error || 'unknown') + ']\n';
           else if (ev === 'done') {
             clearTimeout(timeout);
-            let result = 'Status: ' + (data.result || 'unknown');
-            if (data.runId) result += '\nRun ID: ' + data.runId;
-            if (steps.length > 0) result += '\n\nSteps:\n' + steps.map(s => '  ' + s.stepId + ': ' + (s.status || s.text || '')).join('\n');
-            if (text) result += '\n\nOutput:\n' + text;
+            sessionId = data.sessionId || null;
+            let result = data.result || text;
+            if (sessionId) result += '\n\nsessionId: ' + sessionId;
             if (questions.length > 0) result += '\n\n[Pending questions: ' + JSON.stringify(questions) + ']';
             resolve({ content: [{ type: 'text', text: result }] });
           }
         }
       });
-      res.on('end', () => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: text || 'Workflow stream ended without completion event' }] }); });
+      res.on('end', () => { clearTimeout(timeout); if (text) resolve({ content: [{ type: 'text', text: text + (sessionId ? '\n\nsessionId: ' + sessionId : '') }] }); });
     });
     req.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });
     req.write(body); req.end();
