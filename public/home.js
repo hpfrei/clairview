@@ -20,7 +20,7 @@
   // --- Content ---
 
   const overviewMd = `
-# clairview
+# vistaclair
 
 A development dashboard that wraps **Claude Code** with real-time inspection, multi-session chat, workflow automation, custom MCP tools, multi-provider model routing, and a REST API.
 
@@ -53,7 +53,7 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 
   <!-- Server -->
   <rect x="280" y="10" width="240" height="90" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
-  <text x="400" y="34" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">clairview server</text>
+  <text x="400" y="34" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">vistaclair server</text>
   <text x="400" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="10">dashboard :3457  |  proxy :3456</text>
   <text x="400" y="67" text-anchor="middle" fill="var(--text-dim)" font-size="10">session manager  |  workflow engine</text>
   <text x="400" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="10">MCP server  |  cost tracker</text>
@@ -145,7 +145,7 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 
 ## Server components
 
-clairview runs two servers from a single Node.js process:
+vistaclair runs two servers from a single Node.js process:
 
 | Component | Port | Purpose |
 |-----------|------|---------|
@@ -438,7 +438,7 @@ Handlers have access to:
   const apiMd = `
 # REST API
 
-clairview exposes a REST API on the dashboard port (\`:3457\`) for programmatic access. All endpoints require authentication via cookie (\`token=<TOKEN>\`), header (\`Authorization: Bearer <TOKEN>\`), or the internal header (\`X-Clairview-Internal: true\` from localhost).
+vistaclair exposes a REST API on the dashboard port (\`:3457\`) for programmatic access. All endpoints require authentication via cookie (\`token=<TOKEN>\`), header (\`Authorization: Bearer <TOKEN>\`), or the internal header (\`X-Vistaclair-Internal: true\` from localhost).
 
 The auth token is printed to the console when the server starts, or can be set via the \`AUTH_TOKEN\` environment variable.
 

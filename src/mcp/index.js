@@ -360,9 +360,9 @@ function spawnBridge() {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      CLAIRVIEW_SERVER_SLUG: servers.INTEGRATED_SLUG,
-      CLAIRVIEW_AUTH_TOKEN: opts.authToken || process.env.AUTH_TOKEN || '',
-      CLAIRVIEW_DASHBOARD_PORT: String(opts.dashboardPort || process.env.DASHBOARD_PORT || 3457),
+      VISTACLAIR_SERVER_SLUG: servers.INTEGRATED_SLUG,
+      VISTACLAIR_AUTH_TOKEN: opts.authToken || process.env.AUTH_TOKEN || '',
+      VISTACLAIR_DASHBOARD_PORT: String(opts.dashboardPort || process.env.DASHBOARD_PORT || 3457),
     },
   });
 }
@@ -417,7 +417,7 @@ async function mcpInitialize(proc) {
   sendJsonRpc(proc, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'clairview', version: '1.0.0' },
+    clientInfo: { name: 'vistaclair', version: '1.0.0' },
   }, 1);
   await waitForResponse(proc, 1);
   sendJsonRpc(proc, 'notifications/initialized');

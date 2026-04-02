@@ -92,7 +92,7 @@ dashboardApp.use('/landing_page', express.static(path.join(__dirname, 'public', 
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
   // Allow internal requests from MCP tools (localhost + internal header)
-  if (req.headers['x-clairview-internal'] === 'true' && isLoopback(req)) return next();
+  if (req.headers['x-vistaclair-internal'] === 'true' && isLoopback(req)) return next();
   const token = getTokenFromCookies(req.headers.cookie);
   if (token === AUTH_TOKEN) return next();
   // Also accept Authorization: Bearer <token> for API clients
@@ -121,7 +121,7 @@ setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
-  const internal = req.headers['x-clairview-internal'] === 'true' && isLoopbackSocket(socket);
+  const internal = req.headers['x-vistaclair-internal'] === 'true' && isLoopbackSocket(socket);
   const token = getTokenFromCookies(req.headers.cookie);
   if (!internal && token !== AUTH_TOKEN) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');

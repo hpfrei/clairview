@@ -40,14 +40,14 @@ function buildInputSchema(inputs) {
 function createWorkflowHandler(workflowName) {
   return async (input) => {
     const http = await import("http");
-    const dashPort = process.env.CLAIRVIEW_DASHBOARD_PORT || "3457";
-    const authToken = process.env.CLAIRVIEW_AUTH_TOKEN || "";
+    const dashPort = process.env.VISTACLAIR_DASHBOARD_PORT || "3457";
+    const authToken = process.env.VISTACLAIR_AUTH_TOKEN || "";
 
     const body = JSON.stringify({
       type: "workflow",
       workflow: workflowName,
       inputs: input || {},
-      sourceInstanceId: process.env.CLAIRVIEW_INSTANCE_ID || null,
+      sourceInstanceId: process.env.VISTACLAIR_INSTANCE_ID || null,
     });
 
     return new Promise((resolve) => {
@@ -62,7 +62,7 @@ function createWorkflowHandler(workflowName) {
           headers: {
             "Content-Type": "application/json",
             "Authorization": "Bearer " + authToken,
-            "X-Clairview-Internal": "true",
+            "X-Vistaclair-Internal": "true",
             "Content-Length": Buffer.byteLength(body),
           },
         },

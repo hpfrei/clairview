@@ -428,8 +428,8 @@ function deleteHook(cwd, event, entryIndex) {
 
 // --- Hook reporter auto-injection ---
 
-const HOOK_REPORTER_MARKER = '__clairview_reporter__';
-const HOOK_REPORTER_MARKERS = ['__clairview_reporter__', '__claude_doc_reporter__'];
+const HOOK_REPORTER_MARKER = '__vistaclair_reporter__';
+const HOOK_REPORTER_MARKERS = ['__vistaclair_reporter__', '__claude_doc_reporter__'];
 
 function isReporterHook(h) {
   return HOOK_REPORTER_MARKERS.some(m => h.command?.includes(m));

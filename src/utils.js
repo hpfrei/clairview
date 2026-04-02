@@ -79,9 +79,9 @@ function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, das
   if (disableAutoMemory) {
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   }
-  if (dashboardPort) env.CLAIRVIEW_DASHBOARD_PORT = String(dashboardPort);
-  if (authToken) env.CLAIRVIEW_AUTH_TOKEN = authToken;
-  env.CLAIRVIEW_INSTANCE_ID = instanceId;
+  if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
+  if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
+  env.VISTACLAIR_INSTANCE_ID = instanceId;
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
   _activeProcesses.set(instanceId, { proc, instanceId, profileName, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null });

@@ -21,7 +21,7 @@
 
   <!-- ═══ SERVER (center) ═══ -->
   <rect x="260" y="25" width="280" height="110" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
-  <text x="400" y="50" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="700">clairview</text>
+  <text x="400" y="50" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="700">vistaclair</text>
   <text x="400" y="70" text-anchor="middle" fill="#8b949e" font-size="10">dashboard :3457  &#x2502;  proxy :3456</text>
   <text x="400" y="86" text-anchor="middle" fill="#8b949e" font-size="10">session manager  &#x2502;  workflow engine</text>
   <text x="400" y="102" text-anchor="middle" fill="#8b949e" font-size="10">MCP server  &#x2502;  cost tracker</text>

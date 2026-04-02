@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="public/favicon.svg" width="80" alt="clairview logo"/>
+<img src="public/favicon.svg" width="80" alt="vistaclair logo"/>
 
-# $\Huge\textsf{clairview}$
+# $\Huge\textsf{vistaclair}$
 
 $\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#d29922}automate}$
 
@@ -42,8 +42,8 @@ multi-session chat, workflow automation, custom MCP tools, multi-provider model 
 ### Install
 
 ```bash
-git clone https://github.com/hpfrei/clairview.git
-cd clairview
+git clone https://github.com/hpfrei/vistaclair.git
+cd vistaclair
 npm install
 ```
 
@@ -215,10 +215,10 @@ Two built-in themes toggled from the header: **Bright** (checker-paper grid, def
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/architecture-light.svg">
-  <img alt="clairview architecture" src="docs/architecture-light.svg" width="880">
+  <img alt="vistaclair architecture" src="docs/architecture-light.svg" width="880">
 </picture>
 
-clairview runs two servers from a single Node.js process:
+vistaclair runs two servers from a single Node.js process:
 
 | Server | Port | Binding | Purpose |
 |---|---|---|---|
@@ -262,7 +262,7 @@ When `claude -p` calls the `AskUserQuestion` tool during a chat or workflow step
 The dashboard server (`:3457`) exposes a REST API for programmatic access. All endpoints require authentication.
 
 > [!NOTE]
-> Auth methods: cookie `token=<TOKEN>`, header `Authorization: Bearer <TOKEN>`, or `X-Clairview-Internal: true` from localhost.
+> Auth methods: cookie `token=<TOKEN>`, header `Authorization: Bearer <TOKEN>`, or `X-Vistaclair-Internal: true` from localhost.
 
 ### $\texttt{POST /api/run}$
 
