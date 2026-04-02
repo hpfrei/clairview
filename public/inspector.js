@@ -1188,6 +1188,16 @@
     if (bar) bar.innerHTML = renderUsage(usage, pricing);
   }
 
+  function costGauge(cost) {
+    const pct = Math.min(cost / 100, 1);
+    const w = 40, h = 10, fill = pct * w;
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    return `<span class="footer-cost-gauge"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" rx="2" fill="var(--bg)" stroke="var(--border)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span class="footer-cost-label" style="color:${color}">${formatCost(cost)}</span></span>`;
+  }
+
   function updateStats() {
     const total = state.interactions.length;
     let inputTokens = 0, outputTokens = 0, cacheRead = 0, cacheCreate = 0, toolCallCount = 0, totalCost = 0;
@@ -1203,16 +1213,37 @@
       }
       toolCallCount += extractToolCalls(i).length;
     }
-    let parts = [
-      `${total} turn${total !== 1 ? 's' : ''}`,
-      `${toolCallCount} tool call${toolCallCount !== 1 ? 's' : ''}`,
-      `${inputTokens.toLocaleString()} in`,
-      `${outputTokens.toLocaleString()} out`,
-    ];
-    if (cacheRead) parts.push(`${cacheRead.toLocaleString()} cache read`);
-    if (cacheCreate) parts.push(`${cacheCreate.toLocaleString()} cache create`);
-    if (hasCost) parts.push(formatCost(totalCost));
-    statsEl.textContent = parts.join(' | ');
+
+    // Footer stats section
+    statsEl.textContent = `${total} turn${total !== 1 ? 's' : ''} \u00b7 ${toolCallCount} tool call${toolCallCount !== 1 ? 's' : ''}`;
+
+    // Footer tokens section — arrows for in/out
+    const tokensEl = document.getElementById('footerTokens');
+    if (tokensEl) {
+      tokensEl.innerHTML =
+        `<span class="ft-in"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1L7 5H1Z" fill="currentColor"/></svg> ${inputTokens.toLocaleString()}</span>` +
+        `<span class="ft-out"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 7L1 3H7Z" fill="currentColor"/></svg> ${outputTokens.toLocaleString()}</span>`;
+    }
+
+    // Footer cache section — cache icon with create/read
+    const cacheEl = document.getElementById('footerCache');
+    if (cacheEl) {
+      if (cacheRead || cacheCreate) {
+        const icon = '<svg class="ft-cache-icon" width="10" height="10" viewBox="0 0 10 10"><ellipse cx="5" cy="2.5" rx="4" ry="1.8" fill="none" stroke="currentColor" stroke-width="0.9"/><path d="M1 2.5v2.2c0 1 1.8 1.8 4 1.8s4-.8 4-1.8V2.5" fill="none" stroke="currentColor" stroke-width="0.9"/><path d="M1 4.7v2.2c0 1 1.8 1.8 4 1.8s4-.8 4-1.8V4.7" fill="none" stroke="currentColor" stroke-width="0.9"/></svg>';
+        let parts = '';
+        if (cacheCreate) parts += `<span class="ft-cache-w">${icon} ${cacheCreate.toLocaleString()} w</span>`;
+        if (cacheRead) parts += `<span class="ft-cache-r">${icon} ${cacheRead.toLocaleString()} r</span>`;
+        cacheEl.innerHTML = parts;
+      } else {
+        cacheEl.innerHTML = '';
+      }
+    }
+
+    // Footer cost section with gauge
+    const costEl = document.getElementById('footerCost');
+    if (costEl) {
+      costEl.innerHTML = hasCost ? costGauge(totalCost) : '';
+    }
   }
 
   // --- Session list in empty state ---

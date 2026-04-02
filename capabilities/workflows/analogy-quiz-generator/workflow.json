@@ -5,53 +5,32 @@
   "steps": {
     "gather-topic": {
       "profile": "safe",
-      "do": "Use the AskUserQuestion tool to ask the user what topic they'd like to be quizzed on. The question should be friendly and open-ended, e.g. 'What topic would you like a quiz question about? It can be anything — science, history, programming, philosophy, etc.' Return the user's chosen topic as your output.",
-      "produces": "The user's chosen topic as a plain string"
+      "do": "Use the AskUserQuestion tool to ask the user what topic they'd like to be quizzed on. Explain that you'll create an analogy-based quiz question that tests their understanding of the topic in a creative way. Accept any subject — technical, scientific, historical, philosophical, etc.",
+      "produces": "The user's chosen topic as a string"
     },
-    "find-analogy": {
+    "generate-quiz": {
       "profile": "safe",
-      "do": "Given the user's topic from the previous step, brainstorm and select one vivid, unexpected analogy domain that maps well onto the core concepts of that topic. For example, if the topic is 'TCP/IP networking', an analogy domain might be 'a postal service system'. Choose an analogy that is concrete, relatable, and structurally rich enough to support a quiz question. Output the analogy domain and a brief explanation of how it maps to the original topic (at least 3 mapping points between the analogy and the real topic).",
-      "produces": "The chosen analogy domain and a structural mapping (3+ correspondence points) between the analogy and the original topic",
+      "do": "Given the user's topic, perform these creative reasoning steps:\n\n1. **Find an analogy**: Identify a vivid, unexpected analogy from a completely different domain that shares deep structural similarities with the topic. Avoid clichéd analogies. The analogy should illuminate a non-obvious truth about the topic.\n\n2. **Map a situation**: Create a concrete scenario set entirely within the analogy domain. The scenario should present a problem, decision, or observation that parallels a real dynamic in the original topic.\n\n3. **Formulate the question**: Write a multiple-choice question (4 options, exactly one correct) set in the analogy world. The correct answer should, when mapped back to the original topic, reveal a genuine insight or truth. The wrong answers should be plausible within the analogy but incorrect when mapped back.\n\n4. **Prepare the reveal**: Write a brief explanation that maps the correct answer back to the original topic, showing why it's true and what insight it reveals.\n\nOutput all of this as structured text: the analogy domain, the scenario, the question with labeled options (A–D), the correct answer letter, and the reveal explanation.",
+      "produces": "A complete quiz package: analogy domain, scenario, multiple-choice question with 4 options, correct answer, and reveal explanation",
       "context": [
         "gather-topic"
       ]
     },
-    "map-situation": {
-      "profile": "safe",
-      "do": "Using the analogy domain and mapping from the previous step, construct a specific scenario or situation described entirely within the analogy space. This scenario should encode a non-obvious truth or important principle about the original topic. The situation should be detailed enough to reason about but should NOT mention the original topic directly — it should be told purely in analogy terms. For example, if the analogy is 'postal service' for 'TCP/IP', describe a situation like 'A postmaster guarantees every letter arrives in order by requiring the recipient to send back a signed receipt for each letter before the next one is sent.'",
-      "produces": "A concrete scenario described in the analogy domain that encodes a truth about the original topic",
-      "context": [
-        "gather-topic",
-        "find-analogy"
-      ]
-    },
-    "formulate-question": {
-      "profile": "safe",
-      "do": "Using the analogy scenario from the previous step, formulate a multiple-choice quiz question (4 options, exactly one correct). The question should present the analogy scenario and ask what principle or truth about the ORIGINAL topic it illustrates. The correct answer should reveal a genuine insight about the original topic. The three wrong answers should be plausible but incorrect. Output the question text, the four options labeled A-D, and indicate which is correct along with a brief explanation of why.",
-      "produces": "A complete multiple-choice question with 4 options, the correct answer marked, and an explanation",
-      "context": [
-        "gather-topic",
-        "find-analogy",
-        "map-situation"
-      ]
-    },
     "deliver-quiz": {
       "profile": "safe",
-      "do": "Use the AskUserQuestion tool to present the quiz question to the user. Show the analogy scenario and the question text, then provide the four answer options (A, B, C, D) as selectable choices. Do NOT reveal the correct answer yet. Return the user's selected answer.",
-      "produces": "The user's selected answer (A, B, C, or D)",
+      "do": "Present the quiz to the user interactively:\n\n1. Set the scene by briefly introducing the analogy domain and scenario. Do NOT mention the original topic yet — the magic is in the reveal.\n\n2. Use AskUserQuestion to present the multiple-choice question with the 4 options. Let the user pick their answer.\n\n3. After they answer, reveal whether they were correct or incorrect. Then deliver the reveal — explain the analogy mapping back to the original topic and the truth it illuminates. Make this moment satisfying: connect the dots clearly so the user has an 'aha!' moment.\n\n4. If they got it wrong, be encouraging and explain why the correct answer maps back correctly.",
+      "produces": "The user's answer, whether it was correct, and the full reveal explanation delivered to the user",
       "context": [
-        "formulate-question"
+        "generate-quiz"
       ]
     },
-    "reveal-and-summarize": {
+    "summary": {
       "profile": "safe",
-      "do": "Compare the user's answer to the correct answer from the formulate-question step. Use the AskUserQuestion tool to present the result: tell them whether they got it right or wrong, reveal the correct answer, and provide the full explanation. Explain how the analogy maps back to the original topic, what truth it illustrates, and why the correct answer is correct. Make it educational and encouraging regardless of whether they answered correctly. End by asking if they'd like another question on a different topic.",
-      "produces": "A summary revealing the correct answer, the explanation of the analogy mapping, and encouragement",
+      "do": "Provide a brief, friendly wrap-up of the quiz experience. Mention the topic, the analogy used, whether the user answered correctly, and the key insight revealed. Keep it concise and end on an encouraging note.",
+      "produces": "A short summary of the quiz session",
       "context": [
         "gather-topic",
-        "find-analogy",
-        "map-situation",
-        "formulate-question",
+        "generate-quiz",
         "deliver-quiz"
       ]
     }

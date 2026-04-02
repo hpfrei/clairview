@@ -1,6 +1,7 @@
 module.exports = {
   name: "explain-topic-workflow",
   sourceHash: "f68b47ebd7a6",
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   inputs: {
     topic: { type: "string", required: true, description: "The topic the user wants explained" }
   },

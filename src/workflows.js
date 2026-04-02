@@ -699,8 +699,8 @@ function generateWorkflow(description, feedback, { proxyPort, cwd, envContext })
           envContext.tools.map(t => `  - ${t.name}: ${t.description || '(no description)'}${t.params?.length ? ' — params: ' + t.params.map(p => p.name).join(', ') : ''}`).join('\n'));
       }
       if (envContext.workflows?.length) {
-        parts.push('Other existing workflows (can be invoked via the workflow_run MCP tool):\n' +
-          envContext.workflows.map(w => `  - ${w.name}: ${w.description || '(no description)'}`).join('\n'));
+        parts.push('Other existing workflows (available as MCP tools by name — hyphens become underscores, -workflow suffix stripped):\n' +
+          envContext.workflows.map(w => `  - ${w.name} → tool: ${w.name.replace(/-workflow$/, '').replace(/-/g, '_')}: ${w.description || '(no description)'}`).join('\n'));
       }
       if (parts.length) envSection = '\n\nEnvironment context:\n' + parts.join('\n\n');
     }
@@ -714,9 +714,10 @@ ${feedback ? `Additional feedback from the user: "${feedback}"` : ''}${envSectio
 Output ONLY valid JSON in this exact format (no markdown, no explanation):
 {
   "name": "kebab-case-name",
-  "description": "what this workflow does",
+  "description": "Concise action phrase — becomes the MCP tool description (e.g., 'Analyze a codebase and generate a dependency report')",
   "inputs": {
-    "key": "description of this input"
+    "key": "description — shorthand for a required string parameter",
+    "key": { "type": "string|number|boolean", "description": "what this parameter does", "required": true }
   },
   "steps": {
     "step-name": {
@@ -741,6 +742,13 @@ Output ONLY valid JSON in this exact format (no markdown, no explanation):
 }
 
 Rules:
+- IMPORTANT: This workflow becomes an MCP tool. The "name" becomes the tool name (hyphens → underscores, "-workflow" suffix stripped, e.g., "analyze-code" → tool named "analyze_code"). The "description" becomes the tool description visible to the LLM.
+- IMPORTANT: The "inputs" object defines the tool's typed parameters — they are what the caller passes when invoking the tool.
+  - Each input key becomes a named parameter (e.g., "topic" → tool is called with { topic: "..." })
+  - Use clear, descriptive parameter names like function arguments (e.g., "file_path", "language", "max_results") — avoid generic names like "input" or "data"
+  - String value is shorthand for a required string param. Use object form { type, description, required } for non-string types or optional params.
+  - Only define inputs the workflow truly needs from the caller. If a step gathers info interactively (via AskUserQuestion), that is NOT an input.
+  - Steps reference inputs via {{key}} placeholders in their "do" text. Every defined input must be used by at least one step.
 - IMPORTANT: Each step spawns a full Claude Code agent session (claude -p). A single step can perform complex multi-file operations, multi-turn reasoning, read/write files, run shell commands, search the web, spawn sub-agents, and more. Do NOT over-decompose — combine related work into fewer, more capable steps rather than splitting into many trivial ones.
 - Each step's "do" field should be a clear, detailed instruction for the Claude Code agent that will execute it
 - Use "context" to reference outputs from previous steps that this step needs
@@ -752,7 +760,7 @@ Rules:
 - Use "onError" to redirect to a fallback step if the current step fails
 - When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool
 - If a step can leverage an existing MCP tool (listed above), mention the tool by name in the "do" instruction
-- If a step can delegate to another workflow, use the workflow_run MCP tool
+- If a step can delegate to another workflow, call it directly by its tool name (e.g., analyze_code)
 - Match each step's profile to its requirements using the capabilities listed above:
   - Steps that write or edit files MUST use a profile with Write/Edit tools
   - Steps that run shell commands MUST use a profile with Bash
@@ -831,8 +839,8 @@ function compileWorkflow(name, { proxyPort, cwd, broadcaster, envContext }) {
           envContext.tools.map(t => `  - ${t.name}: ${t.description || ''}${t.params?.length ? ' — params: ' + t.params.map(p => `${p.name}(${p.type})`).join(', ') : ''}`).join('\n'));
       }
       if (envContext.workflows?.length) {
-        parts.push('Other workflows (callable via workflow_run tool):\n' +
-          envContext.workflows.map(w => `  - ${w.name}: ${w.description || ''}`).join('\n'));
+        parts.push('Other workflows (available as MCP tools by name):\n' +
+          envContext.workflows.map(w => `  - ${w.name} → tool: ${w.name.replace(/-workflow$/, '').replace(/-/g, '_')}: ${w.description || ''}`).join('\n'));
       }
       if (parts.length) envSection = '\n\nEnvironment context (tools/workflows the steps can use):\n' + parts.join('\n\n') + '\n';
     }
@@ -850,9 +858,19 @@ The module must export:
 
 module.exports = {
   name: "${workflow.name}",
+  description: ${JSON.stringify(workflow.description || '')},
   sourceHash: "${sourceHash}",
+  annotations: {
+    // MCP tool annotations — set based on what the workflow steps actually do:
+    readOnlyHint: true/false,    // true if NO step can write files, edit, or run shell commands
+    destructiveHint: true/false, // true if ANY step can modify files or run shell commands
+    openWorldHint: true/false,   // true if ANY step can access the web (WebSearch, WebFetch)
+  },
   inputs: {
-    // key: { type: "string", required: true/false, description: "..." }
+    // Map each input from the source JSON faithfully:
+    // If the source value is a string "desc": { type: "string", required: true, description: "desc" }
+    // If the source value is an object { type, description, required }: preserve all fields exactly
+    // key: { type: "string"|"number"|"boolean", required: true/false, description: "..." }
   },
   steps: [
     {
@@ -880,6 +898,12 @@ module.exports = {
 };
 
 Rules:
+- The "inputs" object defines MCP tool parameters. Map each source input faithfully:
+  - If the source value is a string: { type: "string", required: true, description: <the string> }
+  - If the source value is an object with type/description/required: preserve all fields exactly
+  - Every input must appear in at least one step's buildPrompt(ctx) as ctx.inputs.<key>
+- In buildPrompt(ctx), always access inputs via ctx.inputs.<key> — never hardcode input values
+- If a step's "do" text contains {{key}}, the compiled buildPrompt must inject ctx.inputs.key at that position
 - Convert "do" text into buildPrompt(ctx) that injects context from previous steps via ctx.steps[id].output
 - Convert "condition" text into evaluate(ctx) JS predicate — deterministic, no AI call needed
 - Convert "produces" into parseOutput(raw) that extracts the expected shape
@@ -887,6 +911,15 @@ Rules:
 - If the source JSON step has "parallel", "join", "timeout", or "onError" fields, preserve them exactly in the compiled output. Parallel steps dispatch child steps — they have no buildPrompt, only parallel/join/onError fields.
 - The steps array must be in execution order
 - Use the exact sourceHash provided
+- Set the "annotations" object based on what the workflow's step profiles allow:
+  - Examine each step's "profile" field. The builtin profiles and their capabilities are:
+    - "full": all tools (Bash, Write, Edit, Read, WebSearch, WebFetch, etc.) — NOT read-only, IS destructive
+    - "safe": no Bash/Write/Edit/NotebookEdit — may still search the web
+    - "readonly": only Read, Glob, Grep, AskUserQuestion — IS read-only, NOT destructive
+    - "minimal": only Read, Glob, Grep — IS read-only, NOT destructive
+  - readOnlyHint: true only if ALL steps use "readonly" or "minimal" profiles (no step can modify anything)
+  - destructiveHint: true if ANY step uses "full" profile (has Bash, Write, Edit access)
+  - openWorldHint: true if ANY step uses "full" or "safe" profile (has potential web access)
 - Output rendering supports full Markdown, MathJax ($...$ and $$...$$), and fenced code blocks. When a step produces visual output (diagrams, UI, formulas), use these formats:
   - Markdown tables, lists, headings for structured text
   - \`\`\`html for rendered HTML content (iframes, styled elements)
@@ -921,7 +954,43 @@ Rules:
 
       try {
         if (fs.existsSync(compiledPath)) {
-          const compiledSource = fs.readFileSync(compiledPath, 'utf8');
+          let compiledSource = fs.readFileSync(compiledPath, 'utf8');
+          let needsWrite = false;
+
+          // Patch sourceHash — the LLM may not copy the exact hash from the prompt
+          const hashPatched = compiledSource.replace(
+            /sourceHash:\s*["']([^"']+)["']/,
+            `sourceHash: "${sourceHash}"`
+          );
+          if (hashPatched !== compiledSource) {
+            compiledSource = hashPatched;
+            needsWrite = true;
+          }
+
+          // Compute annotations from step profiles deterministically
+          const profiles = Object.values(workflow.steps || {}).map(s => s.profile || 'full');
+          const destructive = profiles.some(p => p === 'full');
+          const readOnly = profiles.every(p => p === 'readonly' || p === 'minimal');
+          const openWorld = profiles.some(p => p === 'full' || p === 'safe');
+          const annotations = `{ readOnlyHint: ${readOnly}, destructiveHint: ${destructive}, openWorldHint: ${openWorld} }`;
+
+          // Patch or insert annotations
+          if (/annotations:\s*\{[^}]*\}/.test(compiledSource)) {
+            const annPatched = compiledSource.replace(
+              /annotations:\s*\{[^}]*\}/,
+              `annotations: ${annotations}`
+            );
+            if (annPatched !== compiledSource) { compiledSource = annPatched; needsWrite = true; }
+          } else {
+            // Insert annotations after sourceHash line
+            const annInserted = compiledSource.replace(
+              /(sourceHash:\s*["'][^"']+["'],?\s*\n)/,
+              `$1  annotations: ${annotations},\n`
+            );
+            if (annInserted !== compiledSource) { compiledSource = annInserted; needsWrite = true; }
+          }
+
+          if (needsWrite) fs.writeFileSync(compiledPath, compiledSource);
           resolve({ name, success: true, sourceHash, compiledSource });
         } else {
           const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';

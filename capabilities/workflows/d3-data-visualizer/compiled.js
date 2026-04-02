@@ -9,6 +9,7 @@
 module.exports = {
   name: "d3-data-visualizer",
   sourceHash: "0c7e1818da9b",
+  annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   inputs: {},
   steps: [
     {

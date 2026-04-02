@@ -241,7 +241,7 @@ const timelineList = document.getElementById('timeline-list');
 const detailContent = document.getElementById('detail-content');
 const emptyState = document.getElementById('empty-state');
 const statusEl = document.getElementById('status');
-const statsEl = document.getElementById('stats');
+const statsEl = document.getElementById('footerStats');
 const sessionPicker = document.getElementById('sessionPicker');
 const newSessionBtn = document.getElementById('newSessionBtn');
 const deleteSessionBtn = document.getElementById('deleteSessionBtn');
@@ -298,13 +298,12 @@ function setupCwdToolbar({ editBtn, label, input, setBtn, onSave }) {
 
 // --- Claude process count indicator ---
 function updateClaudeCount(count) {
-  const el = document.getElementById('claude-count');
+  const el = document.getElementById('footerClaudes');
   if (!el) return;
   if (count > 0) {
-    el.textContent = count === 1 ? '1 claude' : `${count} claudes`;
-    el.classList.remove('hidden');
+    el.innerHTML = `<span class="footer-claudes">${count === 1 ? '1 claude' : `${count} claudes`}</span>`;
   } else {
-    el.classList.add('hidden');
+    el.innerHTML = '';
   }
 }
 

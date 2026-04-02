@@ -1,10 +1,11 @@
 // Compiled from workflow.json — analogy-quiz-generator
-// sourceHash: 50652d60604f
+// sourceHash: b5c56107123f
 // Generated: 2026-03-30
 
 module.exports = {
   name: "analogy-quiz-generator",
-  sourceHash: "50652d60604f",
+  sourceHash: "317c90b79c04",
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   inputs: {},
   steps: [
     {

@@ -23,6 +23,8 @@ function buildClaudeArgs(profile) {
   if (profile.allowedTools?.length > 0) {
     args.push('--allowedTools', ...profile.allowedTools);
   }
+  // Always allow integrated MCP tools so workflow tools don't require manual approval
+  args.push('--allowedTools', 'mcp__integrated__*');
   if (profile.disabledTools?.length > 0) {
     args.push('--disallowedTools', ...profile.disabledTools);
   }

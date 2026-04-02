@@ -861,30 +861,62 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
 
 footer {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 6px 16px;
-  background: var(--bg-surface);
-  border-top: none;
+  padding: 0 0 0 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-dim);
+  height: 28px;
+  gap: 0;
 }
-
+.footer-section {
+  padding: 0 12px;
+  white-space: nowrap;
+  line-height: 28px;
+}
+.footer-section + .footer-section {
+  border-left: 1px solid var(--border);
+}
+.footer-section:empty { display: none; }
+.footer-spacer { flex: 1; }
 .footer-credit {
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
   color: var(--text-dim);
   text-decoration: none;
   font-size: 10px;
+  line-height: 28px;
 }
 .footer-credit:hover {
   color: var(--text);
   text-decoration: underline;
 }
-.claude-count {
-  font-size: 10px;
-  color: var(--cyan);
-  margin-right: 8px;
+/* Footer tokens & cache */
+.ft-in, .ft-out, .ft-cache-w, .ft-cache-r {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
-.claude-count.hidden { display: none; }
+.ft-in { color: var(--blue, #4488cc); }
+.ft-out { color: var(--green, #44aa66); margin-left: 8px; }
+.ft-in svg, .ft-out svg { opacity: 0.8; }
+.ft-cache-w { color: var(--orange, #cc8833); }
+.ft-cache-r { color: var(--cyan, #22aacc); margin-left: 8px; }
+.ft-cache-icon { opacity: 0.7; }
+
+.footer-cost-gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.footer-cost-gauge svg { vertical-align: middle; }
+.footer-cost-label { font-weight: 600; }
+.footer-claudes {
+  color: var(--cyan);
+  font-weight: 600;
+}
+.footer-claudes:empty { display: none; }
 
 /* ============================================================
    CLAUDE CHAT VIEW
