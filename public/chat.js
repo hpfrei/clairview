@@ -48,17 +48,17 @@
   function renderTabStrip(tabList) {
     if (!tabStrip) return;
     // Remove existing tab buttons (keep the + button)
-    tabStrip.querySelectorAll('.chat-tab').forEach(b => b.remove());
+    tabStrip.querySelectorAll('.view-tab').forEach(b => b.remove());
     const list = tabList || Array.from(tabs.keys());
     for (const tabId of list) {
       const btn = document.createElement('button');
-      btn.className = 'chat-tab' + (tabId === activeTabId ? ' active' : '');
+      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '');
       btn.dataset.tabId = tabId;
       const label = tabId.startsWith('wf-') ? tabId : tabId.replace('tab-', 'Tab ');
       btn.innerHTML = escHtml(label);
       if (tabId !== 'tab-1') {
         const closeBtn = document.createElement('span');
-        closeBtn.className = 'chat-tab-close';
+        closeBtn.className = 'view-tab-close';
         closeBtn.textContent = '\u00d7';
         closeBtn.title = 'Close tab';
         btn.appendChild(closeBtn);
@@ -68,10 +68,10 @@
   }
 
   tabStrip?.addEventListener('click', (e) => {
-    const closeBtn = e.target.closest('.chat-tab-close');
+    const closeBtn = e.target.closest('.view-tab-close');
     if (closeBtn) {
       e.stopPropagation();
-      const tab = closeBtn.closest('.chat-tab');
+      const tab = closeBtn.closest('.view-tab');
       const tabId = tab?.dataset.tabId;
       if (tabId && tabId !== 'tab-1') {
         sendWs({ type: 'chat:closeTab', tabId });
@@ -81,7 +81,7 @@
       }
       return;
     }
-    const tabBtn = e.target.closest('.chat-tab');
+    const tabBtn = e.target.closest('.view-tab');
     if (tabBtn?.dataset.tabId) {
       switchTab(tabBtn.dataset.tabId);
     }
@@ -111,7 +111,7 @@
     // Update status display
     updateChatStatus(active.status);
     // Update tab strip active state
-    tabStrip?.querySelectorAll('.chat-tab').forEach(b => {
+    tabStrip?.querySelectorAll('.view-tab').forEach(b => {
       b.classList.toggle('active', b.dataset.tabId === tabId);
     });
     // Sync shared state

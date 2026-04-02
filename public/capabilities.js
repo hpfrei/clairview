@@ -749,11 +749,11 @@ Available templates in this skill directory:
 
     // Build provider tabs (preserve non-tab children like the action button)
     if (nav) {
-      nav.querySelectorAll('.home-nav-btn').forEach(b => b.remove());
-      const actionBtn = nav.querySelector('.models-nav-action');
+      nav.querySelectorAll('.view-tab').forEach(b => b.remove());
+      const actionBtn = nav.querySelector('.view-nav-action');
       for (const prov of state.providers) {
         const btn = document.createElement('button');
-        btn.className = 'home-nav-btn' + (activeProviderTab === prov.key || (!activeProviderTab && prov === state.providers[0]) ? ' active' : '');
+        btn.className = 'view-tab' + (activeProviderTab === prov.key || (!activeProviderTab && prov === state.providers[0]) ? ' active' : '');
         btn.dataset.provider = prov.key;
         btn.textContent = prov.label;
         nav.insertBefore(btn, actionBtn);
@@ -816,7 +816,7 @@ Available templates in this skill directory:
 
   // Provider tab switching
   document.getElementById('modelsNav')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.home-nav-btn');
+    const btn = e.target.closest('.view-tab');
     if (!btn) return;
     activeProviderTab = btn.dataset.provider;
     renderModelsPanel();

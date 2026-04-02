@@ -48,14 +48,14 @@
 
   <!-- ===== HOME VIEW ===== -->
   <div id="view-home">
-    <div class="home-nav" id="homeNav">
-      <button class="home-nav-btn active" data-section="overview">Overview</button>
-      <button class="home-nav-btn" data-section="architecture">Architecture</button>
-      <button class="home-nav-btn" data-section="workflows">Workflows</button>
-      <button class="home-nav-btn" data-section="tools">Tools &amp; MCP</button>
-      <button class="home-nav-btn" data-section="api">API</button>
+    <div class="view-nav" id="homeNav">
+      <button class="view-tab active" data-section="overview">Overview</button>
+      <button class="view-tab" data-section="architecture">Architecture</button>
+      <button class="view-tab" data-section="workflows">Workflows</button>
+      <button class="view-tab" data-section="tools">Tools &amp; MCP</button>
+      <button class="view-tab" data-section="api">API</button>
     </div>
-    <div class="home-content" id="homeContent">
+    <div class="view-body" id="homeContent">
       <div class="home-section active" id="home-overview"></div>
       <div class="home-section" id="home-architecture"></div>
       <div class="home-section" id="home-workflows"></div>
@@ -90,9 +90,9 @@
 
   <!-- ===== CLAUDE VIEW ===== -->
   <div id="view-claude" class="hidden" style="display:none">
-    <div class="chat-tab-strip" id="chatTabStrip">
-      <button class="chat-tab active" data-tab-id="tab-1">Tab 1</button>
-      <button class="chat-tab-new" id="chatTabNew" title="New tab">+</button>
+    <div class="view-nav" id="chatTabStrip">
+      <button class="view-tab active" data-tab-id="tab-1">Tab 1</button>
+      <button class="view-tab-new" id="chatTabNew" title="New tab">+</button>
     </div>
     <div class="chat-container">
       <div class="chat-messages" id="chatMessages">
@@ -131,6 +131,13 @@
 
   <!-- ===== REFERENCE VIEW ===== -->
   <div id="view-capabilities" class="hidden">
+    <div class="view-nav" id="refNav">
+      <button class="view-tab active" data-section="tools">Tools</button>
+      <button class="view-tab" data-section="skills">Skills</button>
+      <button class="view-tab" data-section="agents">Agents</button>
+      <button class="view-tab" data-section="hooks">Hooks</button>
+      <button class="view-tab" data-section="mcp">MCP Tools</button>
+    </div>
     <div class="ref-container">
 
       <!-- Profile toolbar -->
@@ -154,15 +161,6 @@
         <div class="ref-stat"><span class="ref-stat-value" id="capAgentCount">0</span><span class="ref-stat-label">Agents</span></div>
         <div class="ref-stat"><span class="ref-stat-value" id="capHookCount">0</span><span class="ref-stat-label">Hooks</span></div>
         <div class="ref-stat"><span class="ref-stat-value" id="capMcpCount">0</span><span class="ref-stat-label">MCP Tools</span></div>
-      </div>
-
-      <!-- Section tabs -->
-      <div class="ref-nav" id="refNav">
-        <button class="ref-nav-btn active" data-section="tools">Tools</button>
-        <button class="ref-nav-btn" data-section="skills">Skills</button>
-        <button class="ref-nav-btn" data-section="agents">Agents</button>
-        <button class="ref-nav-btn" data-section="hooks">Hooks</button>
-        <button class="ref-nav-btn" data-section="mcp">MCP Tools</button>
       </div>
 
       <!-- ===================== TOOLS ===================== -->
@@ -967,11 +965,6 @@
     </div><!-- /ref-container -->
   </div><!-- /view-capabilities -->
 
-  <footer>
-    <span id="stats">0 requests</span>
-    <span id="claude-count" class="claude-count hidden" title="Running Claude processes">0 claudes</span>
-    <a class="footer-credit" href="https://hpfreilabs.com" target="_blank" rel="noopener">by hpfreilabs.com</a>
-  </footer>
     <!-- ===================== PROFILE MODAL ===================== -->
     <div class="cap-modal-backdrop hidden" id="profileModal">
       <div class="cap-modal">
@@ -1678,27 +1671,33 @@ any of these formats in its response.</pre>
 
   <!-- ===== WORKFLOW RUNS VIEW ===== -->
   <div id="view-workflow-runs" class="hidden" style="display:none">
-    <div class="chat-tab-strip" id="wfrunTabStrip">
-      <button class="chat-tab active" data-tab-id="wfrun-1">Run 1</button>
-      <button class="chat-tab-new" id="wfrunTabNew" title="New run tab">+</button>
-      <button class="cap-action-btn wfrun-nav-action" id="wfNewBtn" title="Create a new workflow">+ New</button>
+    <div class="view-nav" id="wfrunTabStrip">
+      <button class="view-tab active" data-tab-id="wfrun-1">Run 1</button>
+      <button class="view-tab-new" id="wfrunTabNew" title="New run tab">+</button>
+      <button class="cap-action-btn view-nav-action" id="wfNewBtn" title="Create a new workflow">+ New</button>
     </div>
     <div class="wf-error-bar hidden" id="wfErrorBar"></div>
-    <div class="wfrun-container" id="wfrunContainer">
+    <div class="view-body" id="wfrunContainer">
       <!-- Phase panels swapped here per tab -->
     </div>
   </div>
 
   <!-- ===== MODELS VIEW ===== -->
   <div id="view-models" class="hidden" style="display:none">
-    <div class="models-nav" id="modelsNav">
-      <button class="cap-action-btn models-nav-action" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
+    <div class="view-nav" id="modelsNav">
+      <button class="cap-action-btn view-nav-action" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
     </div>
-    <div class="models-content" id="modelsContent">
+    <div class="view-body" id="modelsContent">
       <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
       <div id="capModelList"></div>
     </div>
   </div>
+
+  <footer>
+    <span id="stats">0 requests</span>
+    <span id="claude-count" class="claude-count hidden" title="Running Claude processes">0 claudes</span>
+    <a class="footer-credit" href="https://hpfreilabs.com" target="_blank" rel="noopener">by hpfreilabs.com</a>
+  </footer>
 
   <!-- Directory Picker Modal -->
   <div class="cap-modal-backdrop hidden" id="dirPickerModal">

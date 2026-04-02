@@ -7,10 +7,10 @@
 
   // --- Sub-tab switching ---
   document.getElementById('homeNav')?.addEventListener('click', e => {
-    const btn = e.target.closest('.home-nav-btn');
+    const btn = e.target.closest('.view-tab');
     if (!btn) return;
     const section = btn.dataset.section;
-    document.querySelectorAll('.home-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.home-section').forEach(s => s.classList.remove('active'));
     const target = document.getElementById('home-' + section);

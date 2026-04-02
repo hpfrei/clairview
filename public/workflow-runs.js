@@ -49,18 +49,18 @@
   function renderTabStrip() {
     if (!tabStrip) return;
     // Remove only tab buttons, preserve static action buttons
-    tabStrip.querySelectorAll('.chat-tab, .chat-tab-new').forEach(el => el.remove());
+    tabStrip.querySelectorAll('.view-tab, .view-tab-new').forEach(el => el.remove());
 
     const ref = wfNewBtn || null; // insert before the action button
     for (const [id, tab] of tabs) {
       const btn = document.createElement('button');
-      btn.className = 'chat-tab' + (id === activeTabId ? ' active' : '');
+      btn.className = 'view-tab' + (id === activeTabId ? ' active' : '');
       btn.dataset.tabId = id;
       const label = tab.workflowName || id.replace('wfrun-', 'Run ');
       btn.innerHTML = escHtml(label);
       if (tabs.size > 1) {
         const closeBtn = document.createElement('span');
-        closeBtn.className = 'chat-tab-close';
+        closeBtn.className = 'view-tab-close';
         closeBtn.textContent = '\u00d7';
         closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeTab(id); });
         btn.appendChild(closeBtn);
@@ -69,7 +69,7 @@
       tabStrip.insertBefore(btn, ref);
     }
     const newBtn = document.createElement('button');
-    newBtn.className = 'chat-tab-new';
+    newBtn.className = 'view-tab-new';
     newBtn.title = 'New run tab';
     newBtn.textContent = '+';
     newBtn.addEventListener('click', () => {

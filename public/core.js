@@ -566,11 +566,11 @@ function toggleRef(header) {
 }
 
 document.getElementById('refNav').addEventListener('click', e => {
-  const btn = e.target.closest('.ref-nav-btn');
+  const btn = e.target.closest('.view-tab');
   if (!btn) return;
   const section = btn.dataset.section;
 
-  document.querySelectorAll('.ref-nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 
   document.querySelectorAll('.ref-panel').forEach(p => p.classList.remove('active'));
