@@ -75,48 +75,7 @@ You are an expert at [domain]. When triggered, you should:
 Available templates in this skill directory:
 !\`ls \${CLAUDE_SKILL_DIR}/templates/ 2>/dev/null || echo "(no templates yet)"\``;
 
-  // --- Toolbar ---
-
-  function renderCapabilitiesToolbar() {
-    const c = state.capabilities;
-    if (!c) return;
-
-    const profileSel = document.getElementById('capProfileSelect');
-    if (profileSel && state.profiles.length > 0) {
-      profileSel.innerHTML = '';
-      for (const p of state.profiles) {
-        const opt = document.createElement('option');
-        opt.value = p.name;
-        opt.textContent = p.builtin ? `${p.name} (built-in)` : p.name;
-        profileSel.appendChild(opt);
-      }
-      profileSel.value = c.name || 'full';
-    }
-
-    const delBtn = document.getElementById('capDeleteProfile');
-    const prof = state.profiles.find(p => p.name === c.name);
-    if (delBtn) delBtn.disabled = !!c.builtin || (prof?.usedBy?.length > 0);
-
-    const summary = document.getElementById('capProfileSummary');
-    if (summary) {
-      const parts = [];
-      if (c.model) parts.push(c.model);
-      if (c.effort) parts.push(c.effort);
-      if (c.permissionMode && c.permissionMode !== 'default') parts.push(c.permissionMode);
-      if (c.maxTurns) parts.push(`${c.maxTurns} turns`);
-      if (c.maxBudgetUsd) parts.push(`$${c.maxBudgetUsd}`);
-      const allowedCount = c.allowedTools?.length || 0;
-      if (allowedCount > 0) parts.push(`${allowedCount} tools allowed`);
-      const disabledCount = c.disabledTools?.length || 0;
-      if (disabledCount > 0) parts.push(`${disabledCount} tools off`);
-      if (c.disableSlashCommands) parts.push('skills off');
-      const mcpCount = c.mcpServers?.length || 0;
-      if (mcpCount > 0) parts.push(`${mcpCount} MCP`);
-      summary.textContent = parts.length > 0 ? parts.join(' \u00b7 ') : 'defaults';
-    }
-
-    updateCapabilityStats();
-  }
+  // --- Capability stats ---
 
   function updateCapabilityStats() {
     const c = state.capabilities;
@@ -137,14 +96,290 @@ Available templates in this skill directory:
     if (mcpCountEl) mcpCountEl.textContent = state.mcpServers?.length || 0;
   }
 
-  // Profile selector (Capabilities tab)
-  document.getElementById('capProfileSelect')?.addEventListener('change', (e) => {
-    const name = e.target.value;
-    if (!name) return;
-    sendWs({ type: 'chat:switchProfile', name });
+  // --- Profiles View (inline editing) ---
+
+  let activeProfileTab = null;
+
+  function renderProfileTabs() {
+    const nav = document.getElementById('profilesNav');
+    if (!nav) return;
+    nav.querySelectorAll('.view-tab').forEach(b => b.remove());
+    const actionBtn = nav.querySelector('.view-nav-action');
+    if (!activeProfileTab && state.profiles.length) activeProfileTab = state.profiles[0].name;
+    for (const p of state.profiles) {
+      const btn = document.createElement('button');
+      btn.className = 'view-tab' + (activeProfileTab === p.name ? ' active' : '');
+      btn.dataset.profile = p.name;
+      btn.textContent = p.name + (p.builtin ? ' ●' : '');
+      nav.insertBefore(btn, actionBtn);
+    }
+    renderProfileEditor();
+  }
+
+  function renderProfileEditor() {
+    const editor = document.getElementById('profileEditor');
+    if (!editor) return;
+    const profile = state.profiles.find(p => p.name === activeProfileTab);
+    if (!profile) { editor.innerHTML = '<div class="models-empty">Select a profile or create a new one.</div>'; return; }
+    const isBuiltin = !!profile.builtin;
+    const dis = isBuiltin ? ' disabled' : '';
+    const usedBy = profile.usedBy || [];
+    const usageHtml = usedBy.length > 0
+      ? `<div class="pm-usage-info">Used in: ${escHtml(usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('; '))}</div>`
+      : '';
+    const builtinBanner = isBuiltin
+      ? '<div class="pm-view-banner">This is a built-in profile. Fields are read-only.</div>'
+      : '';
+
+    editor.innerHTML = `${builtinBanner}
+    <div class="pm-inline-columns">
+      <div class="pm-inline-main">
+        <div class="pm-form-group">
+          <h4>Identity</h4>
+          <div class="pm-field-row">
+            <label>Name: <input type="text" id="pmName" value="${escHtml(profile.name)}" placeholder="my-profile" ${dis} readonly></label>
+          </div>
+          ${usageHtml}
+        </div>
+        <div class="pm-form-group">
+          <h4>Model</h4>
+          <div class="pm-field-row">
+            <label class="pm-wide">Model: <select id="pmModel"${dis}></select></label>
+          </div>
+          <div class="pm-field-row" id="pmEffortRow">
+            <label>Thinking effort:
+              <select id="pmEffort"${dis}>
+                <option value="">default</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="max">max</option>
+              </select>
+            </label>
+            <span class="pm-model-info" id="pmModelInfo"></span>
+          </div>
+        </div>
+        <div class="pm-form-group">
+          <h4>Permissions</h4>
+          <div class="pm-field-row">
+            <label>Permission mode:
+              <select id="pmPermission"${dis}>
+                <option value="default">default</option>
+                <option value="acceptEdits">acceptEdits</option>
+                <option value="plan">plan</option>
+                <option value="bypassPermissions">bypassPermissions</option>
+                <option value="dontAsk">dontAsk</option>
+                <option value="auto">auto</option>
+              </select>
+            </label>
+            <label class="pm-check"><input type="checkbox" id="pmSlash"${dis}> Slash commands</label>
+            <label class="pm-check"><input type="checkbox" id="pmBare"${dis}> Bare mode <span class="cap-modal-hint">(no skills or MCPs)</span></label>
+            <label class="pm-check"><input type="checkbox" id="pmDisableMemory"${dis}> Disable auto-memory</label>
+          </div>
+        </div>
+        <div class="pm-form-group">
+          <h4>Limits</h4>
+          <div class="pm-field-row">
+            <label>Max turns: <input type="number" id="pmMaxTurns" min="1" max="999" placeholder="--" style="width:60px"${dis}></label>
+            <label>Budget $: <input type="number" id="pmMaxBudget" min="0.01" step="0.01" placeholder="--" style="width:70px"${dis}></label>
+          </div>
+        </div>
+        <div class="pm-form-group">
+          <h4>Tools</h4>
+          <p class="cap-modal-hint">Checked tools are enabled. Unchecked tools are passed as <code>--disallowedTools</code> to the CLI.</p>
+          <label class="pm-tool-item" style="margin-bottom:8px;font-weight:600">
+            <input type="checkbox" id="pmAllowAllTools"${dis}> Allow all tools (pass <code>--allowedTools</code> — bypasses permission prompts)
+          </label>
+          <div class="pm-tool-grid" id="pmToolGrid"></div>
+        </div>
+        <div class="pm-form-group">
+          <h4>System Prompts</h4>
+          <label class="cap-modal-label">Append to system prompt <span class="cap-modal-hint" style="font-weight:normal">— added after the default prompt</span></label>
+          <textarea id="pmAppendPrompt" class="pm-textarea" rows="3" placeholder="e.g. Focus on code quality and security..."${dis}></textarea>
+          <label class="cap-modal-label" style="margin-top:10px">Override system prompt <span class="cap-modal-hint" style="font-weight:normal">— replaces the entire default (use with caution)</span></label>
+          <textarea id="pmSystemPrompt" class="pm-textarea" rows="3" placeholder="Leave empty to use default system prompt"${dis}></textarea>
+        </div>
+        ${isBuiltin ? '' : `<div class="pm-inline-actions">
+          <button class="cap-save-btn" id="pmSave">Save</button>
+          <button class="cap-del-btn pm-delete-btn" id="pmDelete"${usedBy.length > 0 ? ' disabled title="Profile is used by workflows"' : ''}>Delete</button>
+          <button class="cap-action-btn pm-activate-btn" id="pmActivate">Activate</button>
+        </div>`}
+      </div>
+      <div class="cap-modal-docs">
+        <h4>CLI flag mapping</h4>
+        <pre class="cap-modal-pre">Field            CLI flag
+─────────────    ──────────────────────
+model            --model &lt;value&gt;
+effort           --effort &lt;level&gt;
+permission       --permission-mode &lt;mode&gt;
+slash cmds off   --disable-slash-commands
+tools            --disallowedTools T1 T2
+max turns        --max-turns &lt;n&gt;
+budget           --max-budget-usd &lt;n&gt;
+append prompt    --append-system-prompt
+system prompt    --system-prompt</pre>
+        <h4>Permission modes</h4>
+        <pre class="cap-modal-pre">default        Ask for each tool use
+acceptEdits    Auto-accept file edits
+plan           Read-only, suggest only
+bypassPermissions  Skip all prompts
+dontAsk        Bypass + auto-accept
+auto           Automatic with guardrails</pre>
+        <h4>Built-in profiles</h4>
+        <pre class="cap-modal-pre">full     All tools, no prompts
+safe     acceptEdits, blocks Bash/Write
+readonly plan mode, Read/Glob/Grep only
+minimal  plan mode, Read/Glob/Grep</pre>
+      </div>
+    </div>`;
+
+    // Populate dynamic fields
+    populateModelSelector(profile);
+    document.getElementById('pmEffort').value = profile.effort || '';
+    updateModelInfo();
+    updateToolGridForModel();
+
+    document.getElementById('pmPermission').value = profile.permissionMode || 'default';
+    document.getElementById('pmMaxTurns').value = profile.maxTurns || '';
+    document.getElementById('pmMaxBudget').value = profile.maxBudgetUsd || '';
+    document.getElementById('pmSlash').checked = !profile.disableSlashCommands;
+    document.getElementById('pmBare').checked = !!profile.bare;
+    document.getElementById('pmDisableMemory').checked = profile.disableAutoMemory !== false;
+    document.getElementById('pmAppendPrompt').value = profile.appendSystemPrompt || '';
+    document.getElementById('pmSystemPrompt').value = profile.systemPrompt || '';
+
+    // Allow-all-tools checkbox
+    const allowAllEl = document.getElementById('pmAllowAllTools');
+    if (allowAllEl) {
+      const allowed = new Set(profile.allowedTools || []);
+      allowAllEl.checked = allowed.size > 0 && state.knownTools.every(t => allowed.has(t));
+    }
+
+    // Tool checkbox grid
+    const grid = document.getElementById('pmToolGrid');
+    if (grid) {
+      grid.innerHTML = '';
+      const disabled = new Set(profile.disabledTools || []);
+      for (const tool of state.knownTools) {
+        const item = document.createElement('label');
+        item.className = 'pm-tool-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !disabled.has(tool);
+        cb.dataset.tool = tool;
+        if (isBuiltin) cb.disabled = true;
+        item.appendChild(cb);
+        item.appendChild(document.createTextNode(' ' + tool));
+        grid.appendChild(item);
+      }
+    }
+
+    // Save button
+    document.getElementById('pmSave')?.addEventListener('click', saveCurrentProfile);
+    // Delete button
+    document.getElementById('pmDelete')?.addEventListener('click', () => {
+      if (!confirm(`Delete profile "${activeProfileTab}"? This cannot be undone.`)) return;
+      sendWs({ type: 'profile:delete', name: activeProfileTab });
+    });
+    // Activate button
+    document.getElementById('pmActivate')?.addEventListener('click', () => {
+      sendWs({ type: 'chat:switchProfile', name: activeProfileTab });
+    });
+    // Model change updates info and tool grid
+    document.getElementById('pmModel')?.addEventListener('change', () => {
+      updateModelInfo();
+      updateToolGridForModel();
+    });
+  }
+
+  function saveCurrentProfile() {
+    const name = document.getElementById('pmName')?.value?.trim();
+    if (!name) return alert('Profile name is required.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _.\-]*$/.test(name) || name.length < 2) {
+      return alert('Invalid name. Use letters, numbers, spaces, hyphens, underscores, or dots. Min 2 chars.');
+    }
+    const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;
+    const allowedTools = allowAllTools ? [...state.knownTools] : [];
+    const disabledTools = [];
+    document.querySelectorAll('#pmToolGrid input[type="checkbox"]').forEach(cb => {
+      if (!cb.checked) disabledTools.push(cb.dataset.tool);
+    });
+    const mcpServers = [];
+    document.querySelectorAll('#pmMcpGrid input[type="checkbox"]').forEach(cb => {
+      if (cb.checked) mcpServers.push(cb.dataset.slug);
+    });
+    const maxT = parseInt(document.getElementById('pmMaxTurns')?.value);
+    const maxB = parseFloat(document.getElementById('pmMaxBudget')?.value);
+    const profile = {
+      name,
+      label: name,
+      description: '',
+      builtin: false,
+      model: (() => {
+        const v = document.getElementById('pmModel')?.value || '';
+        return (!v || v.startsWith('modeldef:')) ? null : v;
+      })(),
+      effort: document.getElementById('pmEffort')?.value || null,
+      permissionMode: document.getElementById('pmPermission')?.value || 'default',
+      allowedTools,
+      disabledTools,
+      mcpServers,
+      disableSlashCommands: !document.getElementById('pmSlash')?.checked,
+      bare: !!document.getElementById('pmBare')?.checked,
+      disableAutoMemory: document.getElementById('pmDisableMemory')?.checked !== false,
+      maxTurns: maxT > 0 ? maxT : null,
+      maxBudgetUsd: maxB > 0 ? maxB : null,
+      appendSystemPrompt: document.getElementById('pmAppendPrompt')?.value?.trim() || null,
+      systemPrompt: document.getElementById('pmSystemPrompt')?.value?.trim() || null,
+      modelDef: (() => {
+        const v = document.getElementById('pmModel')?.value || '';
+        return v.startsWith('modeldef:') ? v.slice(9) : null;
+      })(),
+    };
+    const oldName = activeProfileTab;
+    const msg = { type: 'profile:save', profile };
+    if (oldName && oldName !== name) msg.oldName = oldName;
+    sendWs(msg);
+    activeProfileTab = name;
+  }
+
+  // Profile tab switching
+  document.getElementById('profilesNav')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.view-tab');
+    if (!btn) return;
+    activeProfileTab = btn.dataset.profile;
+    renderProfileTabs();
   });
 
-  // --- Profile Modal ---
+  // New profile button
+  document.getElementById('profileNewBtn')?.addEventListener('click', () => {
+    // Create a temporary new profile entry
+    const name = 'new-profile';
+    let counter = 1;
+    let finalName = name;
+    while (state.profiles.some(p => p.name === finalName)) {
+      finalName = `${name}-${counter++}`;
+    }
+    const newProf = {
+      name: finalName, builtin: false,
+      model: null, effort: null, permissionMode: 'default',
+      allowedTools: [], disabledTools: [], mcpServers: [],
+      disableSlashCommands: false, bare: false, disableAutoMemory: true,
+      maxTurns: null, maxBudgetUsd: null,
+      appendSystemPrompt: null, systemPrompt: null, modelDef: null,
+    };
+    sendWs({ type: 'profile:save', profile: newProf });
+    activeProfileTab = finalName;
+  });
+
+  // External API: navigate to profiles view and select a profile tab
+  function openProfileModal(profile) {
+    if (profile?.name) activeProfileTab = profile.name;
+    switchView('profiles');
+    renderProfileTabs();
+  }
+
+  // --- Profile model helpers ---
 
   const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 
@@ -290,242 +525,6 @@ Available templates in this skill directory:
     }
   }
 
-  // Listen for model selector changes
-  document.getElementById('pmModel')?.addEventListener('change', () => {
-    updateModelInfo();
-    updateToolGridForModel();
-  });
-
-  function openProfileModal(profile, mode) {
-    const title = document.getElementById('profileModalTitle');
-    if (mode === 'new') title.textContent = 'New Profile';
-    else if (mode === 'duplicate') title.textContent = 'Duplicate Profile';
-    else if (mode === 'view') title.textContent = `Profile: ${profile.name}`;
-    else title.textContent = `Edit Profile: ${profile.name}`;
-
-    const nameInput = document.getElementById('pmName');
-    nameInput.value = mode === 'duplicate' ? '' : (profile.name || '');
-    const usedBy = profile.usedBy || [];
-    const inUse = usedBy.length > 0;
-    nameInput.readOnly = mode === 'view' || (mode === 'edit' && inUse);
-
-    // Show/hide usage info
-    let usageEl = document.getElementById('pmUsageInfo');
-    if (!usageEl) {
-      usageEl = document.createElement('div');
-      usageEl.id = 'pmUsageInfo';
-      usageEl.className = 'pm-usage-info';
-      nameInput.closest('.pm-form-group').appendChild(usageEl);
-    }
-    if (inUse && mode === 'edit') {
-      const refs = usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('; ');
-      usageEl.textContent = `Used in: ${refs}`;
-      usageEl.style.display = '';
-    } else {
-      usageEl.style.display = 'none';
-    }
-
-    // Store original name for rename detection
-    nameInput.dataset.oldName = mode === 'edit' ? (profile.name || '') : '';
-
-    // Unified model selector
-    populateModelSelector(profile);
-    document.getElementById('pmEffort').value = profile.effort || '';
-    updateModelInfo();
-
-    document.getElementById('pmPermission').value = profile.permissionMode || 'default';
-    document.getElementById('pmMaxTurns').value = profile.maxTurns || '';
-    document.getElementById('pmMaxBudget').value = profile.maxBudgetUsd || '';
-    document.getElementById('pmSlash').checked = !profile.disableSlashCommands;
-    document.getElementById('pmBare').checked = !!profile.bare;
-    document.getElementById('pmDisableMemory').checked = profile.disableAutoMemory !== false;
-    document.getElementById('pmAppendPrompt').value = profile.appendSystemPrompt || '';
-    document.getElementById('pmSystemPrompt').value = profile.systemPrompt || '';
-
-    // Allow-all-tools checkbox
-    const allowAllEl = document.getElementById('pmAllowAllTools');
-    if (allowAllEl) {
-      const allowed = new Set(profile.allowedTools || []);
-      allowAllEl.checked = allowed.size > 0 && state.knownTools.every(t => allowed.has(t));
-    }
-
-    // Tool checkbox grid
-    const grid = document.getElementById('pmToolGrid');
-    grid.innerHTML = '';
-    const disabled = new Set(profile.disabledTools || []);
-    for (const tool of state.knownTools) {
-      const item = document.createElement('label');
-      item.className = 'pm-tool-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = !disabled.has(tool);
-      cb.dataset.tool = tool;
-      item.appendChild(cb);
-      item.appendChild(document.createTextNode(' ' + tool));
-      grid.appendChild(item);
-    }
-
-    // Mark server-side-only tools based on selected model
-    updateToolGridForModel();
-
-    // MCP server checkbox grid
-    const mcpGrid = document.getElementById('pmMcpGrid');
-    if (mcpGrid) {
-      const available = state.mcpServers || [];
-      if (available.length === 0) {
-        mcpGrid.innerHTML = '<span class="cap-modal-hint">No MCP servers created yet.</span>';
-      } else {
-        mcpGrid.innerHTML = '';
-        const selected = new Set(profile.mcpServers || []);
-        for (const srv of available) {
-          const item = document.createElement('label');
-          item.className = 'pm-tool-item';
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = selected.has(srv.slug);
-          cb.dataset.slug = srv.slug;
-          item.appendChild(cb);
-          item.appendChild(document.createTextNode(' ' + (srv.icon || '') + ' ' + (srv.name || srv.slug)));
-          mcpGrid.appendChild(item);
-        }
-      }
-    }
-
-    // View mode: disable all controls, show read-only notice
-    const modal = document.getElementById('profileModal');
-    const isView = mode === 'view';
-    modal.classList.toggle('pm-view-mode', isView);
-    for (const el of modal.querySelectorAll('input, select, textarea')) {
-      if (isView) el.setAttribute('disabled', '');
-      else el.removeAttribute('disabled');
-    }
-    const saveBtn = document.getElementById('pmSave');
-    if (isView) saveBtn.setAttribute('disabled', '');
-    else saveBtn.removeAttribute('disabled');
-
-    let banner = document.getElementById('pmViewBanner');
-    if (isView) {
-      if (!banner) {
-        banner = document.createElement('div');
-        banner.id = 'pmViewBanner';
-        banner.className = 'pm-view-banner';
-        banner.textContent = 'This is a built-in profile and cannot be edited. Use "Duplicate" to create your own copy.';
-        modal.querySelector('.cap-modal-body').prepend(banner);
-      }
-      banner.style.display = '';
-    } else if (banner) {
-      banner.style.display = 'none';
-    }
-
-    modal.classList.remove('hidden');
-  }
-
-  function closeProfileModal() {
-    document.getElementById('profileModal')?.classList.add('hidden');
-  }
-
-  // New profile
-  document.getElementById('capNewProfile')?.addEventListener('click', () => {
-    openProfileModal({
-      name: '', builtin: false,
-      model: null, effort: null, permissionMode: 'default',
-      allowedTools: [], disabledTools: [], mcpServers: [], disableSlashCommands: false,
-      maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
-      modelDef: null,
-    }, 'new');
-  });
-
-  // Edit profile (view-only for built-ins)
-  document.getElementById('capEditProfile')?.addEventListener('click', () => {
-    if (!state.capabilities) return;
-    const prof = (state.profiles || []).find(p => p.name === state.capabilities.name);
-    const merged = { ...state.capabilities, usedBy: prof?.usedBy || [] };
-    openProfileModal(merged, state.capabilities.builtin ? 'view' : 'edit');
-  });
-
-  // Duplicate profile
-  document.getElementById('capDuplicateProfile')?.addEventListener('click', () => {
-    if (!state.capabilities) return;
-    openProfileModal(state.capabilities, 'duplicate');
-  });
-
-  // Delete profile
-  document.getElementById('capDeleteProfile')?.addEventListener('click', () => {
-    const name = state.capabilities?.name;
-    if (!name) return;
-    if (state.capabilities?.builtin) return alert('Cannot delete built-in profiles. Duplicate it to create an editable copy.');
-    const prof = (state.profiles || []).find(p => p.name === name);
-    const usedBy = prof?.usedBy || [];
-    if (usedBy.length > 0) {
-      const refs = usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('\n');
-      return alert(`Cannot delete "${name}" — it is used in:\n${refs}`);
-    }
-    if (!confirm(`Delete profile "${name}"? This cannot be undone.`)) return;
-    sendWs({ type: 'profile:delete', name });
-  });
-
-  // Save from modal
-  document.getElementById('pmSave')?.addEventListener('click', () => {
-    const name = document.getElementById('pmName')?.value?.trim();
-    if (!name) return alert('Profile name is required.');
-    if (!/^[A-Za-z0-9][A-Za-z0-9 _.\-]*$/.test(name) || name.length < 2) {
-      return alert('Invalid name. Use letters, numbers, spaces, hyphens, underscores, or dots. Min 2 chars.');
-    }
-
-    const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;
-    const allowedTools = allowAllTools ? [...state.knownTools] : [];
-
-    const disabledTools = [];
-    document.querySelectorAll('#pmToolGrid input[type="checkbox"]').forEach(cb => {
-      if (!cb.checked) disabledTools.push(cb.dataset.tool);
-    });
-
-    const mcpServers = [];
-    document.querySelectorAll('#pmMcpGrid input[type="checkbox"]').forEach(cb => {
-      if (cb.checked) mcpServers.push(cb.dataset.slug);
-    });
-
-    const maxT = parseInt(document.getElementById('pmMaxTurns')?.value);
-    const maxB = parseFloat(document.getElementById('pmMaxBudget')?.value);
-
-    const profile = {
-      name,
-      label: name,
-      description: '',
-      builtin: false,
-      model: (() => {
-        const v = document.getElementById('pmModel')?.value || '';
-        return (!v || v.startsWith('modeldef:')) ? null : v;
-      })(),
-      effort: document.getElementById('pmEffort')?.value || null,
-      permissionMode: document.getElementById('pmPermission')?.value || 'default',
-      allowedTools,
-      disabledTools,
-      mcpServers,
-      disableSlashCommands: !document.getElementById('pmSlash')?.checked,
-      bare: !!document.getElementById('pmBare')?.checked,
-      disableAutoMemory: document.getElementById('pmDisableMemory')?.checked !== false,
-      maxTurns: maxT > 0 ? maxT : null,
-      maxBudgetUsd: maxB > 0 ? maxB : null,
-      appendSystemPrompt: document.getElementById('pmAppendPrompt')?.value?.trim() || null,
-      systemPrompt: document.getElementById('pmSystemPrompt')?.value?.trim() || null,
-      modelDef: (() => {
-        const v = document.getElementById('pmModel')?.value || '';
-        return v.startsWith('modeldef:') ? v.slice(9) : null;
-      })(),
-    };
-
-    const oldName = document.getElementById('pmName')?.dataset.oldName || '';
-    const msg = { type: 'profile:save', profile };
-    if (oldName && oldName !== name) msg.oldName = oldName;
-    sendWs(msg);
-    sendWs({ type: 'chat:switchProfile', name });
-    closeProfileModal();
-  });
-
-  // Cancel / close modal
-  document.getElementById('pmClose')?.addEventListener('click', closeProfileModal);
-  document.getElementById('pmCancel')?.addEventListener('click', closeProfileModal);
 
   // --- Skills Panel ---
 
@@ -1211,7 +1210,7 @@ IMPORTANT: You MUST directly edit the files using your Edit or Write tools — d
         break;
       case 'profile:list':
         state.profiles = msg.profiles || [];
-        renderCapabilitiesToolbar();
+        renderProfileTabs();
         break;
     }
   }
@@ -1219,7 +1218,8 @@ IMPORTANT: You MUST directly edit the files using your Edit or Write tools — d
   function handleSettings(msg) {
     // State sync handled by core.js syncSettings(); just re-render here
     if (msg.capabilities || msg.profiles) {
-      renderCapabilitiesToolbar();
+      renderProfileTabs();
+      updateCapabilityStats();
       renderSkillsPanel();
     }
   }

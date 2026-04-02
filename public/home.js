@@ -134,9 +134,10 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 1. **Chat tab** -- type a prompt, pick a profile (model + permissions), set a working directory. Open multiple tabs for parallel conversations -- each is fully isolated.
 2. **Workflows tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once. Create, edit, and delete workflows from the card grid. The \`+ New\` button opens the editor to design, generate, and compile multi-step automations.
 3. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
-4. **Profiles tab** -- configure model, effort level, permission mode, MCP tools, and system prompt per profile. Builtin profiles: \`full\` (all tools), \`safe\` (no bash/write), \`readonly\`, \`minimal\`.
-5. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
-6. **REST API** -- \`POST /api/run\` to start chats or workflows programmatically and stream results via SSE.
+4. **Profiles tab** -- one tab per profile with inline editing of model, effort, permission mode, tools, and system prompts. Builtin profiles (\`full\`, \`safe\`, \`readonly\`, \`minimal\`) are read-only.
+5. **Tools tab** -- browse all tools, skills, agents, hooks, and MCP tools available to the active profile.
+6. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
+7. **REST API** -- \`POST /api/run\` to start chats or workflows programmatically and stream results via SSE.
 `;
 
   const architectureMd = `

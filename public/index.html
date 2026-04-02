@@ -30,7 +30,8 @@
       <nav class="header-tabs" id="headerTabs">
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab" data-view="claude">Chat</button>
-        <button class="header-tab" data-view="capabilities">Profiles</button>
+        <button class="header-tab" data-view="profiles">Profiles</button>
+        <button class="header-tab" data-view="capabilities">Tools</button>
         <button class="header-tab" data-view="workflow-runs">Workflows</button>
         <button class="header-tab" data-view="models">Models</button>
       </nav>
@@ -129,7 +130,17 @@
     </div>
   </div>
 
-  <!-- ===== REFERENCE VIEW ===== -->
+  <!-- ===== PROFILES VIEW ===== -->
+  <div id="view-profiles" class="hidden" style="display:none">
+    <div class="view-nav" id="profilesNav">
+      <button class="cap-action-btn view-nav-action" id="profileNewBtn" title="Create a new profile">+ New</button>
+    </div>
+    <div class="view-body" id="profilesBody">
+      <div id="profileEditor"></div>
+    </div>
+  </div>
+
+  <!-- ===== TOOLS VIEW ===== -->
   <div id="view-capabilities" class="hidden">
     <div class="view-nav" id="refNav">
       <button class="view-tab active" data-section="tools">Tools</button>
@@ -139,20 +150,6 @@
       <button class="view-tab" data-section="mcp">MCP Tools</button>
     </div>
     <div class="ref-container">
-
-      <!-- Profile toolbar -->
-      <div class="cap-toolbar">
-        <div class="cap-toolbar-row">
-          <label class="cap-field">Profile:
-            <select id="capProfileSelect"></select>
-          </label>
-          <span class="cap-profile-summary" id="capProfileSummary"></span>
-          <button class="cap-profile-action" id="capEditProfile" title="Edit profile settings">Edit</button>
-          <button class="cap-profile-action" id="capNewProfile" title="Create new profile">+ New</button>
-          <button class="cap-profile-action" id="capDuplicateProfile" title="Duplicate current profile">Duplicate</button>
-          <button class="cap-profile-action cap-del-profile" id="capDeleteProfile" title="Delete current profile">Delete</button>
-        </div>
-      </div>
 
       <!-- Stats bar -->
       <div class="ref-stats">
@@ -965,160 +962,6 @@
     </div><!-- /ref-container -->
   </div><!-- /view-capabilities -->
 
-    <!-- ===================== PROFILE MODAL ===================== -->
-    <div class="cap-modal-backdrop hidden" id="profileModal">
-      <div class="cap-modal">
-        <div class="cap-modal-header">
-          <h3 id="profileModalTitle">New Profile</h3>
-          <button class="cap-modal-close" id="pmClose" title="Close">&times;</button>
-        </div>
-        <div class="cap-modal-body">
-          <div class="cap-modal-columns">
-            <div class="cap-modal-main">
-
-              <div class="pm-form-group">
-                <h4>Identity</h4>
-                <div class="pm-field-row">
-                  <label>Name: <input type="text" id="pmName" placeholder="my-profile" pattern="[a-z][a-z0-9-]*" title="Lowercase letters, numbers, hyphens. Min 2 chars."></label>
-                </div>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>Model</h4>
-                <div class="pm-field-row">
-                  <label class="pm-wide">Model:
-                    <select id="pmModel"></select>
-                  </label>
-                </div>
-                <div class="pm-field-row" id="pmEffortRow">
-                  <label>Thinking effort:
-                    <select id="pmEffort">
-                      <option value="">default</option>
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                      <option value="max">max</option>
-                    </select>
-                  </label>
-                  <span class="pm-model-info" id="pmModelInfo"></span>
-                </div>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>Permissions</h4>
-                <div class="pm-field-row">
-                  <label>Permission mode:
-                    <select id="pmPermission">
-                      <option value="default">default</option>
-                      <option value="acceptEdits">acceptEdits</option>
-                      <option value="plan">plan</option>
-                      <option value="bypassPermissions">bypassPermissions</option>
-                      <option value="dontAsk">dontAsk</option>
-                      <option value="auto">auto</option>
-                    </select>
-                  </label>
-                  <label class="pm-check"><input type="checkbox" id="pmSlash" checked> Slash commands</label>
-                  <label class="pm-check"><input type="checkbox" id="pmBare"> Bare mode <span class="cap-modal-hint">(no skills or MCPs)</span></label>
-                  <label class="pm-check"><input type="checkbox" id="pmDisableMemory" checked> Disable auto-memory</label>
-                </div>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>Limits</h4>
-                <div class="pm-field-row">
-                  <label>Max turns: <input type="number" id="pmMaxTurns" min="1" max="999" placeholder="--" style="width:60px"></label>
-                  <label>Budget $: <input type="number" id="pmMaxBudget" min="0.01" step="0.01" placeholder="--" style="width:70px"></label>
-                </div>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>Tools</h4>
-                <p class="cap-modal-hint">Checked tools are enabled. Unchecked tools are passed as <code>--disallowedTools</code> to the CLI.</p>
-                <label class="pm-tool-item" style="margin-bottom:8px;font-weight:600">
-                  <input type="checkbox" id="pmAllowAllTools"> Allow all tools (pass <code>--allowedTools</code> &mdash; bypasses permission prompts)
-                </label>
-                <div class="pm-tool-grid" id="pmToolGrid"></div>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>MCP Tools</h4>
-                <p class="cap-modal-hint">The integrated MCP tool server (clairview-tools) is automatically available to all profiles. Manage tools in the MCP Tools section of the Capabilities tab.</p>
-              </div>
-
-              <div class="pm-form-group">
-                <h4>System Prompts</h4>
-                <label class="cap-modal-label">Append to system prompt <span class="cap-modal-hint" style="font-weight:normal">&mdash; added after the default prompt</span></label>
-                <textarea id="pmAppendPrompt" class="pm-textarea" rows="3" placeholder="e.g. Focus on code quality and security..."></textarea>
-                <label class="cap-modal-label" style="margin-top:10px">Override system prompt <span class="cap-modal-hint" style="font-weight:normal">&mdash; replaces the entire default (use with caution)</span></label>
-                <textarea id="pmSystemPrompt" class="pm-textarea" rows="3" placeholder="Leave empty to use default system prompt"></textarea>
-              </div>
-
-            </div>
-            <div class="cap-modal-docs">
-              <h4>CLI flag mapping</h4>
-              <pre class="cap-modal-pre">Field            CLI flag
-─────────────    ──────────────────────
-model            --model &lt;value&gt;
-effort           --effort &lt;level&gt;
-permission       --permission-mode &lt;mode&gt;
-slash cmds off   --disable-slash-commands
-tools            --disallowedTools T1 T2
-max turns        --max-turns &lt;n&gt;
-budget           --max-budget-usd &lt;n&gt;
-append prompt    --append-system-prompt
-system prompt    --system-prompt
-mcp tools        (auto-registered)
-
-              <h4>Permission modes</h4>
-              <pre class="cap-modal-pre">default        Ask for each tool use
-acceptEdits    Auto-accept file edits,
-               ask for Bash/other
-plan           Read-only, suggest changes
-               but don't apply them
-bypassPermissions  Skip all permission
-               prompts (dangerous!)
-dontAsk        Like bypass + auto-accept
-auto           Automatic mode with
-               guardrails</pre>
-
-              <h4>Built-in profiles</h4>
-              <pre class="cap-modal-pre">full     Everything enabled, all tools
-         allowed (no permission prompts)
-
-safe     acceptEdits mode, blocks
-         Bash/Write/Edit/Notebook
-
-readonly plan mode, only Read/Glob/
-         Grep/AskUser, skills off
-
-minimal  plan mode, only Read/Glob/
-         Grep, skills off</pre>
-
-              <h4>System prompts</h4>
-              <p class="cap-modal-hint"><strong>Append</strong> adds text after Claude's built-in system prompt. Use for additional instructions, coding style preferences, or project-specific context.</p>
-              <p class="cap-modal-hint"><strong>Override</strong> completely replaces the default system prompt. Only use when you need full control &mdash; you lose all built-in tool instructions and safety guidelines.</p>
-
-              <h4>Tools</h4>
-              <p class="cap-modal-hint"><strong>Allow all tools</strong> passes <code>--allowedTools</code> with every tool name, bypassing permission prompts for Write, WebFetch, Bash, Agent, Tasks, etc. Unchecked tools are passed via <code>--disallowedTools</code> and Claude cannot invoke them.</p>
-
-              <h4>MCP Tools</h4>
-              <p class="cap-modal-hint">Custom tools provided by the integrated MCP server. The server auto-starts with the dashboard and all enabled tools are available across all profiles.</p>
-
-              <h4>Effort levels</h4>
-              <pre class="cap-modal-pre">low     Minimal reasoning, fast
-medium   Balanced (default behavior)
-high     More thorough analysis
-max      Extended thinking, deepest
-         reasoning (slower, costly)</pre>
-            </div>
-          </div>
-        </div>
-        <div class="cap-modal-footer">
-          <button class="cap-cancel-btn" id="pmCancel">Cancel</button>
-          <button class="cap-save-btn" id="pmSave">Save Profile</button>
-        </div>
-      </div>
-    </div>
 
     <!-- ===================== SKILL MODAL ===================== -->
     <div class="cap-modal-backdrop hidden" id="skillModal">

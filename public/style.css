@@ -148,7 +148,7 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
 }
 
 /* Tabbed view containers */
-#view-home, #view-claude, #view-capabilities, #view-workflow-runs, #view-models {
+#view-home, #view-claude, #view-profiles, #view-capabilities, #view-workflow-runs, #view-models {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1759,69 +1759,6 @@ footer {
    CAPABILITIES TAB
    ============================================================ */
 
-.cap-toolbar {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 16px;
-  margin-bottom: 16px;
-}
-
-.cap-toolbar-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.cap-toolbar-row + .cap-toolbar-row {
-  margin-top: 8px;
-}
-
-.cap-field {
-  font-size: 11px;
-  color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.cap-field select, .cap-field input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 11px;
-  font-family: inherit;
-}
-
-/* Profile summary in toolbar */
-.cap-profile-summary {
-  font-size: 11px;
-  color: var(--text-dim);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Profile action buttons */
-.cap-profile-action {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-dim);
-  cursor: pointer;
-  font-family: inherit;
-}
-.cap-profile-action:hover { color: var(--text); background: var(--bg-hover); }
-.cap-del-profile { color: var(--red); }
-.cap-del-profile:hover { border-color: var(--red); }
-.cap-del-profile:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Skills status */
 .cap-skills-status strong { color: var(--green); }
@@ -2437,10 +2374,44 @@ footer {
   border: 1px solid var(--border);
   color: var(--text-dim);
 }
-.pm-view-mode input:disabled,
-.pm-view-mode select:disabled,
-.pm-view-mode textarea:disabled { opacity: 0.5; cursor: not-allowed; }
-.pm-view-mode .cap-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Inline profile editor */
+.pm-inline-columns {
+  display: flex;
+  gap: 24px;
+}
+.pm-inline-main {
+  flex: 1;
+  min-width: 0;
+}
+.pm-inline-columns .cap-modal-docs {
+  width: 280px;
+  flex-shrink: 0;
+}
+.pm-inline-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.pm-delete-btn {
+  padding: 6px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid var(--red);
+  color: var(--red);
+  background: none;
+}
+.pm-delete-btn:hover { background: var(--red); color: #fff; }
+.pm-delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pm-activate-btn {
+  margin-left: auto;
+}
+@media (max-width: 800px) {
+  .pm-inline-columns { flex-direction: column; }
+  .pm-inline-columns .cap-modal-docs { width: auto; }
+}
 
 /* ============================================================
    TASK PANEL
