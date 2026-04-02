@@ -396,16 +396,22 @@
     html += '</div>';
 
     // Chat flow area — shows all non-pending step outputs
+    if (!tab.collapsedSteps) tab.collapsedSteps = new Set();
     html += '<div class="wfrun-chat" id="wfrunChat">';
     for (const s of tab.steps) {
       if (s.status === 'pending') continue;
       const icon = icons[s.status] || '\u25cb';
+      const isCollapsed = tab.collapsedSteps.has(s.id);
+      const timeStr = formatStepTime(s.startedAt);
       html += `<div class="wfrun-chat-step" data-chat-step="${escHtml(s.id)}">`;
-      html += `<div class="wfrun-chat-step-header ${s.status}">
+      html += `<div class="wfrun-chat-step-header ${s.status}${isCollapsed ? ' collapsed' : ''}" data-step-toggle="${escHtml(s.id)}">
+        <span class="wfrun-chat-step-chevron">\u25be</span>
         <span class="wfrun-chat-step-icon ${s.status}">${icon}</span>
         <span>${escHtml(s.id)}</span>
+        <span class="wfrun-chat-step-time">${timeStr}</span>
       </div>`;
 
+      html += `<div class="wfrun-chat-step-body${isCollapsed ? ' collapsed' : ''}">`;
       // Answered questions for this step
       if (tab.answeredQuestions) {
         for (const aq of tab.answeredQuestions.filter(a => a.stepId === s.id)) {
@@ -418,7 +424,8 @@
       }
 
       html += `<div class="wfrun-chat-output markdown-body" data-step-output="${escHtml(s.id)}"></div>`;
-      html += '</div>';
+      html += '</div>'; // close step-body
+      html += '</div>'; // close chat-step
     }
     html += '</div>';
 
@@ -432,6 +439,18 @@
 
     html += '</div>';
     container.innerHTML = html;
+
+    // Event: step header click — toggle collapse
+    container.querySelectorAll('[data-step-toggle]').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        const stepId = hdr.dataset.stepToggle;
+        if (tab.collapsedSteps.has(stepId)) tab.collapsedSteps.delete(stepId);
+        else tab.collapsedSteps.add(stepId);
+        hdr.classList.toggle('collapsed');
+        const body = hdr.nextElementSibling;
+        if (body) body.classList.toggle('collapsed');
+      });
+    });
 
     // Event: profile badge click — open profile edit modal
     container.querySelectorAll('.wfrun-step-profile').forEach(el => {
@@ -707,7 +726,13 @@
     if (step) {
       step.status = status;
       if (elapsed !== undefined) step.elapsed = elapsed;
+      if (status === 'running' && !step.startedAt) step.startedAt = Date.now();
     }
+  }
+
+  function formatStepTime(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
   function handleSettings(msg) {

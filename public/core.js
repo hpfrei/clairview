@@ -568,7 +568,7 @@ document.getElementById('refNav').addEventListener('click', e => {
   if (!btn) return;
   const section = btn.dataset.section;
 
-  document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('refNav').querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 
   document.querySelectorAll('.ref-panel').forEach(p => p.classList.remove('active'));

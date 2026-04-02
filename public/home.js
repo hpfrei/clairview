@@ -10,7 +10,7 @@
     const btn = e.target.closest('.view-tab');
     if (!btn) return;
     const section = btn.dataset.section;
-    document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
+    document.getElementById('homeNav').querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.home-section').forEach(s => s.classList.remove('active'));
     const target = document.getElementById('home-' + section);

@@ -752,7 +752,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
         btn.textContent = prov.label;
         nav.insertBefore(btn, actionBtn);
       }
-      if (!activeProviderTab && state.providers.length) activeProviderTab = state.providers[0].key;
+      if ((!activeProviderTab || !state.providers.some(p => p.key === activeProviderTab)) && state.providers.length) activeProviderTab = state.providers[0].key;
     }
 
     // Find active provider

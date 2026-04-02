@@ -155,6 +155,10 @@
 
   // --- Bubbles ---
 
+  function formatTime() {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
   function appendChatBubble(text, role, tabId) {
     const tab = tabs.get(tabId || activeTabId);
     const container = tab?.container || chatMessages;
@@ -170,6 +174,13 @@
       if (text) window.dashboard.renderMarkdown(text, bubble);
     } else {
       bubble.textContent = text;
+    }
+    // Add timestamp (skip for step headers — they get their own inline time)
+    if (role !== 'workflow-step-header') {
+      const timeEl = document.createElement('span');
+      timeEl.className = 'chat-time';
+      timeEl.textContent = formatTime();
+      bubble.appendChild(timeEl);
     }
     container.appendChild(bubble);
     if ((tabId || activeTabId) === activeTabId) chatScrollToBottom();
@@ -367,8 +378,9 @@
       html += `<textarea class="chat-question-textarea" data-qi="${qi}" rows="2" placeholder="Or type your answer here..."></textarea>`;
     }
 
-    // Always show submit
+    // Always show submit + timestamp
     html += `<button class="chat-submit-btn" disabled>Submit</button>`;
+    html += `<span class="chat-time">${formatTime()}</span>`;
 
     bubble.innerHTML = html;
 
@@ -558,24 +570,42 @@
       case 'workflow:step:start': {
         const tab = tabs.get(tabId);
         if (tab) tab.currentEl = null;
-        appendChatBubble(`Step: ${msg.stepId}`, 'workflow-step-header', tabId);
+        // Create collapsible step header
+        const headerEl = appendChatBubble('', 'workflow-step-header', tabId);
+        if (headerEl) {
+          headerEl.innerHTML = `<span class="chat-step-chevron">\u25be</span> ${escHtml(msg.stepId)} <span class="chat-time">${formatTime()}</span>`;
+          headerEl.dataset.stepId = msg.stepId;
+          headerEl.addEventListener('click', () => {
+            headerEl.classList.toggle('collapsed');
+            // Toggle all following step-output siblings until next header
+            let next = headerEl.nextElementSibling;
+            while (next && !next.classList.contains('chat-workflow-step-header') && !next.classList.contains('chat-workflow-info')) {
+              next.classList.toggle('collapsed');
+              next = next.nextElementSibling;
+            }
+          });
+        }
         break;
       }
-      case 'workflow:step:progress':
+      case 'workflow:step:progress': {
         appendChatText(msg.text || '', 'assistant', tabId);
+        // Tag the output bubble so it can be collapsed with the header
+        const tab = tabs.get(tabId);
+        if (tab?.currentEl && !tab.currentEl.classList.contains('chat-step-output')) {
+          tab.currentEl.classList.add('chat-step-output');
+        }
         break;
+      }
       case 'workflow:step:complete': {
         const tab = tabs.get(tabId);
         if (tab && msg.output) {
           if (tab.currentEl) {
-            // Replace streamed progress with definitive final output
             tab.currentEl._rawText = msg.output;
             window.dashboard.renderMarkdown(msg.output, tab.currentEl);
           } else {
-            // No progress was streamed — render final output as new bubble
             const el = appendChatBubble('', 'assistant', tabId);
             if (el) {
-              el.classList.add('markdown-body');
+              el.classList.add('markdown-body', 'chat-step-output');
               el._rawText = msg.output;
               window.dashboard.renderMarkdown(msg.output, el);
             }
@@ -607,7 +637,9 @@
         tabs.set(t.tabId, { container, currentEl: null, status: t.status });
       }
     }
-    renderTabStrip(tabList.map(t => t.tabId));
+    const ids = tabList.map(t => t.tabId);
+    if (ids.length && !ids.includes(activeTabId)) switchTab(ids[0]);
+    renderTabStrip(ids);
   }
 
   function updateProfiles(profiles) {
