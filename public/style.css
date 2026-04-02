@@ -1431,48 +1431,18 @@ footer {
 
 
 .ref-container {
-  max-width: none;
-  margin: 0;
   padding: 16px;
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
 }
 
-/* Stats bar */
-.ref-stats {
-  display: flex;
-  justify-content: center;
-  gap: 32px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 16px;
-}
-
-.ref-stat {
-  text-align: center;
-}
-
-.ref-stat-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--accent);
-  display: block;
-}
-
-.ref-stat-label {
+/* Tab count badge */
+.view-tab-count {
   font-size: 10px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-
-.ref-btn-count {
-  font-size: 11px;
-  opacity: 0.7;
+  opacity: 0.6;
   margin-left: 2px;
+  font-weight: 400;
 }
+
+
 
 /* Section panels */
 .ref-panel {
@@ -2405,9 +2375,6 @@ footer {
 }
 .pm-delete-btn:hover { background: var(--red); color: #fff; }
 .pm-delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.pm-activate-btn {
-  margin-left: auto;
-}
 @media (max-width: 800px) {
   .pm-inline-columns { flex-direction: column; }
   .pm-inline-columns .cap-modal-docs { width: auto; }
@@ -3681,7 +3648,6 @@ footer {
 
 @media (max-width: 600px) {
   .ref-brief { display: none; }
-  .ref-stats { gap: 16px; }
   .ref-container { padding: 12px; }
   .header-tabs { gap: 2px; }
   .header-tab { padding: 3px 8px; font-size: 11px; }

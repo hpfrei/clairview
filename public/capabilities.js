@@ -137,7 +137,7 @@ Available templates in this skill directory:
         <div class="pm-form-group">
           <h4>Identity</h4>
           <div class="pm-field-row">
-            <label>Name: <input type="text" id="pmName" value="${escHtml(profile.name)}" placeholder="my-profile" ${dis} readonly></label>
+            <label>Name: <input type="text" id="pmName" value="${escHtml(profile.name)}" placeholder="my-profile" ${dis}></label>
           </div>
           ${usageHtml}
         </div>
@@ -202,7 +202,6 @@ Available templates in this skill directory:
         ${isBuiltin ? '' : `<div class="pm-inline-actions">
           <button class="cap-save-btn" id="pmSave">Save</button>
           <button class="cap-del-btn pm-delete-btn" id="pmDelete"${usedBy.length > 0 ? ' disabled title="Profile is used by workflows"' : ''}>Delete</button>
-          <button class="cap-action-btn pm-activate-btn" id="pmActivate">Activate</button>
         </div>`}
       </div>
       <div class="cap-modal-docs">
@@ -280,10 +279,6 @@ minimal  plan mode, Read/Glob/Grep</pre>
     document.getElementById('pmDelete')?.addEventListener('click', () => {
       if (!confirm(`Delete profile "${activeProfileTab}"? This cannot be undone.`)) return;
       sendWs({ type: 'profile:delete', name: activeProfileTab });
-    });
-    // Activate button
-    document.getElementById('pmActivate')?.addEventListener('click', () => {
-      sendWs({ type: 'chat:switchProfile', name: activeProfileTab });
     });
     // Model change updates info and tool grid
     document.getElementById('pmModel')?.addEventListener('change', () => {

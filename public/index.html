@@ -143,22 +143,13 @@
   <!-- ===== TOOLS VIEW ===== -->
   <div id="view-capabilities" class="hidden">
     <div class="view-nav" id="refNav">
-      <button class="view-tab active" data-section="tools">Tools</button>
-      <button class="view-tab" data-section="skills">Skills</button>
-      <button class="view-tab" data-section="agents">Agents</button>
-      <button class="view-tab" data-section="hooks">Hooks</button>
-      <button class="view-tab" data-section="mcp">MCP Tools</button>
+      <button class="view-tab active" data-section="tools">Tools <span class="view-tab-count" id="capToolCount">25/25</span></button>
+      <button class="view-tab" data-section="skills">Skills <span class="view-tab-count" id="capSkillCount">8</span></button>
+      <button class="view-tab" data-section="agents">Agents <span class="view-tab-count" id="capAgentCount">0</span></button>
+      <button class="view-tab" data-section="hooks">Hooks <span class="view-tab-count" id="capHookCount">0</span></button>
+      <button class="view-tab" data-section="mcp">MCP Tools <span class="view-tab-count" id="capMcpCount">0</span></button>
     </div>
-    <div class="ref-container">
-
-      <!-- Stats bar -->
-      <div class="ref-stats">
-        <div class="ref-stat"><span class="ref-stat-value" id="capToolCount">25/25</span><span class="ref-stat-label">Tools</span></div>
-        <div class="ref-stat"><span class="ref-stat-value" id="capSkillCount">8</span><span class="ref-stat-label">Skills</span></div>
-        <div class="ref-stat"><span class="ref-stat-value" id="capAgentCount">0</span><span class="ref-stat-label">Agents</span></div>
-        <div class="ref-stat"><span class="ref-stat-value" id="capHookCount">0</span><span class="ref-stat-label">Hooks</span></div>
-        <div class="ref-stat"><span class="ref-stat-value" id="capMcpCount">0</span><span class="ref-stat-label">MCP Tools</span></div>
-      </div>
+    <div class="view-body ref-container">
 
       <!-- ===================== TOOLS ===================== -->
       <div class="ref-panel active" id="ref-tools">
