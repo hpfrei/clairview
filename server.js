@@ -71,6 +71,7 @@ dashboardApp.post('/api/hook-report', (req, res) => {
     const id = `hook-${Date.now()}-${++hookSeq}`;
     const interaction = {
       id, timestamp: Date.now(), isHook: true,
+      instanceId: req.body.instanceId || null,
       hookEvent: hookData.hook_event_name || 'unknown',
       toolName: hookData.tool_name || null,
       request: hookData,

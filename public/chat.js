@@ -546,6 +546,54 @@
           }
         }
         break;
+
+      // Workflow run events (when triggered via MCP from a chat tab)
+      case 'workflow:run:started': {
+        const stepCount = msg.steps?.length || '?';
+        appendChatBubble(`Running workflow: ${msg.name} (${stepCount} steps)`, 'workflow-info', tabId);
+        const tab = tabs.get(tabId);
+        if (tab) tab.currentEl = null;
+        break;
+      }
+      case 'workflow:step:start': {
+        const tab = tabs.get(tabId);
+        if (tab) tab.currentEl = null;
+        appendChatBubble(`Step: ${msg.stepId}`, 'workflow-step-header', tabId);
+        break;
+      }
+      case 'workflow:step:progress':
+        appendChatText(msg.text || '', 'assistant', tabId);
+        break;
+      case 'workflow:step:complete': {
+        const tab = tabs.get(tabId);
+        if (tab && msg.output) {
+          if (tab.currentEl) {
+            // Replace streamed progress with definitive final output
+            tab.currentEl._rawText = msg.output;
+            window.dashboard.renderMarkdown(msg.output, tab.currentEl);
+          } else {
+            // No progress was streamed — render final output as new bubble
+            const el = appendChatBubble('', 'assistant', tabId);
+            if (el) {
+              el.classList.add('markdown-body');
+              el._rawText = msg.output;
+              window.dashboard.renderMarkdown(msg.output, el);
+            }
+          }
+        }
+        if (tab) tab.currentEl = null;
+        break;
+      }
+      case 'workflow:run:complete': {
+        const tab = tabs.get(tabId);
+        if (tab) tab.currentEl = null;
+        const cls = msg.status === 'completed' ? 'workflow-info' : 'error';
+        appendChatBubble(`Workflow ${msg.status}`, cls, tabId);
+        break;
+      }
+      case 'workflow:error':
+        appendChatBubble(msg.error || 'Workflow error', 'error', tabId);
+        break;
     }
   }
 

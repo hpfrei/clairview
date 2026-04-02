@@ -26,13 +26,137 @@
     }
   }
 
-  // --- Timeline filter ---
-  let activeTimelineFilter = 'all';
-  const timelineFilter = document.getElementById('timelineFilter');
-  if (timelineFilter) {
-    timelineFilter.addEventListener('change', () => {
-      activeTimelineFilter = timelineFilter.value;
-      renderTimeline();
+  // --- Instance tabs ---
+  const knownInstances = new Map(); // instanceId -> { instanceId, profileName, status, spawnedAt }
+  let activeInstanceTab = 'all';
+  const inspectorTabStrip = document.getElementById('inspectorTabStrip');
+
+  function instanceDisplayLabel(instanceId) {
+    if (!instanceId || instanceId === 'all') return 'Others';
+    // chat-tab-1 → "Chat 1"
+    const chatMatch = instanceId.match(/^chat-tab-(\d+)$/);
+    if (chatMatch) return `Chat ${chatMatch[1]}`;
+    // wf-<runId>-<stepId> → "WF: <stepId>"
+    const wfStepMatch = instanceId.match(/^wf-(run-[^-]+-[^-]+)-(.+)$/);
+    if (wfStepMatch) return `WF: ${wfStepMatch[2]}`;
+    // wf-generate-* → "WF Generate"
+    if (instanceId.startsWith('wf-generate-')) return 'WF Generate';
+    // wf-compile-<name>-* → "WF Compile: <name>"
+    const compileMatch = instanceId.match(/^wf-compile-(.+)-\d+$/);
+    if (compileMatch) return `Compile: ${compileMatch[1]}`;
+    return instanceId;
+  }
+
+  function renderInspectorTabStrip() {
+    if (!inspectorTabStrip) return;
+    inspectorTabStrip.innerHTML = '';
+    // "All" tab
+    const allBtn = document.createElement('button');
+    allBtn.className = 'view-tab' + (activeInstanceTab === 'all' ? ' active' : '');
+    allBtn.dataset.instanceId = 'all';
+    allBtn.textContent = 'Others';
+    inspectorTabStrip.appendChild(allBtn);
+    // Per-instance tabs
+    for (const [id, info] of knownInstances) {
+      const btn = document.createElement('button');
+      btn.className = 'view-tab' + (activeInstanceTab === id ? ' active' : '');
+      if (info.status === 'running') btn.classList.add('instance-running');
+      if (info.status === 'exited') btn.classList.add('instance-exited');
+      btn.dataset.instanceId = id;
+      btn.textContent = instanceDisplayLabel(id);
+      const close = document.createElement('span');
+      close.className = 'view-tab-close';
+      close.textContent = '\u00d7';
+      btn.appendChild(close);
+      inspectorTabStrip.appendChild(btn);
+    }
+    // "Clear inactive" button — only show if there are exited instances
+    const hasExited = [...knownInstances.values()].some(i => i.status === 'exited');
+    if (hasExited) {
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'view-tab-action';
+      clearBtn.title = 'Close all inactive tabs';
+      clearBtn.textContent = 'Clear inactive';
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        for (const [id, info] of knownInstances) {
+          if (info.status === 'exited') knownInstances.delete(id);
+        }
+        if (!knownInstances.has(activeInstanceTab)) switchInstanceTab('all');
+        else renderInspectorTabStrip();
+      });
+      inspectorTabStrip.appendChild(clearBtn);
+    }
+    updateInstanceBusy();
+    updateInspectorTabTitle();
+  }
+
+  function switchInstanceTab(instanceId) {
+    activeInstanceTab = instanceId;
+    renderInspectorTabStrip();
+    renderTimeline();
+    // Select last matching interaction
+    const filtered = activeInstanceTab === 'all'
+      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId))
+      : state.interactions.filter(i => i.instanceId === activeInstanceTab);
+    const last = filtered[filtered.length - 1];
+    if (last) {
+      _userPinnedSelection = false;
+      select({ type: last.isMcp ? 'mcp' : last.isHook ? 'hook' : 'turn', id: last.id });
+    } else {
+      state.selection = null;
+      document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
+      detailContent.classList.add('hidden');
+      emptyState.classList.remove('hidden');
+    }
+  }
+
+  function updateInspectorTabTitle() {
+    const tab = document.querySelector('[data-view="dashboard"]');
+    if (!tab) return;
+    let running = 0;
+    for (const info of knownInstances.values()) {
+      if (info.status === 'running') running++;
+    }
+    tab.textContent = running > 0 ? `Inspector (${running})` : 'Inspector';
+  }
+
+  function updateInstanceBusy() {
+    if (!inspectorTabStrip) return;
+    for (const [instanceId] of knownInstances) {
+      const tabBtn = inspectorTabStrip.querySelector(`[data-instance-id="${CSS.escape(instanceId)}"]`);
+      if (tabBtn) {
+        const busy = state.interactions.some(
+          i => i.instanceId === instanceId && (i.status === 'pending' || i.status === 'streaming')
+        );
+        tabBtn.classList.toggle('instance-busy', busy);
+      }
+    }
+  }
+
+  if (inspectorTabStrip) {
+    inspectorTabStrip.addEventListener('click', (e) => {
+      // Close button on instance tab
+      if (e.target.classList.contains('view-tab-close')) {
+        const tabBtn = e.target.closest('.view-tab');
+        const id = tabBtn?.dataset.instanceId;
+        if (id && id !== 'all') {
+          const info = knownInstances.get(id);
+          if (info?.status === 'running') {
+            // Running instance — confirm before killing
+            if (!confirm(`"${instanceDisplayLabel(id)}" is still running.\n\nClosing this tab will terminate the Claude process. Continue?`)) return;
+            sendWs({ type: 'claude:killInstance', instanceId: id });
+          }
+          knownInstances.delete(id);
+          if (activeInstanceTab === id) switchInstanceTab('all');
+          else renderInspectorTabStrip();
+        }
+        return;
+      }
+      const tabBtn = e.target.closest('.view-tab');
+      if (tabBtn && tabBtn.dataset.instanceId != null) {
+        switchInstanceTab(tabBtn.dataset.instanceId);
+      }
     });
   }
 
@@ -433,11 +557,11 @@
   function renderTimeline() {
     timelineList.innerHTML = '';
     state.interactions.forEach((interaction, idx) => {
-      // Apply filter
-      if (activeTimelineFilter === 'mcp' && !interaction.isMcp) return;
-      if (activeTimelineFilter === 'hooks' && !interaction.isHook) return;
-      if (activeTimelineFilter === 'api' && (interaction.isMcp || interaction.isHook)) return;
-      if (activeTimelineFilter === 'mcp' && interaction.isHook) return;
+      // Apply instance filter
+      if (activeInstanceTab === 'all') {
+        // "Others" — exclude interactions that belong to a known instance tab
+        if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
+      } else if (interaction.instanceId !== activeInstanceTab) return;
       appendTurnToTimeline(interaction, idx);
     });
   }
@@ -471,11 +595,14 @@
 
     const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     const turnLabel = stepId ? `Turn ${idx + 1} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${idx + 1}`;
+    const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
+      ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
 
     el.innerHTML = `
       <div class="entry-header">
         <span class="entry-num">${turnLabel}</span>
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+        ${instanceTag}
       </div>
       <div class="entry-model" data-model="${interaction.id}">${modelLabel}</div>
       <div class="entry-meta">
@@ -666,6 +793,7 @@
     if (!tab) return;
     const busy = state.interactions.some(i => i.status === 'pending' || i.status === 'streaming');
     tab.classList.toggle('busy', busy);
+    updateInstanceBusy();
   }
 
   function scrollTimelineToBottom() {
@@ -679,7 +807,10 @@
 
   function selectLastAndFollow() {
     _userPinnedSelection = false;
-    const last = state.interactions[state.interactions.length - 1];
+    const filtered = activeInstanceTab === 'all'
+      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId))
+      : state.interactions.filter(i => i.instanceId === activeInstanceTab);
+    const last = filtered[filtered.length - 1];
     if (last) {
       select({ type: 'turn', id: last.id });
     } else {
@@ -1199,10 +1330,11 @@
   }
 
   function updateStats() {
-    const total = state.interactions.length;
+    const source = state.interactions;
+    const total = source.length;
     let inputTokens = 0, outputTokens = 0, cacheRead = 0, cacheCreate = 0, toolCallCount = 0, totalCost = 0;
     let hasCost = false;
-    for (const i of state.interactions) {
+    for (const i of source) {
       if (i.usage) {
         inputTokens += i.usage.input_tokens || 0;
         outputTokens += i.usage.output_tokens || 0;
@@ -1311,6 +1443,15 @@
       case 'init':
         _userPinnedSelection = false;
         state.interactions = msg.interactions || [];
+        // Rebuild instance map from historical interactions
+        for (const i of state.interactions) {
+          if (i.instanceId && !knownInstances.has(i.instanceId)) {
+            knownInstances.set(i.instanceId, {
+              instanceId: i.instanceId, profileName: i.profile, status: 'exited', spawnedAt: i.timestamp,
+            });
+          }
+        }
+        renderInspectorTabStrip();
         renderTimeline();
         updateStats();
         updateInspectorBusy();
@@ -1323,13 +1464,27 @@
 
       case 'interaction:start':
         state.interactions.push(msg.interaction);
-        appendTurnToTimeline(msg.interaction);
+        // Auto-discover instance from interaction
+        if (msg.interaction.instanceId && !knownInstances.has(msg.interaction.instanceId)) {
+          knownInstances.set(msg.interaction.instanceId, {
+            instanceId: msg.interaction.instanceId, profileName: msg.interaction.profile,
+            status: 'running', spawnedAt: msg.interaction.timestamp,
+          });
+          renderInspectorTabStrip();
+        }
+        // Only append to visible timeline if it matches current filter
+        const matchesFilter = activeInstanceTab === 'all'
+          ? (!msg.interaction.instanceId || !knownInstances.has(msg.interaction.instanceId))
+          : msg.interaction.instanceId === activeInstanceTab;
+        if (matchesFilter) {
+          appendTurnToTimeline(msg.interaction);
+          if (!_userPinnedSelection) {
+            select({ type: 'turn', id: msg.interaction.id });
+          }
+          scrollTimelineToBottom();
+        }
         updateStats();
         updateInspectorBusy();
-        if (!_userPinnedSelection) {
-          select({ type: 'turn', id: msg.interaction.id });
-        }
-        scrollTimelineToBottom();
         break;
 
       case 'interaction:update':
@@ -1358,6 +1513,9 @@
         _userPinnedSelection = false;
         state.interactions = msg.interactions || [];
         state.selection = null;
+        knownInstances.clear();
+        activeInstanceTab = 'all';
+        renderInspectorTabStrip();
         renderTimeline();
         updateStats();
         updateInspectorBusy();
@@ -1381,6 +1539,9 @@
       case 'cleared':
         state.interactions = [];
         state.selection = null;
+        knownInstances.clear();
+        activeInstanceTab = 'all';
+        renderInspectorTabStrip();
         timelineList.innerHTML = '';
         detailContent.innerHTML = '';
         detailContent.classList.add('hidden');
@@ -1389,7 +1550,32 @@
         updateInspectorBusy();
         renderSessionList();
         break;
+
+      case 'claude:instances':
+        if (msg.instances) {
+          for (const inst of msg.instances) {
+            knownInstances.set(inst.instanceId, {
+              instanceId: inst.instanceId, profileName: inst.profileName,
+              status: inst.status, spawnedAt: inst.spawnedAt,
+            });
+          }
+        }
+        renderInspectorTabStrip();
+        break;
     }
+  }
+
+  // Reset button — clears all interactions and zeroes the footer
+  const resetBtn = document.getElementById('footerReset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      state.interactions.length = 0;
+      updateStats();
+      renderTimeline();
+      state.selection = null;
+      detailContent.classList.add('hidden');
+      emptyState.classList.remove('hidden');
+    });
   }
 
   window.inspectorModule = { handleMessage };

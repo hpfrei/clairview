@@ -17,10 +17,9 @@ export default function register(server) {
   const http = await import('http');
   const dashPort = process.env.CLAIRVIEW_DASHBOARD_PORT || '3457';
 
-  const body = JSON.stringify({ type: 'chat', prompt, cwd: cwd || undefined, profile: profile || undefined, sessionId: session_id || undefined });
+  const body = JSON.stringify({ type: 'chat', prompt, cwd: cwd || undefined, profile: profile || undefined, sessionId: session_id || undefined, sourceInstanceId: process.env.CLAIRVIEW_INSTANCE_ID || undefined });
 
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve({ content: [{ type: 'text', text: 'Timeout waiting for chat response (5 min)' }] }), 300000);
     let text = '', sessionId = null, questions = [];
 
     const req = http.request({ hostname: '127.0.0.1', port: dashPort, path: '/api/run', method: 'POST', headers: {
@@ -43,7 +42,6 @@ export default function register(server) {
           else if (ev === 'ask') questions.push(data);
           else if (ev === 'error') text += '\n[Error: ' + (data.error || 'unknown') + ']\n';
           else if (ev === 'done') {
-            clearTimeout(timeout);
             sessionId = data.sessionId || null;
             let result = data.result || text;
             if (sessionId) result += '\n\nsessionId: ' + sessionId;
@@ -52,9 +50,9 @@ export default function register(server) {
           }
         }
       });
-      res.on('end', () => { clearTimeout(timeout); if (text) resolve({ content: [{ type: 'text', text: text + (sessionId ? '\n\nsessionId: ' + sessionId : '') }] }); });
+      res.on('end', () => { if (text) resolve({ content: [{ type: 'text', text: text + (sessionId ? '\n\nsessionId: ' + sessionId : '') }] }); });
     });
-    req.on('error', (e) => { clearTimeout(timeout); resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });
+    req.on('error', (e) => { resolve({ content: [{ type: 'text', text: 'Error: ' + e.message }] }); });
     req.write(body); req.end();
   });
     }

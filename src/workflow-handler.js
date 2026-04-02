@@ -82,7 +82,7 @@ async function handleMessage(ws, msg, bc) {
           const generated = await workflows.generateWorkflow(
             msg.description,
             msg.feedback || null,
-            { proxyPort: opts.proxyPort || 3456, cwd, envContext }
+            { proxyPort: opts.proxyPort || 3456, cwd, envContext, existingName: msg.existingName || null }
           );
           send({ type: 'workflow:generated', workflow: generated });
         } catch (err) {
@@ -175,7 +175,8 @@ function buildEnvContext(cwd, selectedProfiles) {
     };
   });
 
-  const tools = mcpServers.listTools().filter(t => t.enabled).map(t => ({
+  // Filter out workflow-sourced tools — they're listed separately in the workflows section
+  const tools = mcpServers.listTools().filter(t => t.enabled && t.source !== 'workflow').map(t => ({
     name: t.name,
     description: t.description || '',
     params: (t.params || []).map(p => ({ name: p.name, type: p.type, description: p.description })),

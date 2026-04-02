@@ -126,6 +126,20 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
   transition: color 0.15s;
 }
 .view-tab-new:hover { color: var(--accent); }
+.view-tab-action {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.view-tab-action:hover { color: var(--red); border-color: var(--red); }
 .view-nav-action {
   margin-left: auto;
   align-self: center;
@@ -153,6 +167,35 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Inspector instance tabs */
+.view-tab.instance-running::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green, #4caf50);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.view-tab.instance-running.instance-busy::after {
+  background: var(--blue);
+  animation: pulse 1.5s infinite;
+}
+.view-tab.instance-exited {
+  opacity: 0.5;
+  font-style: italic;
+}
+.entry-instance {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* Home view */
@@ -240,7 +283,21 @@ button:hover { background: var(--bg-selected); }
 main {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+.inspector-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  margin-top: -1px;
+  background: var(--paper-bg);
+  background-image:
+    linear-gradient(var(--paper-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--paper-grid-color) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-attachment: fixed;
+  border-top: 1px solid var(--paper-border);
 }
 
 aside#timeline {
@@ -289,16 +346,6 @@ aside#timeline {
 }
 #timeline-header button:hover {
   background: color-mix(in srgb, var(--red) 15%, transparent);
-}
-
-.timeline-filter {
-  font-size: 10px;
-  padding: 2px 4px;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  cursor: pointer;
 }
 
 #timeline-list {
@@ -892,6 +939,18 @@ footer {
   color: var(--text);
   text-decoration: underline;
 }
+.footer-reset {
+  background: none;
+  border: none;
+  color: var(--red);
+  cursor: pointer;
+  padding: 2px 6px;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+  display: flex;
+  align-items: center;
+}
+.footer-reset:hover { opacity: 1; }
 /* Footer tokens & cache */
 .ft-in, .ft-out, .ft-cache-w, .ft-cache-r {
   display: inline-flex;
@@ -912,12 +971,6 @@ footer {
 }
 .footer-cost-gauge svg { vertical-align: middle; }
 .footer-cost-label { font-weight: 600; }
-.footer-claudes {
-  color: var(--cyan);
-  font-weight: 600;
-}
-.footer-claudes:empty { display: none; }
-
 /* ============================================================
    CLAUDE CHAT VIEW
    ============================================================ */
@@ -1004,6 +1057,26 @@ footer {
   color: var(--red);
   align-self: flex-start;
   font-size: 12px;
+}
+
+/* Workflow chat bubbles (when workflow runs from a chat tab) */
+.chat-workflow-info {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: center;
+  align-self: center;
+}
+.chat-workflow-step-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 4px 12px;
+  border-left: 3px solid var(--accent);
+  margin-top: 12px;
 }
 
 /* Markdown body rendering */
@@ -3268,17 +3341,15 @@ footer {
 .wfrun-cancel-btn:hover { border-color: var(--red); color: var(--red); }
 .wfrun-newrun-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-/* Step list */
+/* Step list (compact progress tracker) */
 .wfrun-step-list {
-  flex: 1;
-  overflow-y: auto;
+  flex-shrink: 0;
 }
 .wfrun-step-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  cursor: pointer;
+  padding: 6px 12px;
   border-left: 3px solid var(--border);
   transition: background 0.1s;
 }
@@ -3286,7 +3357,6 @@ footer {
 .wfrun-step-row.running { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .wfrun-step-row.done { border-left-color: var(--green); }
 .wfrun-step-row.failed { border-left-color: var(--red); }
-.wfrun-step-row.expanded { background: var(--bg-hover); }
 
 .wfrun-step-icon {
   width: 16px;
@@ -3375,30 +3445,39 @@ footer {
   color: var(--text-dim);
   margin-left: auto;
 }
-.wfrun-step-toggle {
-  font-size: 11px;
-  color: var(--text-dim);
-  width: 12px;
-  text-align: center;
-}
-
-/* Step detail (expanded) */
-.wfrun-step-detail {
-  border-left: 3px solid var(--border);
-  margin-left: 0;
-  padding: 8px 12px 12px 28px;
-  background: var(--bg);
-}
-.wfrun-step-output {
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 300px;
+/* Chat flow area */
+.wfrun-chat {
+  flex: 1;
   overflow-y: auto;
-  margin: 0;
+  padding: 8px 0;
+}
+.wfrun-chat-step {
+  margin-bottom: 16px;
+  padding: 0 4px;
+}
+.wfrun-chat-step-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.wfrun-chat-step-header.done { color: var(--green); }
+.wfrun-chat-step-header.running { color: var(--accent); }
+.wfrun-chat-step-header.failed { color: var(--red); }
+.wfrun-chat-step-icon {
+  font-size: 12px;
+}
+.wfrun-chat-step-icon.running { animation: wfrun-spin 1s linear infinite; }
+.wfrun-chat-output {
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* Escalation (AskUserQuestion) */

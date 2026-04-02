@@ -1,7 +1,7 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount } = require('./utils');
-const { pendingQuestions } = require('./proxy');
+const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance } = require('./utils');
+const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
 
@@ -65,8 +65,9 @@ class DashboardBroadcaster {
         ws.send(JSON.stringify({ type: 'provider:list', providers: caps.listProviders(PROJECT_ROOT) }));
       }
 
-      // Send running Claude process count
+      // Send running Claude process count and instance list
       ws.send(JSON.stringify({ type: 'claude:count', count: getActiveProcessCount() }));
+      ws.send(JSON.stringify({ type: 'claude:instances', instances: getInstances(), count: getActiveProcessCount() }));
 
       // Send session list and active session
       ws.send(JSON.stringify({
@@ -88,6 +89,9 @@ class DashboardBroadcaster {
             this.sessionManager.send(tabId, msg.prompt || '');
           } else if (msg.type === 'chat:stop' && this.sessionManager) {
             this.sessionManager.kill(tabId);
+            clearPendingQuestionsForTab(tabId);
+          } else if (msg.type === 'claude:killInstance') {
+            if (msg.instanceId) killInstance(msg.instanceId);
           } else if (msg.type === 'chat:setCwd' && this.sessionManager) {
             this.sessionManager.setCwd(msg.cwd || '', tabId);
           } else if (msg.type === 'chat:newTab' && this.sessionManager) {

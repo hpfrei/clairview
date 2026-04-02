@@ -296,17 +296,6 @@ function setupCwdToolbar({ editBtn, label, input, setBtn, onSave }) {
   });
 }
 
-// --- Claude process count indicator ---
-function updateClaudeCount(count) {
-  const el = document.getElementById('footerClaudes');
-  if (!el) return;
-  if (count > 0) {
-    el.innerHTML = `<span class="footer-claudes">${count === 1 ? '1 claude' : `${count} claudes`}</span>`;
-  } else {
-    el.innerHTML = '';
-  }
-}
-
 // --- Expose API for modules ---
 window.dashboard = {
   state,
@@ -441,23 +430,33 @@ function handleMessage(msg) {
     case 'workflow:error':
       if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
         window.workflowRunModule?.handleMessage(msg);
+      } else if (msg.tabId) {
+        window.chatModule?.handleMessage(msg);
       } else {
         window.workflowModule?.handleMessage(msg);
       }
       break;
 
-    // Workflow run events (routed to Runs tab when available)
+    // Workflow run events — route to Runs tab or Chat tab based on tabId
     case 'workflow:run:started':
     case 'workflow:step:start':
     case 'workflow:step:progress':
     case 'workflow:step:complete':
     case 'workflow:run:complete':
-      window.workflowRunModule?.handleMessage(msg);
+      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
+        window.workflowRunModule?.handleMessage(msg);
+      } else {
+        window.chatModule?.handleMessage(msg);
+      }
       break;
 
     // Claude process count
     case 'claude:count':
-      updateClaudeCount(msg.count);
+      break;
+
+    // Claude instance lifecycle
+    case 'claude:instances':
+      window.inspectorModule?.handleMessage(msg);
       break;
 
     // MCP

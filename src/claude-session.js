@@ -161,6 +161,8 @@ class ClaudeSession {
       profileName: this.capabilities?.name || 'full',
       disableAutoMemory: this.capabilities?.disableAutoMemory !== false,
       dashboardPort: this._dashboardPort, authToken: this._authToken,
+      instanceId: `chat-${this.tabId}`,
+      sourceContext: { tabId: this.tabId },
     });
 
     this.proc.stdin.write(prompt);

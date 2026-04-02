@@ -47,14 +47,11 @@ function createWorkflowHandler(workflowName) {
       type: "workflow",
       workflow: workflowName,
       inputs: input || {},
+      sourceInstanceId: process.env.CLAIRVIEW_INSTANCE_ID || null,
     });
 
     return new Promise((resolve) => {
-      const timeout = setTimeout(
-        () => resolve({ content: [{ type: "text", text: "Timeout waiting for workflow completion (5 min)" }] }),
-        300000
-      );
-      let text = "", steps = [], questions = [];
+      let errors = [];
 
       const req = http.request(
         {
@@ -84,31 +81,27 @@ function createWorkflowHandler(workflowName) {
               }
               if (!ev || !data) continue;
               try { data = JSON.parse(data); } catch { continue; }
-              if (ev === "text") text += data.text || "";
-              else if (ev === "step") steps.push(data);
-              else if (ev === "ask") questions.push(data);
-              else if (ev === "error") text += "\n[Error: " + (data.error || "unknown") + "]\n";
+              if (ev === "error") errors.push(data.error || "unknown");
               else if (ev === "done") {
-                clearTimeout(timeout);
-                let result = "Status: " + (data.result || "unknown");
-                if (data.runId) result += "\nRun ID: " + data.runId;
-                if (steps.length > 0)
-                  result += "\n\nSteps:\n" + steps.map((s) => "  " + s.stepId + ": " + (s.status || s.text || "")).join("\n");
-                if (text) result += "\n\nOutput:\n" + text;
-                if (questions.length > 0)
-                  result += "\n\n[Pending questions: " + JSON.stringify(questions) + "]";
-                resolve({ content: [{ type: "text", text: result }] });
+                // Return the last step's output — clean result for Claude to continue with
+                if (data.output) {
+                  resolve({ content: [{ type: "text", text: data.output }] });
+                } else if (data.result === "completed") {
+                  resolve({ content: [{ type: "text", text: "Workflow completed successfully." }] });
+                } else {
+                  const errText = errors.length > 0 ? errors.join("\n") : "Unknown error";
+                  resolve({ content: [{ type: "text", text: `Workflow ${data.result || "failed"}: ${errText}` }] });
+                }
               }
             }
           });
           res.on("end", () => {
-            clearTimeout(timeout);
-            resolve({ content: [{ type: "text", text: text || "Workflow stream ended without completion event" }] });
+            const errText = errors.length > 0 ? errors.join("\n") : "Workflow stream ended unexpectedly";
+            resolve({ content: [{ type: "text", text: errText }] });
           });
         }
       );
       req.on("error", (e) => {
-        clearTimeout(timeout);
         resolve({ content: [{ type: "text", text: "Error: " + e.message }] });
       });
       req.write(body);

@@ -27,7 +27,6 @@
       runId: null,
       steps: [],
       stepOutputs: {},
-      expandedStepId: null,
       pendingQuestion: null,
       answeredQuestions: [],
       finalStatus: null,
@@ -275,7 +274,6 @@
       tab.phase = 'active';
       tab.steps = [];
       tab.stepOutputs = {};
-      tab.expandedStepId = null;
       tab.pendingQuestion = null;
       tab.answeredQuestions = [];
       tab.finalStatus = null;
@@ -367,6 +365,7 @@
 
   // --- Phase: Active (running + complete) ---
   function renderActivePhase(tab) {
+    const icons = { pending: '\u25cb', running: '\u27f3', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
     let html = '<div class="wfrun-active-panel">';
 
     // Header
@@ -380,39 +379,46 @@
     }
     html += '</div>';
 
-    // Step list
+    // Compact step progress tracker
     html += '<div class="wfrun-step-list">';
     for (const s of tab.steps) {
-      const icons = { pending: '\u25cb', running: '\u27f3', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
       const icon = icons[s.status] || '\u25cb';
-      const expanded = tab.expandedStepId === s.id;
       const elapsed = s.elapsed != null ? (s.elapsed < 1000 ? s.elapsed + 'ms' : (s.elapsed / 1000).toFixed(1) + 's') : '';
-
       const profileTag = s.profile ? `<span class="wfrun-step-profile" data-profile="${escHtml(s.profile)}">${escHtml(s.profile)}</span>` : '';
 
-      html += `<div class="wfrun-step-row ${s.status}${expanded ? ' expanded' : ''}" data-step="${escHtml(s.id)}">
+      html += `<div class="wfrun-step-row ${s.status}" data-step="${escHtml(s.id)}">
         <span class="wfrun-step-icon ${s.status}">${icon}</span>
         <span class="wfrun-step-name" data-step-click="${escHtml(s.id)}">${escHtml(s.id)}</span>
         ${profileTag}
         <span class="wfrun-step-elapsed">${elapsed}</span>
-        <span class="wfrun-step-toggle">${expanded ? '\u25be' : '\u25b8'}</span>
+      </div>`;
+    }
+    html += '</div>';
+
+    // Chat flow area — shows all non-pending step outputs
+    html += '<div class="wfrun-chat" id="wfrunChat">';
+    for (const s of tab.steps) {
+      if (s.status === 'pending') continue;
+      const icon = icons[s.status] || '\u25cb';
+      html += `<div class="wfrun-chat-step" data-chat-step="${escHtml(s.id)}">`;
+      html += `<div class="wfrun-chat-step-header ${s.status}">
+        <span class="wfrun-chat-step-icon ${s.status}">${icon}</span>
+        <span>${escHtml(s.id)}</span>
       </div>`;
 
-      if (expanded) {
-        html += `<div class="wfrun-step-detail">`;
-        // Show answered questions for this step
-        if (tab.answeredQuestions) {
-          for (const aq of tab.answeredQuestions.filter(a => a.stepId === s.id)) {
-            html += renderAnsweredQuestion(aq);
-          }
+      // Answered questions for this step
+      if (tab.answeredQuestions) {
+        for (const aq of tab.answeredQuestions.filter(a => a.stepId === s.id)) {
+          html += renderAnsweredQuestion(aq);
         }
-        // Show pending escalation question for this step
-        if (tab.pendingQuestion && tab.pendingQuestion.stepId === s.id) {
-          html += renderEscalation(tab.pendingQuestion);
-        }
-        html += `<div class="wfrun-step-output markdown-body" data-step-output="${escHtml(s.id)}"></div>`;
-        html += `</div>`;
       }
+      // Pending escalation question for this step
+      if (tab.pendingQuestion && tab.pendingQuestion.stepId === s.id) {
+        html += renderEscalation(tab.pendingQuestion);
+      }
+
+      html += `<div class="wfrun-chat-output markdown-body" data-step-output="${escHtml(s.id)}"></div>`;
+      html += '</div>';
     }
     html += '</div>';
 
@@ -426,15 +432,6 @@
 
     html += '</div>';
     container.innerHTML = html;
-
-    // Event: step row click to expand
-    container.querySelectorAll('.wfrun-step-row').forEach(row => {
-      row.addEventListener('click', () => {
-        const stepId = row.dataset.step;
-        tab.expandedStepId = tab.expandedStepId === stepId ? null : stepId;
-        renderActivePhase(tab);
-      });
-    });
 
     // Event: profile badge click — open profile edit modal
     container.querySelectorAll('.wfrun-step-profile').forEach(el => {
@@ -496,7 +493,6 @@
       btn.addEventListener('click', () => {
         if (!tab.pendingQuestion) return;
         const qi = btn.dataset.qi;
-        // Single-select: deselect others in same group
         container.querySelectorAll(`.wfrun-esc-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         checkEscReady();
@@ -522,7 +518,6 @@
           return { question: q?.question || '', answer: labels[0] || '' };
         });
         sendWs({ type: 'ask:answer', toolUseId: pq.toolUseId, answer });
-        // Store answered question for display persistence
         tab.answeredQuestions.push({
           stepId: pq.stepId,
           questions: pq.questions,
@@ -533,14 +528,18 @@
       });
     }
 
-    // Render markdown into expanded step output
-    const outputEl = container.querySelector('.wfrun-step-output');
-    if (outputEl) {
+    // Render markdown into all visible step outputs
+    container.querySelectorAll('.wfrun-chat-output').forEach(outputEl => {
       const stepId = outputEl.dataset.stepOutput;
       const text = tab.stepOutputs[stepId] || '';
-      window.dashboard.renderMarkdown(text, outputEl);
-      outputEl.scrollTop = outputEl.scrollHeight;
-    }
+      if (text) {
+        window.dashboard.renderMarkdown(text, outputEl);
+      }
+    });
+
+    // Auto-scroll chat to bottom
+    const chatEl = container.querySelector('#wfrunChat');
+    if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
   }
 
   function renderEscalation(pq) {
@@ -619,8 +618,6 @@
         const t = findTab(msg.tabId);
         if (!t) break;
         updateStep(t, msg.stepId, 'running');
-        // Auto-expand running step
-        t.expandedStepId = msg.stepId;
         if (msg.tabId === activeTabId) renderActivePhase(t);
         break;
       }
@@ -629,11 +626,13 @@
         const t = findTab(msg.tabId);
         if (!t) break;
         t.stepOutputs[msg.stepId] = (t.stepOutputs[msg.stepId] || '') + (msg.text || '');
-        // Update output in place if expanded (debounced markdown render)
-        if (msg.tabId === activeTabId && t.expandedStepId === msg.stepId) {
-          const outputEl = container.querySelector('.wfrun-step-output');
+        // Update output in the chat flow area (debounced markdown render)
+        if (msg.tabId === activeTabId) {
+          const outputEl = container.querySelector(`.wfrun-chat-output[data-step-output="${msg.stepId}"]`);
           if (outputEl) {
             window.dashboard.renderMarkdownDebounced(t.stepOutputs[msg.stepId], outputEl);
+            const chatEl = container.querySelector('#wfrunChat');
+            if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
           }
         }
         break;
@@ -656,8 +655,6 @@
         if (!t) break;
         t.finalStatus = msg.status || 'completed';
         t.runId = null;
-        // Auto-expand last step
-        if (t.steps.length > 0) t.expandedStepId = t.steps[t.steps.length - 1].id;
         if (msg.tabId === activeTabId) renderActivePhase(t);
         renderTabStrip();
         break;
@@ -682,8 +679,6 @@
           questions: msg.questions || [],
           stepId: msg.stepId,
         };
-        // Auto-expand the step with the question
-        if (msg.stepId) t.expandedStepId = msg.stepId;
         if (msg.tabId === activeTabId) renderActivePhase(t);
         // Switch to runs view and this tab
         const runsTab = document.querySelector('[data-view="workflow-runs"]');

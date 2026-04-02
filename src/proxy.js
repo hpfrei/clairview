@@ -3,7 +3,7 @@ const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream');
 const SSEPassthrough = require('./sse-passthrough');
-const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard } = require('./utils');
+const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard, getInstanceContext } = require('./utils');
 const { getProvider } = require('./providers/registry');
 const caps = require('./capabilities');
 const { getModelPricing } = caps;
@@ -40,7 +40,7 @@ function parseSSEString(eventStr) {
 }
 
 // Shared SSE event tracking for inspector/dashboard (used by both paths)
-function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster) {
+function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instanceId) {
   if (event.eventType === 'message_start') {
     interaction.timing.ttfb = Date.now() - interaction.timing.startedAt;
     if (event.data?.message?.usage) {
@@ -70,7 +70,7 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster) {
       try {
         const input = JSON.parse(tb.inputJson);
         // Capture workflow context now (not later) to avoid race conditions with parallel steps
-        pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null, ctx: _questionContext ? { ..._questionContext } : null });
+        pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null, ctx: getInstanceContext(instanceId) });
       } catch {}
     }
     activeToolBlocks.delete(event.data?.index);
@@ -89,14 +89,21 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   router.use(express.json({ limit: '50mb' }));
   router.use(express.raw({ limit: '50mb', type: () => false }));
 
-  // /p/:profileName prefix: per-session profile-scoped routing
+  // /p/:profileName/i/:instanceId prefix: per-session profile + instance scoped routing
+  router.use('/p/:profileName/i/:instanceId', (req, res, next) => {
+    req.profileName = decodeURIComponent(req.params.profileName);
+    req.instanceId = decodeURIComponent(req.params.instanceId);
+    next();
+  });
+
+  // /p/:profileName prefix: per-session profile-scoped routing (fallback without instance)
   router.use('/p/:profileName', (req, res, next) => {
     req.profileName = decodeURIComponent(req.params.profileName);
     next();
   });
 
   // POST /v1/messages - main endpoint
-  router.post(['/v1/messages', '/p/:profileName/v1/messages'], async (req, res) => {
+  router.post(['/v1/messages', '/p/:profileName/v1/messages', '/p/:profileName/i/:instanceId/v1/messages'], async (req, res) => {
     const body = req.body;
     const isStreaming = !!body.stream;
 
@@ -130,13 +137,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
             });
 
             try {
-              // Wait for user answer (5 min timeout)
-              const answer = await Promise.race([
-                answerPromise,
-                new Promise((_, reject) =>
-                  setTimeout(() => reject(new Error('Question timeout')), 300000)
-                ),
-              ]);
+              // Wait for user answer (no timeout — user may take hours)
+              const answer = await answerPromise;
 
               // Rewrite the tool_result with the real answer
               msg.content[i] = {
@@ -147,7 +149,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
               broadcaster.broadcast({ type: 'ask:answered', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
             } catch {
-              // Timeout or error - forward original error as-is
+              // Rejected (e.g. chat stopped) - forward original error as-is
               broadcaster.broadcast({ type: 'ask:timeout', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
             }
 
@@ -161,16 +163,17 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     const profileName = req.profileName || null;
     const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
 
-    const wfCtx = _questionContext;
+    const instCtx = getInstanceContext(req.instanceId);
     const interaction = {
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages',
-      profile: profileName || wfCtx?.profile || null,
+      profile: profileName || instCtx?.profile || null,
       bare: !!profileData?.bare,
       disableAutoMemory: profileData ? profileData.disableAutoMemory !== false : true,
-      stepId: wfCtx?.stepId || null,
-      runId: wfCtx?.runId || null,
+      instanceId: req.instanceId || null,
+      stepId: instCtx?.stepId || null,
+      runId: instCtx?.runId || null,
       request: { ...body },
       response: {
         status: null,
@@ -272,7 +275,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
                   const parsed = parseSSEString(eventStr);
                   if (parsed) {
                     interaction.response.sseEvents.push(parsed);
-                    trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster);
+                    trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster, interaction.instanceId);
                   }
                 }
               }
@@ -292,7 +295,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
                     const parsed = parseSSEString(eventStr);
                     if (parsed) {
                       interaction.response.sseEvents.push(parsed);
-                      trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster);
+                      trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster, interaction.instanceId);
                     }
                   }
                 }
@@ -307,7 +310,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
               const parsed = parseSSEString(eventStr);
               if (parsed) {
                 interaction.response.sseEvents.push(parsed);
-                trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster);
+                trackSSEEvent(parsed, interaction, activeToolBlocks, broadcaster, interaction.instanceId);
               }
             }
 
@@ -410,7 +413,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
         const passthrough = new SSEPassthrough((event) => {
           interaction.response.sseEvents.push(event);
-          trackSSEEvent(event, interaction, activeToolBlocks, broadcaster);
+          trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, interaction.instanceId);
         });
 
         const nodeStream = Readable.fromWeb(upstream.body);
@@ -457,6 +460,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
                   questions: block.input?.questions || [],
                   resolve: null,
                   reject: null,
+                  ctx: getInstanceContext(interaction.instanceId),
                 });
                 console.log(`[proxy] Recorded AskUserQuestion ${block.id} (non-streaming)`);
               }
@@ -500,12 +504,13 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   });
 
   // POST /v1/messages/count_tokens
-  router.post('/v1/messages/count_tokens', async (req, res) => {
+  router.post(['/v1/messages/count_tokens', '/p/:profileName/v1/messages/count_tokens', '/p/:profileName/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
     const body = req.body;
     const interaction = {
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages/count_tokens',
+      instanceId: req.instanceId || null,
       request: { ...body },
       response: { status: null, headers: {}, body: null, sseEvents: [] },
       timing: { startedAt: Date.now(), ttfb: null, duration: null },
@@ -585,14 +590,16 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   return router;
 }
 
-// Question context — set by workflow executeStep to tag questions with tabId/runId/stepId
-let _questionContext = null;
-function setQuestionContext(ctx) { _questionContext = ctx; }
-function clearQuestionContext() { _questionContext = null; }
-function getQuestionContext() { return _questionContext; }
+/** Reject and remove all pending questions associated with a given tabId */
+function clearPendingQuestionsForTab(tabId) {
+  for (const [toolUseId, pending] of pendingQuestions) {
+    if (pending.ctx?.tabId === tabId) {
+      if (pending.reject) pending.reject(new Error('Chat stopped'));
+      pendingQuestions.delete(toolUseId);
+    }
+  }
+}
 
 module.exports = createProxyRouter;
 module.exports.pendingQuestions = pendingQuestions;
-module.exports.setQuestionContext = setQuestionContext;
-module.exports.clearQuestionContext = clearQuestionContext;
-module.exports.getQuestionContext = getQuestionContext;
+module.exports.clearPendingQuestionsForTab = clearPendingQuestionsForTab;

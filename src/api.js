@@ -18,8 +18,8 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
-const { pendingQuestions } = require('./proxy');
-const { resolveOutputDir, OUTPUTS_DIR, ensureDir } = require('./utils');
+const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
+const { resolveOutputDir, OUTPUTS_DIR, ensureDir, getInstanceContext } = require('./utils');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
 
@@ -31,7 +31,7 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
 
   // ── POST /api/run ────────────────────────────────────────────────
   router.post('/run', (req, res) => {
-    const { type, prompt, workflow, inputs, cwd, profile, sessionId } = req.body || {};
+    const { type, prompt, workflow, inputs, cwd, profile, sessionId, sourceInstanceId } = req.body || {};
 
     if (!type || (type === 'chat' && !prompt) || (type === 'workflow' && !workflow)) {
       return res.status(400).json({ error: 'Missing required fields. Chat needs: type, prompt. Workflow needs: type, workflow.' });
@@ -50,9 +50,9 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
     };
 
     if (type === 'chat') {
-      runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId });
+      runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId });
     } else if (type === 'workflow') {
-      runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow, inputs, cwd, profile });
+      runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow, inputs, cwd, profile, sourceInstanceId });
     } else {
       send('error', { error: `Unknown type: ${type}` });
       res.end();
@@ -120,9 +120,10 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
 }
 
 // ── Chat execution ───────────────────────────────────────────────────
-function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId }) {
-  // Use a dedicated API tab so we don't interfere with browser sessions
-  const tabId = `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId }) {
+  // If triggered from a known instance, reuse its tabId for AskUserQuestion routing
+  const sourceCtx = sourceInstanceId ? getInstanceContext(sourceInstanceId) : null;
+  const tabId = sourceCtx?.tabId || `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const session = sessionManager.getOrCreate(tabId);
 
   // Configure CWD and profile (load profile without changing the global active profile)
@@ -178,6 +179,7 @@ function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile,
     broadcaster.removeApiListener(listener);
     sessionManager.kill(tabId);
     sessionManager.remove(tabId);
+    clearPendingQuestionsForTab(tabId);
   });
 
   broadcaster.addApiListener(listener);
@@ -185,9 +187,12 @@ function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile,
 }
 
 // ── Workflow execution ───────────────────────────────────────────────
-function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow: name, inputs, cwd, profile }) {
+function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow: name, inputs, cwd, profile, sourceInstanceId }) {
   const runCwd = resolveOutputDir(cwd || '');
-  const tabId = `api-wf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  // If triggered from a known instance (e.g., chat tab via MCP tool), reuse its tabId
+  // so AskUserQuestion routes back to the originating tab
+  const sourceCtx = sourceInstanceId ? getInstanceContext(sourceInstanceId) : null;
+  const tabId = sourceCtx?.tabId || `api-wf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
   let runId = null;
 
@@ -205,7 +210,7 @@ function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashbo
     } else if (msg.type === 'workflow:error') {
       send('error', { error: msg.error });
     } else if (msg.type === 'workflow:run:complete') {
-      send('done', { result: msg.status, runId });
+      send('done', { result: msg.status, runId, output: msg.output || null });
       cleanup();
     } else if (msg.type === 'ask:question' && msg.tabId === tabId) {
       send('ask', { toolUseId: msg.toolUseId, questions: msg.questions });

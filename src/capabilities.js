@@ -429,6 +429,11 @@ function deleteHook(cwd, event, entryIndex) {
 // --- Hook reporter auto-injection ---
 
 const HOOK_REPORTER_MARKER = '__clairview_reporter__';
+const HOOK_REPORTER_MARKERS = ['__clairview_reporter__', '__claude_doc_reporter__'];
+
+function isReporterHook(h) {
+  return HOOK_REPORTER_MARKERS.some(m => h.command?.includes(m));
+}
 
 function ensureHookReporters(cwd, reporterPath) {
   const settings = readSettingsLocal(cwd);
@@ -438,12 +443,18 @@ function ensureHookReporters(cwd, reporterPath) {
   for (const event of events) {
     if (!settings.hooks[event]) settings.hooks[event] = [];
     const entries = settings.hooks[event];
-    // Check if reporter already exists
-    const hasReporter = entries.some(e =>
+    // Remove legacy reporter entries (old marker names)
+    const legacy = entries.filter(e => e.hooks?.some(h => isReporterHook(h) && !h.command?.includes(HOOK_REPORTER_MARKER)));
+    if (legacy.length > 0) {
+      settings.hooks[event] = entries.filter(e => !legacy.includes(e));
+      changed = true;
+    }
+    // Check if current reporter already exists
+    const hasReporter = settings.hooks[event].some(e =>
       e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
     );
     if (!hasReporter) {
-      entries.push({
+      settings.hooks[event].push({
         hooks: [{
           type: 'command',
           command: `node "${reporterPath}" # ${HOOK_REPORTER_MARKER}`,
@@ -463,7 +474,7 @@ function removeHookReporters(cwd) {
   for (const event of Object.keys(settings.hooks)) {
     const entries = settings.hooks[event];
     const filtered = entries.filter(e =>
-      !e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
+      !e.hooks?.some(h => isReporterHook(h))
     );
     if (filtered.length !== entries.length) {
       settings.hooks[event] = filtered;

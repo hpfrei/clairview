@@ -5,33 +5,23 @@
   "steps": {
     "gather-topic": {
       "profile": "safe",
-      "do": "Use the AskUserQuestion tool to ask the user what topic they'd like to be quizzed on. Explain that you'll create an analogy-based quiz question that tests their understanding of the topic in a creative way. Accept any subject — technical, scientific, historical, philosophical, etc.",
+      "do": "Use the AskUserQuestion tool to ask the user what topic they'd like to be quizzed on. Encourage them to pick any subject, concept, or domain — the more specific, the better the quiz. Examples: 'how TCP/IP works', 'natural selection', 'supply and demand'. Store their response as the chosen topic.",
       "produces": "The user's chosen topic as a string"
     },
-    "generate-quiz": {
+    "generate-analogy-question": {
       "profile": "safe",
-      "do": "Given the user's topic, perform these creative reasoning steps:\n\n1. **Find an analogy**: Identify a vivid, unexpected analogy from a completely different domain that shares deep structural similarities with the topic. Avoid clichéd analogies. The analogy should illuminate a non-obvious truth about the topic.\n\n2. **Map a situation**: Create a concrete scenario set entirely within the analogy domain. The scenario should present a problem, decision, or observation that parallels a real dynamic in the original topic.\n\n3. **Formulate the question**: Write a multiple-choice question (4 options, exactly one correct) set in the analogy world. The correct answer should, when mapped back to the original topic, reveal a genuine insight or truth. The wrong answers should be plausible within the analogy but incorrect when mapped back.\n\n4. **Prepare the reveal**: Write a brief explanation that maps the correct answer back to the original topic, showing why it's true and what insight it reveals.\n\nOutput all of this as structured text: the analogy domain, the scenario, the question with labeled options (A–D), the correct answer letter, and the reveal explanation.",
-      "produces": "A complete quiz package: analogy domain, scenario, multiple-choice question with 4 options, correct answer, and reveal explanation",
+      "do": "Given the user's topic, perform the following creative reasoning — do this directly, do NOT call the analogy_quiz_generator tool:\n\n1. **Find an analogy**: Identify a surprising, non-obvious analogy from a completely different domain that maps well onto the topic. The analogy should be vivid, concrete, and accessible — avoid cliché comparisons. For example, if the topic is 'TCP/IP networking', an analogy might be 'a postal system in a medieval kingdom'.\n\n2. **Map a situation**: Create a specific scenario within the analogy space that parallels an important truth or principle about the original topic. The scenario should be detailed enough to be engaging but focused on one key insight.\n\n3. **Formulate a multiple-choice question**: Write a question set entirely within the analogy world (never mentioning the original topic in the question itself). Create 4 answer options (A, B, C, D) where:\n   - The correct answer, when mapped back to the original topic, reveals a genuine truth or principle\n   - The wrong answers represent common misconceptions or plausible-but-incorrect beliefs about the original topic\n   - All options sound reasonable within the analogy framing\n\n4. **Prepare the explanation**: Write a clear explanation that maps the correct answer back to the original topic, revealing what truth it teaches. Also note why each wrong answer corresponds to a misconception.\n\nOutput all of this as structured text: the analogy domain, the question, the four labeled options (A–D), the correct answer letter, and the full explanation.",
+      "produces": "A complete quiz question package: analogy domain, question text, four labeled options (A–D), correct answer letter, and an explanation mapping the answer back to the original topic",
       "context": [
         "gather-topic"
       ]
     },
     "deliver-quiz": {
       "profile": "safe",
-      "do": "Present the quiz to the user interactively:\n\n1. Set the scene by briefly introducing the analogy domain and scenario. Do NOT mention the original topic yet — the magic is in the reveal.\n\n2. Use AskUserQuestion to present the multiple-choice question with the 4 options. Let the user pick their answer.\n\n3. After they answer, reveal whether they were correct or incorrect. Then deliver the reveal — explain the analogy mapping back to the original topic and the truth it illuminates. Make this moment satisfying: connect the dots clearly so the user has an 'aha!' moment.\n\n4. If they got it wrong, be encouraging and explain why the correct answer maps back correctly.",
-      "produces": "The user's answer, whether it was correct, and the full reveal explanation delivered to the user",
+      "do": "Present the quiz to the user interactively:\n\n1. Set the scene with 1–2 sentences introducing the analogy scenario.\n2. Use the AskUserQuestion tool to present the multiple-choice question with the 4 options (A, B, C, D).\n3. After the user answers, reveal:\n   - Whether they were correct\n   - The correct answer\n   - The full explanation mapping the analogy back to the original topic and the truth it reveals\n   - Brief notes on why the wrong options correspond to misconceptions about the original topic\n\nMake the delivery engaging and educational.",
+      "produces": "The completed quiz interaction: question presented, answer collected, result and explanation delivered to the user",
       "context": [
-        "generate-quiz"
-      ]
-    },
-    "summary": {
-      "profile": "safe",
-      "do": "Provide a brief, friendly wrap-up of the quiz experience. Mention the topic, the analogy used, whether the user answered correctly, and the key insight revealed. Keep it concise and end on an encouraging note.",
-      "produces": "A short summary of the quiz session",
-      "context": [
-        "gather-topic",
-        "generate-quiz",
-        "deliver-quiz"
+        "generate-analogy-question"
       ]
     }
   }

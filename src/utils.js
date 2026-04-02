@@ -43,16 +43,36 @@ function buildClaudeArgs(profile) {
  * Spawn `claude` with the proxy URL injected into the environment.
  */
 // Live tracking of running Claude processes
-const _activeProcesses = new Set();
+// Map<instanceId, { proc, instanceId, profileName, spawnedAt, status }>
+const _activeProcesses = new Map();
 let _processBroadcaster = null;
 function setProcessBroadcaster(broadcaster) { _processBroadcaster = broadcaster; }
-function getActiveProcessCount() { return _activeProcesses.size; }
+function getActiveProcessCount() {
+  let count = 0;
+  for (const entry of _activeProcesses.values()) {
+    if (entry.status === 'running') count++;
+  }
+  return count;
+}
 
-function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken }) {
+function getInstances() {
+  return Array.from(_activeProcesses.values()).map(({ instanceId, profileName, spawnedAt, status }) => ({
+    instanceId, profileName, spawnedAt, status,
+  }));
+}
+
+function getInstanceContext(instanceId) {
+  const entry = _activeProcesses.get(instanceId);
+  return entry?.sourceContext || null;
+}
+
+function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken, instanceId, sourceContext }) {
+  if (!instanceId) throw new Error('spawnClaude requires instanceId');
   const env = { ...process.env };
   if (proxyPort) {
     const profile = profileName ? `/p/${encodeURIComponent(profileName)}` : '';
-    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}${profile}`;
+    const instance = `/i/${encodeURIComponent(instanceId)}`;
+    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}${profile}${instance}`;
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
@@ -61,21 +81,37 @@ function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, das
   }
   if (dashboardPort) env.CLAIRVIEW_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.CLAIRVIEW_AUTH_TOKEN = authToken;
+  env.CLAIRVIEW_INSTANCE_ID = instanceId;
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
-  _activeProcesses.add(proc);
-  _broadcastProcessCount();
+  _activeProcesses.set(instanceId, { proc, instanceId, profileName, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null });
+  _broadcastInstances('spawn', instanceId);
   proc.on('exit', () => {
-    _activeProcesses.delete(proc);
-    _broadcastProcessCount();
+    const entry = _activeProcesses.get(instanceId);
+    // Only mark exited if this proc is still the current one (avoids race on respawn)
+    if (entry && entry.proc === proc) {
+      entry.status = 'exited';
+      _broadcastInstances('exit', instanceId);
+    }
   });
 
   return proc;
 }
 
-function _broadcastProcessCount() {
+function killInstance(instanceId) {
+  const entry = _activeProcesses.get(instanceId);
+  if (!entry || entry.status !== 'running') return false;
+  try { entry.proc.kill('SIGTERM'); } catch {}
+  return true;
+}
+
+function _broadcastInstances(event, instanceId) {
   if (_processBroadcaster) {
-    _processBroadcaster.broadcast({ type: 'claude:count', count: _activeProcesses.size });
+    const instances = getInstances();
+    const count = instances.filter(i => i.status === 'running').length;
+    _processBroadcaster.broadcast({ type: 'claude:instances', event, instanceId, instances, count });
+    // Backward compat
+    _processBroadcaster.broadcast({ type: 'claude:count', count });
   }
 }
 
@@ -238,6 +274,9 @@ module.exports = {
   spawnClaude,
   setProcessBroadcaster,
   getActiveProcessCount,
+  getInstances,
+  getInstanceContext,
+  killInstance,
   createStreamJsonParser,
   OUTPUTS_DIR,
   resolveOutputDir,

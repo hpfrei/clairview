@@ -374,7 +374,7 @@
     setLog('Regenerating workflow\u2026', 'log-busy');
     // Pass current source as context + feedback
     if (wf.activeTab === 'source') wf.sourceContent = wfTextarea?.value || '';
-    sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback, selectedProfiles: getSelectedProfiles() });
+    sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback, existingName: editingName || undefined, selectedProfiles: getSelectedProfiles() });
   });
 
   // Regenerate (for existing workflows — regenerates JSON from description)
@@ -385,7 +385,7 @@
     wf.generating = true;
     updateBusyState();
     setLog('Regenerating source JSON\u2026', 'log-busy');
-    sendWs({ type: 'workflow:generate', description: desc, selectedProfiles: getSelectedProfiles() });
+    sendWs({ type: 'workflow:generate', description: desc, existingName: editingName || undefined, selectedProfiles: getSelectedProfiles() });
   });
 
   // New workflow
