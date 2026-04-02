@@ -205,9 +205,6 @@
   cancelBtn?.addEventListener('click', () => close(null));
   selectBtn?.addEventListener('click', () => close(currentAbsolute));
 
-  modal?.addEventListener('click', (e) => {
-    if (e.target === modal) close(null);
-  });
 
   newBtn?.addEventListener('click', showNewForm);
   newOkBtn?.addEventListener('click', createFolder);

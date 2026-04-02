@@ -44,9 +44,14 @@
   const container = document.getElementById('wfrunContainer');
 
   // --- Tab strip ---
+  const wfNewBtn = document.getElementById('wfNewBtn');
+
   function renderTabStrip() {
     if (!tabStrip) return;
-    tabStrip.innerHTML = '';
+    // Remove only tab buttons, preserve static action buttons
+    tabStrip.querySelectorAll('.chat-tab, .chat-tab-new').forEach(el => el.remove());
+
+    const ref = wfNewBtn || null; // insert before the action button
     for (const [id, tab] of tabs) {
       const btn = document.createElement('button');
       btn.className = 'chat-tab' + (id === activeTabId ? ' active' : '');
@@ -61,7 +66,7 @@
         btn.appendChild(closeBtn);
       }
       btn.addEventListener('click', () => switchTab(id));
-      tabStrip.appendChild(btn);
+      tabStrip.insertBefore(btn, ref);
     }
     const newBtn = document.createElement('button');
     newBtn.className = 'chat-tab-new';
@@ -73,7 +78,7 @@
       switchTab(id);
       renderTabStrip();
     });
-    tabStrip.appendChild(newBtn);
+    tabStrip.insertBefore(newBtn, ref);
   }
 
   function switchTab(tabId) {
@@ -114,27 +119,56 @@
   // --- Phase: Pick (card grid) ---
   function renderPickPhase(tab) {
     if (workflows.length === 0) {
-      container.innerHTML = '<div class="wfrun-empty">No workflows available. Create one in the Workflows tab.</div>';
+      container.innerHTML = '<div class="wfrun-empty">No workflows yet. Click <b>+ New</b> to create one.</div>';
       return;
     }
     let html = '<div class="wfrun-card-grid">';
     for (const w of workflows) {
+      const statusClass = w.status === 'compiled' ? 'tag-sk' : w.status === 'needs-compile' ? 'tag-wr' : 'tag-ro';
+      const statusLabel = w.status === 'compiled' ? 'compiled' : w.status === 'needs-compile' ? 'needs compile' : 'draft';
       html += `<div class="wfrun-card" data-name="${escHtml(w.name)}">
         <div class="wfrun-card-name">${escHtml(w.name)}</div>
         <div class="wfrun-card-desc">${escHtml(w.description || 'No description')}</div>
-        <div class="wfrun-card-meta">${escHtml(w.stepCount || '?')} steps &middot; ${escHtml(w.status || 'draft')}</div>
+        <div class="wfrun-card-meta">${escHtml(w.stepCount || '?')} steps &middot; <span class="ref-tag ${statusClass}">${statusLabel}</span></div>
+        <div class="wfrun-card-actions">
+          <button class="wfrun-card-btn wfrun-card-run" data-name="${escHtml(w.name)}" title="Run">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="4,2 14,8 4,14"/></svg>
+          </button>
+          <button class="wfrun-card-btn wfrun-card-edit" data-name="${escHtml(w.name)}" title="Edit">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.1 1.3a1.2 1.2 0 011.7 0l.9.9a1.2 1.2 0 010 1.7L5.8 12.8l-3.2.8.8-3.2z"/></svg>
+          </button>
+          <button class="wfrun-card-btn wfrun-card-del" data-name="${escHtml(w.name)}" title="Delete">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2V1h6v1h4v1H1V2h4zm1 3v8h1V5H6zm3 0v8h1V5H9zM3 4l1 11h8l1-11H3z"/></svg>
+          </button>
+        </div>
       </div>`;
     }
     html += '</div>';
     container.innerHTML = html;
 
-    container.querySelectorAll('.wfrun-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const name = card.dataset.name;
+    // Delegated click handlers on card actions
+    container.querySelectorAll('.wfrun-card-run').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = btn.dataset.name;
         tab.workflowName = name;
-        // Request workflow data for input rendering
         module.pendingLoad = name;
         sendWs({ type: 'workflow:load', name });
+      });
+    });
+    container.querySelectorAll('.wfrun-card-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendWs({ type: 'workflow:load', name: btn.dataset.name });
+      });
+    });
+    container.querySelectorAll('.wfrun-card-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = btn.dataset.name;
+        if (confirm(`Delete workflow "${name}"?`)) {
+          sendWs({ type: 'workflow:delete', name });
+        }
       });
     });
   }
@@ -327,7 +361,6 @@
 
     // Close handlers
     backdrop.querySelector('.cap-modal-close').addEventListener('click', () => backdrop.remove());
-    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
     const onKey = (e) => { if (e.key === 'Escape') { backdrop.remove(); document.removeEventListener('keydown', onKey); } };
     document.addEventListener('keydown', onKey);
   }

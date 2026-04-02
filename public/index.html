@@ -31,8 +31,8 @@
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab" data-view="claude">Chat</button>
         <button class="header-tab" data-view="capabilities">Profiles</button>
-        <button class="header-tab" data-view="workflows">Workflows</button>
-        <button class="header-tab" data-view="workflow-runs">Runs</button>
+        <button class="header-tab" data-view="workflow-runs">Workflows</button>
+        <button class="header-tab" data-view="models">Models</button>
       </nav>
     </div>
     <div class="header-actions">
@@ -154,7 +154,6 @@
         <div class="ref-stat"><span class="ref-stat-value" id="capAgentCount">0</span><span class="ref-stat-label">Agents</span></div>
         <div class="ref-stat"><span class="ref-stat-value" id="capHookCount">0</span><span class="ref-stat-label">Hooks</span></div>
         <div class="ref-stat"><span class="ref-stat-value" id="capMcpCount">0</span><span class="ref-stat-label">MCP Tools</span></div>
-        <div class="ref-stat"><span class="ref-stat-value" id="capModelCount">0</span><span class="ref-stat-label">Models</span></div>
       </div>
 
       <!-- Section tabs -->
@@ -164,7 +163,6 @@
         <button class="ref-nav-btn" data-section="agents">Agents</button>
         <button class="ref-nav-btn" data-section="hooks">Hooks</button>
         <button class="ref-nav-btn" data-section="mcp">MCP Tools</button>
-        <button class="ref-nav-btn" data-section="models">Models</button>
       </div>
 
       <!-- ===================== TOOLS ===================== -->
@@ -966,21 +964,6 @@
       <!-- ===================== MCP TOOLS ===================== -->
       <div class="ref-panel" id="ref-mcp"></div>
 
-      <!-- ===================== MODELS ===================== -->
-      <div class="ref-panel" id="ref-models">
-        <div class="ref-intro">
-          <strong>Models</strong> are grouped by provider. Set the API key per provider to enable all its models.
-          Select a model in any profile's <code>modelDef</code> field to route requests through that provider instead of Anthropic.
-          <br>API keys are stored locally and never committed to git.
-        </div>
-        <div class="cap-section-header">
-          <span>Providers &amp; Models</span>
-          <button class="cap-action-btn" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
-        </div>
-        <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
-        <div id="capModelList"></div>
-      </div><!-- /ref-models -->
-
     </div><!-- /ref-container -->
   </div><!-- /view-capabilities -->
 
@@ -1509,22 +1492,6 @@ jq -r '.tool_input.command' |
       </div>
     </div>
 
-  <!-- ===== WORKFLOWS VIEW ===== -->
-  <div id="view-workflows" class="hidden" style="display:none">
-    <div class="ref-container">
-      <div class="ref-intro">
-        <strong>Workflows</strong> automate multi-step AI tasks. Each step runs a full
-        <code>claude -p</code> session with its own profile.
-      </div>
-      <div class="cap-section-header">
-        <span>Workflows in <code>capabilities/workflows/</code></span>
-        <button class="cap-new-btn" id="wfNewBtn">+ New</button>
-      </div>
-      <div class="wf-error-bar hidden" id="wfErrorBar"></div>
-      <div class="cap-list" id="wfList"></div>
-    </div>
-  </div>
-
   <!-- Workflow Edit Modal -->
   <div class="cap-modal-backdrop hidden" id="wfModal">
     <div class="cap-modal cap-modal-wide">
@@ -1714,9 +1681,22 @@ any of these formats in its response.</pre>
     <div class="chat-tab-strip" id="wfrunTabStrip">
       <button class="chat-tab active" data-tab-id="wfrun-1">Run 1</button>
       <button class="chat-tab-new" id="wfrunTabNew" title="New run tab">+</button>
+      <button class="cap-action-btn wfrun-nav-action" id="wfNewBtn" title="Create a new workflow">+ New</button>
     </div>
+    <div class="wf-error-bar hidden" id="wfErrorBar"></div>
     <div class="wfrun-container" id="wfrunContainer">
       <!-- Phase panels swapped here per tab -->
+    </div>
+  </div>
+
+  <!-- ===== MODELS VIEW ===== -->
+  <div id="view-models" class="hidden" style="display:none">
+    <div class="models-nav" id="modelsNav">
+      <button class="cap-action-btn models-nav-action" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
+    </div>
+    <div class="models-content" id="modelsContent">
+      <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
+      <div id="capModelList"></div>
     </div>
   </div>
 

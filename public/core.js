@@ -527,7 +527,7 @@ function switchView(view) {
   const activeBtn = document.querySelector(`.header-tab[data-view="${view}"]`);
   if (activeBtn) activeBtn.classList.add('active');
 
-  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-workflows', 'view-workflow-runs'];
+  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-workflow-runs', 'view-models'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;

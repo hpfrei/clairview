@@ -132,12 +132,11 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 ## Quick start
 
 1. **Chat tab** -- type a prompt, pick a profile (model + permissions), set a working directory. Open multiple tabs for parallel conversations -- each is fully isolated.
-2. **Runs tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once.
+2. **Workflows tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once. Create, edit, and delete workflows from the card grid. The \`+ New\` button opens the editor to design, generate, and compile multi-step automations.
 3. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
 4. **Profiles tab** -- configure model, effort level, permission mode, MCP tools, and system prompt per profile. Builtin profiles: \`full\` (all tools), \`safe\` (no bash/write), \`readonly\`, \`minimal\`.
-5. **Models tab** (inside Profiles) -- browse models by provider, set API keys per provider, add custom model definitions.
-6. **Workflows tab** -- design, generate, and compile multi-step automations from natural language descriptions.
-7. **REST API** -- \`POST /api/run\` to start chats or workflows programmatically and stream results via SSE.
+5. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
+6. **REST API** -- \`POST /api/run\` to start chats or workflows programmatically and stream results via SSE.
 `;
 
   const architectureMd = `
@@ -303,10 +302,10 @@ Workflows automate multi-step tasks. Each step is a full \`claude -p\` session t
 
 ## Workflow lifecycle
 
-1. **Design** -- in the Workflows tab, write a high-level description of what the workflow should do (e.g. "review code on a branch and produce a summary"). Name it and define its inputs.
+1. **Design** -- in the Workflows tab, click \`+ New\` to open the editor. Write a high-level description of what the workflow should do (e.g. "review code on a branch and produce a summary"). Name it and define its inputs.
 2. **Generate** -- click Generate and AI creates the source JSON from your description, defining steps, their order, profiles, and what each step produces.
 3. **Compile** -- click Compile and AI transforms the JSON into executable JavaScript that the workflow engine can run.
-4. **Run** -- go to the Runs tab, pick the workflow card, fill in inputs (e.g. branch name), set a working directory, and click Run.
+4. **Run** -- pick a workflow card, fill in inputs (e.g. branch name), set a working directory, and click Run.
 
 ## Workflow JSON structure
 

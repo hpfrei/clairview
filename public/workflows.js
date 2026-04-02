@@ -20,7 +20,6 @@
   };
 
   // --- DOM refs ---
-  const wfList = document.getElementById('wfList');
   const wfErrorBar = document.getElementById('wfErrorBar');
 
   // Edit modal
@@ -115,27 +114,6 @@
 
   // --- Rendering ---
 
-  function renderList() {
-    if (!wfList) return;
-    if (wf.workflows.length === 0) {
-      wfList.innerHTML = '<div class="cap-list-empty">No workflows yet. Click + New to create one.</div>';
-      return;
-    }
-    wfList.innerHTML = wf.workflows.map(w => {
-      const statusClass = w.status === 'compiled' ? 'tag-sk' : w.status === 'needs-compile' ? 'tag-wr' : 'tag-ro';
-      const statusLabel = w.status === 'compiled' ? 'compiled' : w.status === 'needs-compile' ? 'needs compile' : 'draft';
-      return `<div class="cap-list-item" data-name="${escHtml(w.name)}">
-        <span class="cap-item-name">${escHtml(w.name)}</span>
-        <span class="ref-tag ${statusClass}">${statusLabel}</span>
-        <span class="cap-item-desc">${escHtml(w.description || '')}</span>
-        <span class="cap-list-actions">
-          <button class="wf-play-btn" data-name="${escHtml(w.name)}" title="Run workflow">&#9654;</button>
-          <button class="cap-edit-btn wf-edit-btn" data-name="${escHtml(w.name)}" title="Edit">&#9998;</button>
-          <button class="cap-del-btn wf-del-btn" data-name="${escHtml(w.name)}" title="Delete">&#10005;</button>
-        </span>
-      </div>`;
-    }).join('');
-  }
 
   // --- Edit Modal ---
 
@@ -424,24 +402,6 @@
     }, null);
   });
 
-  // --- List actions (delegated) ---
-
-  wfList?.addEventListener('click', (e) => {
-    const name = e.target.closest('[data-name]')?.dataset.name;
-    if (!name) return;
-    if (e.target.closest('.wf-play-btn')) {
-      if (window.workflowRunModule?.startRun) {
-        window.workflowRunModule.startRun(name);
-        switchView('workflow-runs');
-      }
-    } else if (e.target.closest('.wf-edit-btn')) {
-      sendWs({ type: 'workflow:load', name });
-    } else if (e.target.closest('.wf-del-btn')) {
-      if (confirm(`Delete workflow "${name}"?`)) {
-        sendWs({ type: 'workflow:delete', name });
-      }
-    }
-  });
 
   // --- Helpers ---
 
@@ -460,7 +420,6 @@
     switch (msg.type) {
       case 'workflow:list':
         wf.workflows = msg.workflows || [];
-        renderList();
         break;
 
       case 'workflow:loaded':

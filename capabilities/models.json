@@ -32,10 +32,10 @@
       "reasoning": true,
       "contextWindow": 200000,
       "maxOutputTokens": 32000,
-      "inputCostPerMTok": 15,
-      "outputCostPerMTok": 75,
-      "cacheReadCostPerMTok": 1.5,
-      "cacheCreateCostPerMTok": 18.75
+      "inputCostPerMTok": 5,
+      "outputCostPerMTok": 25,
+      "cacheReadCostPerMTok": 0.5,
+      "cacheCreateCostPerMTok": 6.25
     },
     {
       "name": "claude-sonnet-4-6",
@@ -85,23 +85,6 @@
       "outputCostPerMTok": 15,
       "cacheReadCostPerMTok": 0.25,
       "cacheCreateCostPerMTok": 2.5
-    },
-    {
-      "name": "gpt-5.4-pro",
-      "label": "GPT-5.4 Pro",
-      "description": "Maximum performance for the most complex tasks",
-      "providerKey": "openai",
-      "provider": "openai",
-      "modelId": "gpt-5.4-pro",
-      "systemPromptMode": "replace",
-      "reasoning": false,
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "useMaxCompletionTokens": true,
-      "inputCostPerMTok": 30,
-      "outputCostPerMTok": 180,
-      "cacheReadCostPerMTok": null,
-      "cacheCreateCostPerMTok": null
     },
     {
       "name": "gpt-5.4-mini",
@@ -230,7 +213,7 @@
       "maxOutputTokens": 65535,
       "inputCostPerMTok": 0.6,
       "outputCostPerMTok": 3,
-      "cacheReadCostPerMTok": 0.15,
+      "cacheReadCostPerMTok": 0.1,
       "cacheCreateCostPerMTok": 0.6
     },
     {

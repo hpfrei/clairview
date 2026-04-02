@@ -740,60 +740,87 @@ Available templates in this skill directory:
 
   // --- Models Panel ---
 
+  let activeProviderTab = null;
+
   function renderModelsPanel() {
+    const nav = document.getElementById('modelsNav');
     const list = document.getElementById('capModelList');
     if (!list) return;
-    list.innerHTML = '';
 
-    for (const prov of state.providers) {
-      const section = document.createElement('div');
-      section.className = 'provider-group';
-
-      const hasKey = !!prov.apiKey;
-      const keyId = `provKey_${prov.key}`;
-      section.innerHTML = `
-        <div class="provider-header">
-          <span class="provider-label">${escHtml(prov.label)}</span>
-          <span class="provider-url">${escHtml(prov.apiBaseUrl || '')}</span>
-          <span class="provider-key-area">
-            <input type="password" id="${keyId}" class="provider-key-input" value="${escHtml(prov.apiKey || '')}" placeholder="Paste API key..." autocomplete="off">
-            <button type="button" class="provider-key-toggle" data-target="${keyId}" title="Show/hide key">&#128065;</button>
-            <button type="button" class="provider-key-save" data-provider="${escHtml(prov.key)}" title="Save key">${hasKey ? 'Update' : 'Set key'}</button>
-            <span class="provider-key-status ${hasKey ? 'mm-key-ok' : 'mm-key-missing'}">${hasKey ? 'connected' : 'no key'}</span>
-          </span>
-        </div>
-        <div class="provider-models"></div>`;
-
-      const modelsContainer = section.querySelector('.provider-models');
-      const provModels = state.models.filter(m => m.providerKey === prov.key);
-      for (const model of provModels) {
-        const ctx = model.contextWindow ? Math.round(model.contextWindow / 1000) + 'K' : '';
-        const out = model.maxOutputTokens ? Math.round(model.maxOutputTokens / 1000) + 'K' : '';
-        const specs = [ctx ? ctx + ' ctx' : '', out ? out + ' out' : ''].filter(Boolean).join(', ');
-        const pricing = model.inputCostPerMTok != null
-          ? `$${model.inputCostPerMTok}/${model.outputCostPerMTok}`
-          : '';
-        const item = document.createElement('div');
-        item.className = 'cap-list-item';
-        item.innerHTML = `<span class="cap-item-name">${escHtml(model.label || model.name)}</span>
-          <span class="cap-item-desc">
-            <code>${escHtml(model.modelId || '')}</code>
-            ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
-            ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
-            ${pricing ? '<span class="cap-model-pricing">' + escHtml(pricing) + ' /MTok</span>' : ''}
-          </span>
-          <span class="cap-list-actions">
-            <button class="cap-edit-btn" data-name="${escHtml(model.name)}" data-kind="model" title="Edit">&#9998;</button>
-          </span>`;
-        modelsContainer.appendChild(item);
+    // Build provider tabs (preserve non-tab children like the action button)
+    if (nav) {
+      nav.querySelectorAll('.home-nav-btn').forEach(b => b.remove());
+      const actionBtn = nav.querySelector('.models-nav-action');
+      for (const prov of state.providers) {
+        const btn = document.createElement('button');
+        btn.className = 'home-nav-btn' + (activeProviderTab === prov.key || (!activeProviderTab && prov === state.providers[0]) ? ' active' : '');
+        btn.dataset.provider = prov.key;
+        btn.textContent = prov.label;
+        nav.insertBefore(btn, actionBtn);
       }
-
-      list.appendChild(section);
+      if (!activeProviderTab && state.providers.length) activeProviderTab = state.providers[0].key;
     }
 
-    const countEl = document.getElementById('capModelCount');
-    if (countEl) countEl.textContent = state.models.length;
+    // Find active provider
+    const prov = state.providers.find(p => p.key === activeProviderTab) || state.providers[0];
+    if (!prov) { list.innerHTML = '<div class="models-empty">No providers configured.</div>'; return; }
+
+    // Provider key bar
+    const hasKey = !!prov.apiKey;
+    const keyId = `provKey_${prov.key}`;
+    let html = `<div class="provider-header">
+      <span class="provider-url">${escHtml(prov.apiBaseUrl || '')}</span>
+      <span class="provider-key-area">
+        <input type="password" id="${keyId}" class="provider-key-input" value="${escHtml(prov.apiKey || '')}" placeholder="Paste API key..." autocomplete="off">
+        <button type="button" class="provider-key-toggle" data-target="${keyId}" title="Show/hide key">&#128065;</button>
+        <button type="button" class="provider-key-save" data-provider="${escHtml(prov.key)}" title="Save key">${hasKey ? 'Update' : 'Set key'}</button>
+        <span class="provider-key-status ${hasKey ? 'mm-key-ok' : 'mm-key-missing'}">${hasKey ? 'connected' : 'no key'}</span>
+      </span>
+    </div>`;
+
+    // Model cards
+    const provModels = state.models.filter(m => m.providerKey === prov.key);
+    html += '<div class="model-card-grid">';
+    for (const model of provModels) {
+      const ctx = model.contextWindow ? Math.round(model.contextWindow / 1000) + 'K' : '';
+      const out = model.maxOutputTokens ? Math.round(model.maxOutputTokens / 1000) + 'K' : '';
+      const specs = [ctx ? ctx + ' ctx' : '', out ? out + ' out' : ''].filter(Boolean).join(', ');
+      const pricing = model.inputCostPerMTok != null
+        ? `$${model.inputCostPerMTok} / $${model.outputCostPerMTok} per MTok`
+        : '';
+      html += `<div class="model-card" data-name="${escHtml(model.name)}" data-kind="model">
+        <div class="model-card-name">${escHtml(model.label || model.name)}</div>
+        <div class="model-card-id"><code>${escHtml(model.modelId || '')}</code></div>
+        ${model.description ? '<div class="model-card-desc">' + escHtml(model.description) + '</div>' : ''}
+        <div class="model-card-meta">
+          ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
+          ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
+          ${pricing ? '<span class="cap-model-pricing">' + escHtml(pricing) + '</span>' : ''}
+        </div>
+      </div>`;
+    }
+    if (provModels.length === 0) {
+      html += '<div class="models-empty">No models for this provider.</div>';
+    }
+    html += '</div>';
+    list.innerHTML = html;
+
+    // Card click → open edit modal
+    list.querySelectorAll('.model-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const model = state.models.find(m => m.name === card.dataset.name);
+        if (model) openModelModal(model);
+      });
+    });
   }
+
+  // Provider tab switching
+  document.getElementById('modelsNav')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.home-nav-btn');
+    if (!btn) return;
+    activeProviderTab = btn.dataset.provider;
+    renderModelsPanel();
+  });
 
   // Provider key toggle and save (delegated)
   document.addEventListener('click', (e) => {
@@ -1074,18 +1101,6 @@ IMPORTANT: You MUST directly edit the files using your Edit or Write tools — d
     btn.textContent = 'Refresh Pricing';
   }
 
-  // Close modals on backdrop click
-  document.querySelectorAll('.cap-modal-backdrop').forEach(backdrop => {
-    backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) {
-        backdrop.classList.add('hidden');
-        state.editingSkill = null;
-        state.editingAgent = null;
-        state.editingHook = null;
-        state.editingModel = null;
-      }
-    });
-  });
 
   document.getElementById('capHookEvent')?.addEventListener('change', updateHookMatcherVisibility);
 
