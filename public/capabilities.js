@@ -2,7 +2,7 @@
 // CAPABILITIES MODULE — Profiles, skills, agents, hooks
 // ============================================================
 (function capabilitiesModule() {
-  const { state, escHtml, sendWs } = window.dashboard;
+  const { state, escHtml, sendWs, showAlert } = window.dashboard;
 
   // --- Templates ---
 
@@ -289,9 +289,9 @@ minimal  plan mode, Read/Glob/Grep</pre>
 
   function saveCurrentProfile() {
     const name = document.getElementById('pmName')?.value?.trim();
-    if (!name) return alert('Profile name is required.');
+    if (!name) return showAlert('Profile name is required.');
     if (!/^[A-Za-z0-9][A-Za-z0-9 _.\-]*$/.test(name) || name.length < 2) {
-      return alert('Invalid name. Use letters, numbers, spaces, hyphens, underscores, or dots. Min 2 chars.');
+      return showAlert('Invalid name. Use letters, numbers, spaces, hyphens, underscores, or dots. Min 2 chars.');
     }
     const allowAllTools = document.getElementById('pmAllowAllTools')?.checked;
     const allowedTools = allowAllTools ? [...state.knownTools] : [];
@@ -585,7 +585,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
     const content = ta.value;
     const nameMatch = content.match(/^name:\s*(.+)$/m);
     const name = nameMatch ? nameMatch[1].trim() : null;
-    if (!name) return alert('Missing "name:" in frontmatter');
+    if (!name) return showAlert('Missing "name:" in frontmatter');
     const extraFiles = [];
     document.querySelectorAll('#capSkillFiles .cap-modal-file-entry').forEach(entry => {
       const fname = entry.querySelector('.cap-modal-file-name')?.value?.trim();
@@ -650,7 +650,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
     const content = ta.value;
     const nameMatch = content.match(/^name:\s*(.+)$/m);
     const name = nameMatch ? nameMatch[1].trim() : null;
-    if (!name) return alert('Missing "name:" in frontmatter');
+    if (!name) return showAlert('Missing "name:" in frontmatter');
     sendWs({ type: 'agent:save', name, content });
     document.getElementById('agentModal')?.classList.add('hidden');
     state.editingAgent = null;
@@ -715,7 +715,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
       command: document.getElementById('capHookCommand')?.value || '',
       timeout: parseInt(document.getElementById('capHookTimeout')?.value) || 30,
     };
-    if (!hook.command) return alert('Command/prompt is required');
+    if (!hook.command) return showAlert('Command/prompt is required');
     if (state.editingHook && state.editingHook !== '__new__') {
       hook.entryIndex = state.editingHook.entryIndex;
       hook.hookIndex = state.editingHook.hookIndex;
@@ -947,16 +947,16 @@ minimal  plan mode, Read/Glob/Grep</pre>
 
   document.getElementById('capModelSave')?.addEventListener('click', () => {
     const name = document.getElementById('mmName')?.value?.trim();
-    if (!name) return alert('Model name is required.');
+    if (!name) return showAlert('Model name is required.');
     if (!/^[a-z][a-z0-9._-]*$/.test(name)) {
-      return alert('Invalid name. Use lowercase letters, numbers, dots, hyphens, underscores.');
+      return showAlert('Invalid name. Use lowercase letters, numbers, dots, hyphens, underscores.');
     }
 
     let toolOverrides = {};
     const toVal = document.getElementById('mmToolOverrides')?.value?.trim();
     if (toVal) {
       try { toolOverrides = JSON.parse(toVal); }
-      catch { return alert('Tool overrides must be valid JSON.'); }
+      catch { return showAlert('Tool overrides must be valid JSON.'); }
     }
 
     const providerKey = document.getElementById('mmProviderKey')?.value || 'openai';

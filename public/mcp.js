@@ -1,7 +1,7 @@
 // === MCP Tool Manager — single integrated server, tool-centric UI ===
 (function() {
   'use strict';
-  const { state, sendWs, escHtml } = window.dashboard;
+  const { state, sendWs, escHtml, showAlert } = window.dashboard;
 
   // --- State ---
   const mcp = {
@@ -57,7 +57,7 @@
         if (mcp.editing) renderTestResult();
         break;
       case 'mcp:error':
-        alert(msg.error);
+        showAlert(msg.error);
         break;
       case 'mcp:output':
         mcp.output.push({
@@ -416,7 +416,7 @@
 
   function collectToolForm() {
     const name = document.getElementById('mcpToolName')?.value?.trim();
-    if (!name) { alert('Tool name is required.'); return null; }
+    if (!name) { showAlert('Tool name is required.'); return null; }
 
     const description = document.getElementById('mcpToolDesc')?.value?.trim() || '';
     const handlerBody = document.getElementById('mcpToolHandler')?.value || '';

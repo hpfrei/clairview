@@ -242,9 +242,9 @@ const detailContent = document.getElementById('detail-content');
 const emptyState = document.getElementById('empty-state');
 const statusEl = document.getElementById('status');
 const statsEl = document.getElementById('footerStats');
-const sessionPicker = document.getElementById('sessionPicker');
+const sessionPickerBtn = document.getElementById('sessionPickerBtn');
 const newSessionBtn = document.getElementById('newSessionBtn');
-const deleteSessionBtn = document.getElementById('deleteSessionBtn');
+let cachedSessions = [];
 
 
 // Centralized settings state sync — called once, modules just re-render
@@ -296,8 +296,25 @@ function setupCwdToolbar({ editBtn, label, input, setBtn, onSave }) {
   });
 }
 
+// --- Alert modal (replaces native alert()) ---
+function showAlert(message) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'alert-modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'alert-modal';
+  modal.innerHTML = `<div class="alert-modal-message">${escHtml(message)}</div><button class="alert-modal-ok">OK</button>`;
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+  const okBtn = modal.querySelector('.alert-modal-ok');
+  okBtn.focus();
+  okBtn.addEventListener('click', () => backdrop.remove());
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+  backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') backdrop.remove(); });
+}
+
 // --- Expose API for modules ---
 window.dashboard = {
+  showAlert,
   state,
   sendWs(msg) { if (state.ws) state.ws.send(JSON.stringify(msg)); },
   escHtml,
@@ -474,47 +491,89 @@ newSessionBtn?.addEventListener('click', () => {
   }
 });
 
-sessionPicker?.addEventListener('change', () => {
-  const id = parseInt(sessionPicker.value, 10);
-  if (!id || isNaN(id) || id === state.activeSessionId) {
-    updateSessionActions();
-    return;
-  }
-  if (state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 'session:switch', id }));
-  }
-  updateSessionActions();
-});
-
-deleteSessionBtn?.addEventListener('click', () => {
-  const id = parseInt(sessionPicker.value, 10);
-  if (!id || isNaN(id) || id === state.activeSessionId) return;
-  if (state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 'session:delete', id }));
-  }
-});
-
-function updateSessionActions() {
-  const id = parseInt(sessionPicker?.value, 10);
-  const isActive = !id || id === state.activeSessionId;
-  deleteSessionBtn?.classList.toggle('hidden', isActive);
+function updateSessionLabel() {
+  if (!sessionPickerBtn) return;
+  const active = cachedSessions.find(s => s.id === state.activeSessionId);
+  sessionPickerBtn.textContent = active
+    ? `Session ${active.id} (${active.interactionCount})`
+    : `Session ${state.activeSessionId || '?'}`;
 }
 
 function updateSessionPicker(sessions, activeId) {
-  if (!sessionPicker) return;
   state.activeSessionId = activeId;
-  sessionPicker.innerHTML = '';
-  for (const s of sessions) {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    const suffix = s.id === activeId ? ' *' : '';
-    const label = `Session ${s.id} (${s.interactionCount} calls)${suffix}`;
-    opt.textContent = label;
-    if (s.id === activeId) opt.selected = true;
-    sessionPicker.appendChild(opt);
-  }
-  updateSessionActions();
+  cachedSessions = sessions || [];
+  updateSessionLabel();
 }
+
+sessionPickerBtn?.addEventListener('click', () => {
+  if (!cachedSessions.length) return;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'session-modal-backdrop';
+  let html = '<div class="session-modal">';
+  html += '<div class="session-modal-header"><h3>Sessions</h3>';
+  html += '<div class="session-modal-actions">';
+  html += '<button class="session-modal-delete-all">Delete All Inactive</button>';
+  html += '<button class="session-modal-close">\u00d7</button>';
+  html += '</div></div>';
+  html += '<div class="session-modal-body">';
+  for (const s of cachedSessions) {
+    const isActive = s.id === state.activeSessionId;
+    html += `<div class="session-modal-item${isActive ? ' active' : ''}" data-id="${s.id}">`;
+    html += `<span class="session-modal-label">Session ${s.id}</span>`;
+    html += `<span class="session-modal-calls">${s.interactionCount} call${s.interactionCount !== 1 ? 's' : ''}</span>`;
+    if (isActive) {
+      html += '<span class="session-modal-badge">current</span>';
+    } else {
+      html += `<button class="session-modal-del" data-id="${s.id}" title="Delete">\u2715</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div></div>';
+  backdrop.innerHTML = html;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  backdrop.querySelector('.session-modal-close').addEventListener('click', close);
+
+  // Click a session row to load it
+  backdrop.querySelectorAll('.session-modal-item:not(.active)').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.session-modal-del')) return;
+      const id = parseInt(row.dataset.id, 10);
+      if (id && state.ws?.readyState === WebSocket.OPEN) {
+        sendWs({ type: 'session:switch', id });
+      }
+      close();
+    });
+  });
+
+  // Delete individual session
+  backdrop.querySelectorAll('.session-modal-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id, 10);
+      if (id && state.ws?.readyState === WebSocket.OPEN) {
+        sendWs({ type: 'session:delete', id });
+      }
+      btn.closest('.session-modal-item').remove();
+    });
+  });
+
+  // Delete all inactive
+  backdrop.querySelector('.session-modal-delete-all')?.addEventListener('click', () => {
+    if (state.ws?.readyState !== WebSocket.OPEN) return;
+    for (const s of cachedSessions) {
+      if (s.id !== state.activeSessionId) {
+        sendWs({ type: 'session:delete', id: s.id });
+      }
+    }
+    backdrop.querySelectorAll('.session-modal-item:not(.active)').forEach(el => el.remove());
+  });
+
+  backdrop.focus();
+});
 
 // ============================================================
 // VIEW SWITCHING (Dashboard / Claude / Capabilities)
@@ -540,9 +599,8 @@ function switchView(view) {
 
   // Show session picker only in Inspector and Chat views
   const showSession = (view === 'dashboard' || view === 'claude');
-  if (sessionPicker) sessionPicker.style.display = showSession ? '' : 'none';
+  if (sessionPickerBtn) sessionPickerBtn.style.display = showSession ? '' : 'none';
   if (newSessionBtn) newSessionBtn.style.display = showSession ? '' : 'none';
-  if (deleteSessionBtn) deleteSessionBtn.style.display = showSession ? '' : 'none';
 }
 
 document.getElementById('headerTabs').addEventListener('click', e => {

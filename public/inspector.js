@@ -4,8 +4,6 @@
           renderMarkdown, renderMarkdownDebounced, cancelRenderDebounce, sendWs,
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
 
-  let cachedSessions = [];
-
   // --- Auto-select suppression: don't jump away from user-selected turns ---
   let _userPinnedSelection = false;
 
@@ -1378,63 +1376,11 @@
     }
   }
 
-  // --- Session list in empty state ---
-  function renderSessionList() {
+  function renderEmptyState() {
     if (!emptyState) return;
-    if (state.interactions.length > 0) return; // Only show when no interactions
-
-    let html = '<p>No interaction selected.</p>';
-    if (cachedSessions.length > 0) {
-      html += '<div class="session-list-empty">';
-      html += '<div class="session-list-header"><p class="session-list-title">Sessions</p>';
-      html += '<button class="session-list-delete-all">Delete All</button></div>';
-      for (const s of cachedSessions) {
-        const isActive = s.id === state.activeSessionId;
-        html += `<div class="session-list-item${isActive ? ' active' : ''}" data-session-id="${s.id}">`;
-        html += `<span class="session-list-label">Session ${s.id}</span>`;
-        html += `<span class="session-list-calls">${s.interactionCount} call${s.interactionCount !== 1 ? 's' : ''}</span>`;
-        if (isActive) {
-          html += '<span class="session-list-badge">current</span>';
-        } else {
-          html += `<button class="session-list-load" data-id="${s.id}">Load</button>`;
-          html += `<button class="session-list-del" data-id="${s.id}">Delete</button>`;
-        }
-        html += '</div>';
-      }
-      html += '</div>';
-    } else {
-      html += '<p class="hint">Run <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code> to capture API calls.</p>';
-    }
-    emptyState.innerHTML = html;
-
-    // Bind buttons
-    emptyState.querySelectorAll('.session-list-load').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = parseInt(btn.dataset.id, 10);
-        if (id && state.ws?.readyState === WebSocket.OPEN) {
-          sendWs({ type: 'session:switch', id });
-        }
-      });
-    });
-    emptyState.querySelectorAll('.session-list-del').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = parseInt(btn.dataset.id, 10);
-        if (id && state.ws?.readyState === WebSocket.OPEN) {
-          sendWs({ type: 'session:delete', id });
-        }
-      });
-    });
-    const deleteAllBtn = emptyState.querySelector('.session-list-delete-all');
-    if (deleteAllBtn) {
-      deleteAllBtn.addEventListener('click', () => {
-        if (state.ws?.readyState !== WebSocket.OPEN) return;
-        for (const s of cachedSessions) {
-          if (s.id !== state.activeSessionId) {
-            sendWs({ type: 'session:delete', id: s.id });
-          }
-        }
-      });
-    }
+    if (state.interactions.length > 0) return;
+    emptyState.innerHTML = '<p>No interaction selected.</p>'
+      + '<p class="hint">Run <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code> to capture API calls.</p>';
   }
 
   // --- Message handler ---
@@ -1458,7 +1404,7 @@
         if (state.interactions.length > 0) {
           select({ type: 'turn', id: state.interactions[state.interactions.length - 1].id });
         } else {
-          renderSessionList();
+          renderEmptyState();
         }
         break;
 
@@ -1525,14 +1471,13 @@
           detailContent.innerHTML = '';
           detailContent.classList.add('hidden');
           emptyState.classList.remove('hidden');
-          renderSessionList();
+          renderEmptyState();
         }
         break;
 
       case 'session:list':
-        cachedSessions = msg.sessions || [];
         if (state.interactions.length === 0) {
-          renderSessionList();
+          renderEmptyState();
         }
         break;
 
@@ -1548,7 +1493,7 @@
         emptyState.classList.remove('hidden');
         updateStats();
         updateInspectorBusy();
-        renderSessionList();
+        renderEmptyState();
         break;
 
       case 'claude:instances':
