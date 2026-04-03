@@ -28,7 +28,7 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 
 - **Chat** with Claude through multiple parallel browser tabs, each with its own working directory, profile, and model -- fully isolated sessions that never interfere with each other
 - **Inspect** every API call in real time -- request bodies, response streams, token usage, cost tracking, and timing -- across all sessions and providers
-- **Run workflows** -- multi-step automations where each step is a full \`claude -p\` session; multiple workflows can run in parallel
+- **Run workflows** -- multi-step automations where each step is a full \`claude -p\` session; multiple workflows can run in parallel. Compiled workflows automatically become MCP tools that Claude can call from any session
 - **Route to any model** -- use Anthropic Claude directly, or route through OpenAI, Google Gemini, DeepSeek, Kimi/Moonshot, or any OpenAI-compatible endpoint via provider translation
 - **Custom MCP tools** that Claude can call during any session -- you write the handler, Claude gets the capability
 - **AskUserQuestion** -- chat sessions and workflow steps can pause and ask you for input, then resume with the answer
@@ -117,8 +117,8 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 
   <!-- MCP -->
   <rect x="520" y="225" width="180" height="45" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
-  <text x="610" y="245" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">MCP Tools (custom)</text>
-  <text x="610" y="259" text-anchor="middle" fill="var(--text-dim)" font-size="9">+ chat, workflow_run, ...</text>
+  <text x="610" y="245" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">MCP Tools</text>
+  <text x="610" y="259" text-anchor="middle" fill="var(--text-dim)" font-size="9">custom + built-in + workflow tools</text>
   <line x1="500" y1="220" x2="520" y2="235" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
 
   <!-- Workflow engine -->
@@ -132,7 +132,7 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 ## Quick start
 
 1. **Chat tab** -- type a prompt, pick a profile (model + permissions), set a working directory. Open multiple tabs for parallel conversations -- each is fully isolated.
-2. **Workflows tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once. Create, edit, and delete workflows from the card grid. The \`+ New\` button opens the editor to design, generate, and compile multi-step automations.
+2. **Workflows tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once. Create, edit, and delete workflows from the card grid. The \`+ New\` button opens the editor to design, generate, and compile multi-step automations. Once compiled, each workflow is automatically available as an MCP tool.
 3. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
 4. **Profiles tab** -- one tab per profile with inline editing of model, effort, permission mode, tools, and system prompts. Builtin profiles (\`full\`, \`safe\`, \`readonly\`, \`minimal\`) are read-only.
 5. **Tools tab** -- browse all tools, skills, agents, hooks, and MCP tools available to the active profile.
@@ -261,43 +261,61 @@ This works identically for chat sessions and workflow steps.
 Workflows automate multi-step tasks. Each step is a full \`claude -p\` session that can use tools, read/write files, and call MCP tools. Multiple workflows can run simultaneously -- each is a separate set of processes with independent profiles.
 
 \`\`\`svg
-<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
-  <defs><marker id="a3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
+<svg viewBox="0 0 750 220" xmlns="http://www.w3.org/2000/svg" style="max-width:750px;font-family:system-ui,sans-serif">
+  <defs>
+    <marker id="a3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
+    <marker id="a3g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--green)"/></marker>
+  </defs>
+
+  <!-- Build phase boundary -->
+  <rect x="5" y="40" width="400" height="100" rx="10" fill="none" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="6"/>
+  <text x="205" y="32" text-anchor="middle" fill="var(--text-dim)" font-size="10" font-style="italic">Build phase (one-time or as-needed)</text>
 
   <!-- Design -->
-  <rect x="10" y="60" width="110" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="65" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Design</text>
-  <text x="65" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">natural language</text>
+  <rect x="20" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="70" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Design</text>
+  <text x="70" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">natural language</text>
 
   <!-- Generate -->
-  <rect x="160" y="60" width="110" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="215" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Generate</text>
-  <text x="215" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JSON source</text>
+  <rect x="155" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="205" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Generate</text>
+  <text x="205" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JSON source</text>
 
   <!-- Compile -->
-  <rect x="310" y="60" width="110" height="50" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
-  <text x="365" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Compile</text>
-  <text x="365" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JavaScript</text>
+  <rect x="290" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
+  <text x="340" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Compile</text>
+  <text x="340" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JavaScript</text>
+
+  <!-- Build phase arrows -->
+  <line x1="120" y1="85" x2="155" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
+  <line x1="255" y1="85" x2="290" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
+
+  <!-- Arrow from build to execute -->
+  <line x1="390" y1="85" x2="470" y2="85" stroke="var(--green)" stroke-width="1.5" marker-end="url(#a3g)"/>
+
+  <!-- Execute phase boundary -->
+  <rect x="460" y="40" width="280" height="100" rx="10" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-dasharray="6"/>
+  <text x="600" y="32" text-anchor="middle" fill="var(--green)" font-size="10" font-style="italic">Execute phase (repeatable)</text>
 
   <!-- Run -->
-  <rect x="460" y="60" width="110" height="50" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
-  <text x="515" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Run</text>
-  <text x="515" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">execute steps</text>
+  <rect x="480" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
+  <text x="530" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Run</text>
+  <text x="530" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">execute steps</text>
 
   <!-- Result -->
-  <rect x="610" y="60" width="80" height="50" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1.5"/>
-  <text x="650" y="89" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Result</text>
+  <rect x="620" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1.5"/>
+  <text x="670" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Result</text>
+  <text x="670" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">output / report</text>
 
-  <!-- Arrows -->
-  <line x1="120" y1="85" x2="160" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
-  <line x1="270" y1="85" x2="310" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
-  <line x1="420" y1="85" x2="460" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
-  <line x1="570" y1="85" x2="610" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
+  <!-- Run to Result arrow -->
+  <line x1="580" y1="85" x2="620" y2="85" stroke="var(--green)" stroke-width="1" marker-end="url(#a3g)"/>
 
-  <!-- Labels -->
-  <text x="350" y="30" text-anchor="middle" fill="var(--text-dim)" font-size="10">Workflow lifecycle: describe what you want → AI builds it → run it repeatedly with different inputs</text>
-  <text x="350" y="155" text-anchor="middle" fill="var(--text-dim)" font-size="10">Each step runs as an independent claude -p with its own profile, cwd, and MCP tools</text>
-  <text x="350" y="175" text-anchor="middle" fill="var(--text-dim)" font-size="10">Steps can pass context to downstream steps  |  Steps can escalate via AskUserQuestion</text>
+  <!-- Loop-back arrow: Result back to Run -->
+  <path d="M 670 110 Q 670 150, 600 150 Q 530 150, 530 110" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#a3g)"/>
+  <text x="600" y="168" text-anchor="middle" fill="var(--green)" font-size="9">new inputs</text>
+
+  <!-- Subtitle -->
+  <text x="375" y="200" text-anchor="middle" fill="var(--text-dim)" font-size="10">Design once, run repeatedly with different inputs. Each run is a fresh set of claude -p processes.</text>
 </svg>
 \`\`\`
 
@@ -350,6 +368,26 @@ Key fields:
 - **REST API**: \`POST /api/run\` with \`type: "workflow"\` to start a workflow and stream events via SSE.
 - Steps can **escalate** via AskUserQuestion -- the UI shows the question and waits for your answer before the step continues.
 - **Parallel execution**: multiple workflows (or multiple runs of the same workflow) can execute simultaneously. Each run gets its own set of \`claude -p\` processes with independent profiles. The footer shows a live count of active Claude processes.
+
+## Workflows as MCP tools
+
+Every compiled workflow is automatically registered as an MCP tool on the integrated server. Claude can invoke any workflow directly from a chat session, and external MCP clients can call them too.
+
+**Naming convention:** the tool name is derived from the workflow directory name -- strip the \`-workflow\` suffix (if present) and replace hyphens with underscores:
+
+| Workflow name | MCP tool name |
+|---------------|---------------|
+| \`d3-data-visualizer\` | \`d3_data_visualizer\` |
+| \`add-llm-model\` | \`add_llm_model\` |
+| \`code-review-workflow\` | \`code_review\` |
+
+**How it works:**
+1. At MCP bridge startup, the server scans \`capabilities/workflows/*/compiled.js\`
+2. Each compiled module's \`inputs\` are converted into a typed schema for input validation
+3. The tool is registered with the MCP server -- calling it triggers a full workflow run internally
+4. The workflow's final output is returned as the tool result
+
+No extra configuration needed -- compiling a workflow is all it takes. Recompiling updates the tool definition on the next session.
 `;
 
   const toolsMd = `
@@ -358,40 +396,47 @@ Key fields:
 Custom tools extend what Claude can do. You write a JavaScript handler, and Claude can call it like any built-in tool during chat or workflow sessions.
 
 \`\`\`svg
-<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
+<svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
   <defs><marker id="a4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
 
   <!-- Claude process -->
-  <rect x="10" y="50" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="70" y="72" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="70" y="88" text-anchor="middle" fill="var(--text-dim)" font-size="9">any session</text>
+  <rect x="10" y="65" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="70" y="87" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
+  <text x="70" y="103" text-anchor="middle" fill="var(--text-dim)" font-size="9">any session</text>
 
   <!-- MCP Server -->
-  <rect x="210" y="30" width="180" height="90" rx="8" fill="none" stroke="var(--purple)" stroke-width="2"/>
+  <rect x="210" y="30" width="180" height="120" rx="8" fill="none" stroke="var(--purple)" stroke-width="2"/>
   <text x="300" y="55" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">MCP Server</text>
   <text x="300" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="9">auto-registered with claude -p</text>
-  <text x="300" y="86" text-anchor="middle" fill="var(--text-dim)" font-size="9">custom tools + built-in tools</text>
+  <text x="300" y="86" text-anchor="middle" fill="var(--text-dim)" font-size="9">stdio transport (JSON-RPC)</text>
   <text x="300" y="100" text-anchor="middle" fill="var(--text-dim)" font-size="9">Zod schema validation</text>
+  <text x="300" y="114" text-anchor="middle" fill="var(--text-dim)" font-size="9">connectable by external clients</text>
 
   <!-- Custom handler -->
-  <rect x="470" y="25" width="170" height="45" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="555" y="45" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Custom handlers</text>
-  <text x="555" y="60" text-anchor="middle" fill="var(--text-dim)" font-size="9">your JavaScript code</text>
+  <rect x="470" y="20" width="170" height="45" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="555" y="40" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Custom handlers</text>
+  <text x="555" y="55" text-anchor="middle" fill="var(--text-dim)" font-size="9">your JavaScript code</text>
 
   <!-- Built-in tools -->
-  <rect x="470" y="80" width="170" height="45" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
-  <text x="555" y="100" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Built-in tools</text>
-  <text x="555" y="115" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat, workflow_run, ...</text>
+  <rect x="470" y="75" width="170" height="45" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
+  <text x="555" y="95" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Built-in tools</text>
+  <text x="555" y="110" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat, workflow_run, ...</text>
+
+  <!-- Workflow tools -->
+  <rect x="470" y="130" width="170" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="555" y="150" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Workflow tools</text>
+  <text x="555" y="165" text-anchor="middle" fill="var(--text-dim)" font-size="9">auto-registered from compiled.js</text>
 
   <!-- Arrows -->
-  <line x1="130" y1="75" x2="210" y2="75" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a4)"/>
-  <text x="170" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="8">tool_use</text>
-  <line x1="390" y1="55" x2="470" y2="48" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
-  <line x1="390" y1="95" x2="470" y2="100" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
+  <line x1="130" y1="90" x2="210" y2="90" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a4)"/>
+  <text x="170" y="83" text-anchor="middle" fill="var(--text-dim)" font-size="8">tool_use</text>
+  <line x1="390" y1="55" x2="470" y2="43" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
+  <line x1="390" y1="90" x2="470" y2="97" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
+  <line x1="390" y1="120" x2="470" y2="142" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
 
-  <!-- Profile note -->
-  <text x="350" y="160" text-anchor="middle" fill="var(--text-dim)" font-size="10">Profiles control which MCP tools are available in each session (mcpServers field)</text>
-  <text x="350" y="178" text-anchor="middle" fill="var(--text-dim)" font-size="10">Tools are defined in Profiles > MCP Tools with name, description, typed parameters, and handler code</text>
+  <!-- Notes -->
+  <text x="350" y="210" text-anchor="middle" fill="var(--text-dim)" font-size="10">Custom tools are defined in Profiles > MCP Tools  |  Workflow tools are auto-registered from compiled workflows</text>
+  <text x="350" y="228" text-anchor="middle" fill="var(--text-dim)" font-size="10">External MCP clients can connect via stdio to access all tools  |  Tool calls appear in Inspector</text>
 </svg>
 \`\`\`
 
@@ -416,6 +461,12 @@ These are always available in every session and cannot be modified:
 
 The \`chat\` tool is particularly useful for delegation -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator session using the \`chat\` tool to delegate research to a \`readonly\` session).
 
+## Workflow tools
+
+Compiled workflows are automatically registered as MCP tools alongside the custom and built-in tools above. They appear in the Tools tab with a \`workflow\` badge. See the Workflows tab for naming conventions and details.
+
+When Claude calls a workflow tool, the MCP server internally triggers a full workflow run and returns the final output as the tool result. This means a chat session can seamlessly orchestrate multi-step workflows without the user manually triggering them.
+
 ## Writing a tool handler
 
 The handler is an async function that receives the validated parameters and must return MCP content:
@@ -433,6 +484,42 @@ Handlers have access to:
 - All Node.js built-in modules (via dynamic \`import()\`)
 - The dashboard WebSocket for integration with the live UI
 - Environment variables from the server process
+
+## Connecting external clients
+
+The integrated MCP server uses **stdio transport**, so any MCP-compatible client can connect by spawning the bridge process.
+
+### Option 1: Use the auto-generated config
+
+When vistaclair starts, it writes a \`.mcp.json\` file in the working directory with the correct connection details. Point your MCP client at this file, or copy the relevant entry:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "integrated": {
+      "command": "node",
+      "args": ["/path/to/claude-doc/lib/mcp-bridge.js", "integrated"],
+      "env": {
+        "VISTACLAIR_AUTH_TOKEN": "<token>",
+        "VISTACLAIR_DASHBOARD_PORT": "3457"
+      }
+    }
+  }
+}
+\`\`\`
+
+### Option 2: Spawn manually
+
+\`\`\`bash
+VISTACLAIR_AUTH_TOKEN="<token>" VISTACLAIR_DASHBOARD_PORT=3457 \\
+  node /path/to/claude-doc/lib/mcp-bridge.js integrated
+\`\`\`
+
+The bridge communicates over stdin/stdout using the MCP JSON-RPC protocol. The auth token is printed to the console when vistaclair starts, or set via the \`AUTH_TOKEN\` environment variable.
+
+### What external clients get
+
+Connected clients have access to all tools on the integrated server: custom tools, built-in tools (\`chat\`, \`workflow_run\`, etc.), and all compiled workflow tools. Tool calls from external clients appear in the Inspector alongside calls from browser sessions.
 `;
 
   const apiMd = `
