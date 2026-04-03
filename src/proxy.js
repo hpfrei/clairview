@@ -213,6 +213,24 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     if (provider && modelDef) {
       // --- Translation path: route through non-Anthropic provider ---
       try {
+        // Filter tools based on profile's disabledTools / allowedTools
+        if (profileData && Array.isArray(body.tools)) {
+          const disabledSet = profileData.disabledTools?.length > 0
+            ? new Set(profileData.disabledTools)
+            : null;
+          const allowedSet = profileData.allowedTools?.length > 0
+            ? new Set(profileData.allowedTools)
+            : null;
+          if (disabledSet || allowedSet) {
+            body.tools = body.tools.filter(t => {
+              if (!t.name) return true;
+              if (disabledSet && disabledSet.has(t.name)) return false;
+              if (allowedSet && !allowedSet.has(t.name)) return false;
+              return true;
+            });
+          }
+        }
+
         const translated = provider.translateRequest(body, modelDef);
         console.log(`[proxy] Translating to ${modelDef.name} (${modelDef.provider}) → ${translated.url}`);
 

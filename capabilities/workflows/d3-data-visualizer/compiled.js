@@ -11,133 +11,129 @@ module.exports = {
   name: WORKFLOW_NAME,
   description:
     "Asks the user what data to analyse, designs the optimal visualization approach, then generates a self-contained HTML file using D3.js from CDN with embedded HTML, CSS, and JavaScript.",
-  sourceHash: "2fafe3d3fbd5",
+  sourceHash: "07b34035bb06",
   annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-  inputs: {},
+  inputs: {
+    data_description: {
+      type: "string",
+      description:
+        "Description of the data to visualize and/or the desired chart type. If empty, the user will be asked interactively.",
+      required: false,
+    },
+  },
   steps: [
     {
-      id: "gather-requirements",
-      profile: "safe",
-      type: "agent",
-      disallowedTools: [SELF_TOOL],
-      buildPrompt(ctx) {
-        return (
-          preamble("gather-requirements") +
-          `You are a data visualization consultant gathering requirements from a user. ` +
-          `Use the AskUserQuestion tool to ask the user the following:\n\n` +
-          `"What data would you like to visualize? Please describe:\n` +
-          `- The data itself (or point me to a file path or URL)\n` +
-          `- What insights or story you want the visualization to convey\n` +
-          `- Any preferences for chart type or visual style"\n\n` +
-          `After the user responds, do the following:\n\n` +
-          `1. If the user referenced a file, use the Read tool to read it. Examine its structure: column names, data types, number of rows, and value ranges.\n` +
-          `2. If the user referenced a URL, use the WebFetch tool to retrieve and examine the data.\n` +
-          `3. If the user described data inline, parse and summarize its characteristics.\n\n` +
-          `Then output a structured summary with these sections:\n\n` +
-          `**Data Characteristics:**\n` +
-          `- Structure (columns/fields and their types)\n` +
-          `- Size (row/record count)\n` +
-          `- Value ranges and distributions for key fields\n` +
-          `- Sample values (first 3-5 rows or records)\n\n` +
-          `**User Goals:**\n` +
-          `- What insights or story they want to convey\n` +
-          `- Any stated preferences for chart type or style\n\n` +
-          `If the data is ambiguous or the user's description is unclear, use the AskUserQuestion tool to ask a follow-up question before producing your summary.`
-        );
-      },
-      parseOutput(raw) {
-        return raw.trim();
-      },
-      next: "design-visualization",
-    },
-    {
-      id: "design-visualization",
-      profile: "safe",
-      type: "agent",
-      disallowedTools: [SELF_TOOL],
-      buildPrompt(ctx) {
-        const requirements = ctx.steps["gather-requirements"].output;
-        return (
-          preamble("design-visualization") +
-          `You are a data visualization architect. Based on the data requirements below, design the optimal D3.js visualization approach. ` +
-          `Do all design work yourself — do NOT delegate to any tool.\n\n` +
-          `--- DATA REQUIREMENTS ---\n${requirements}\n--- END REQUIREMENTS ---\n\n` +
-          `Analyze the data types (categorical, temporal, numerical, hierarchical, network) and produce a detailed visualization design specification with these sections:\n\n` +
-          `**1. Chart Type & Rationale:**\n` +
-          `Choose the most effective chart type (bar, grouped bar, stacked bar, line, multi-line, scatter, area, stacked area, pie/donut, treemap, force-directed graph, heatmap, choropleth, etc.) and explain why it's the best fit for this data and the user's goals.\n\n` +
-          `**2. Data-to-Visual Mappings:**\n` +
-          `Specify which data fields map to which visual encodings: x-axis, y-axis, color, size, opacity, shape, labels, grouping, etc.\n\n` +
-          `**3. Data Transformations:**\n` +
-          `List any transformations needed before rendering: aggregation, filtering, sorting, nesting, date parsing, normalization, etc. Write pseudocode for non-trivial transformations.\n\n` +
-          `**4. Interactive Features:**\n` +
-          `Specify interactivity: tooltips (what data to show on hover), hover effects (highlight, dim others), zoom/pan, transitions/animations, click behaviors, brush selection, etc.\n\n` +
-          `**5. Color Scheme & Styling:**\n` +
-          `Specify the color palette (name a D3 color scheme like d3.schemeCategory10, d3.interpolateBlues, etc.), font choices, background, spacing, and overall visual style.\n\n` +
-          `**6. Layout:**\n` +
-          `Specify dimensions (width, height), margins, axis label positions, legend placement, title placement, and responsive behavior.\n\n` +
-          `If anything about the data or goals is ambiguous and you need clarification, use the AskUserQuestion tool to ask the user before finalizing your design.`
-        );
-      },
-      parseOutput(raw) {
-        return raw.trim();
-      },
-      next: "generate-html",
-    },
-    {
-      id: "generate-html",
+      id: "gather-and-design",
       profile: "full",
       type: "agent",
       disallowedTools: [SELF_TOOL],
       buildPrompt(ctx) {
-        const requirements = ctx.steps["gather-requirements"].output;
-        const design = ctx.steps["design-visualization"].output;
+        const dataDesc = ctx.inputs.data_description || "";
+        const gatherBlock = dataDesc
+          ? `The user has described the data they want to visualize:\n"${dataDesc}"\n\nUse this as your data description. Do not ask for further input — proceed directly to the design phase below.`
+          : `No data description was provided. Use the AskUserQuestion tool to ask the user what data they want to visualize. ` +
+            `Frame it as a friendly, specific request. Ask them to describe:\n` +
+            `- The data itself (they can paste raw data, describe a dataset, or specify a concept)\n` +
+            `- What insight or story they want the visualization to tell\n` +
+            `- Any chart type preferences (optional)\n\n` +
+            `Offer concrete examples to guide them, such as:\n` +
+            `- "Monthly sales figures by region as a grouped bar chart"\n` +
+            `- "Network of software dependencies as a force-directed graph"\n` +
+            `- "Temperature changes over 50 years as a line chart with trend"\n` +
+            `- "Budget breakdown as a donut chart"\n\n` +
+            `After the user responds, use their answer as the data description for the design phase below.`;
+
         return (
-          preamble("generate-html") +
-          `You are a D3.js developer. Your task is to implement a data visualization as a single self-contained HTML file. ` +
-          `Write the code yourself — do NOT delegate to any tool except the Write tool to save the file.\n\n` +
-          `--- DATA REQUIREMENTS ---\n${requirements}\n--- END REQUIREMENTS ---\n\n` +
-          `--- VISUALIZATION DESIGN ---\n${design}\n--- END DESIGN ---\n\n` +
-          `If the data requirements reference a file path, use the Read tool to read the actual data from that file first.\n\n` +
-          `Create a single self-contained HTML file that meets ALL of these requirements:\n\n` +
-          `1. **D3.js from CDN**: Load D3.js v7 via \`<script src="https://d3js.org/d3.v7.min.js"></script>\`\n` +
-          `2. **Embedded CSS**: All styles in a \`<style>\` block — use a clean, modern design with proper fonts (system font stack or Google Fonts via CDN), good spacing, and a polished look\n` +
-          `3. **Embedded JavaScript**: All code in a \`<script>\` block\n` +
-          `4. **Embedded data**: The data must be embedded directly in the JavaScript as a JSON array or appropriate data structure — do NOT reference any external data files\n` +
-          `5. **Interactivity**: Implement the interactive features from the design spec (tooltips, hover effects, transitions, etc.)\n` +
-          `6. **Labels and legend**: Include a descriptive title, properly labeled axes, and a legend where appropriate\n` +
-          `7. **Responsive**: The visualization should look good at common screen widths (use viewBox or resize handlers)\n` +
-          `8. **Clean HTML structure**: Proper DOCTYPE, charset meta tag, viewport meta tag\n\n` +
-          `Use the Write tool to save the file to the current working directory with a descriptive filename like \`visualization.html\` or a name that reflects the data (e.g., \`sales-trends.html\`).\n\n` +
-          `After writing the file, output ONLY the absolute file path of the generated HTML file.`
+          preamble("gather-and-design") +
+          `You are a data visualization architect specializing in D3.js. Your task is to gather data requirements and produce a detailed visualization design specification.\n\n` +
+          `**Phase 1 — Gather data requirements**\n\n` +
+          `${gatherBlock}\n\n` +
+          `**Phase 2 — Design the visualization**\n\n` +
+          `Based on the data description, work through each of these design decisions yourself. Do NOT delegate this work to any tool.\n\n` +
+          `1. **Chart type selection**: Choose the optimal D3.js chart type from: bar, grouped bar, stacked bar, line, multi-line, area, scatter, bubble, pie, donut, treemap, sunburst, force-directed graph, chord diagram, sankey, heatmap, histogram, box plot, or another appropriate type. Write 1-2 sentences justifying why this type best serves the data and the user's insight goal.\n\n` +
+          `2. **Data structure**: Define the exact JavaScript data structure. If the user provided raw data, parse and validate it into a clean JavaScript representation. If they described data conceptually, generate realistic, detailed sample data (at least 8-15 data points) that will make the visualization look compelling and demonstrate its features well. Output the data as a JavaScript const assignment (e.g., \`const data = [...];\`).\n\n` +
+          `3. **Visual encodings**: Specify exactly what maps to:\n` +
+          `   - x-axis (scale type: linear, band, time, etc.)\n` +
+          `   - y-axis (scale type and domain)\n` +
+          `   - Color (categorical scheme like d3.schemeTableau10, sequential, diverging, or custom hex values)\n` +
+          `   - Size (if applicable, e.g., bubble charts)\n` +
+          `   - Labels and tooltip content\n\n` +
+          `4. **Layout and styling**:\n` +
+          `   - SVG dimensions (width, height) and margin convention values (top, right, bottom, left)\n` +
+          `   - Whether the chart should be responsive (viewBox-based)\n` +
+          `   - Font: system font stack \`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif\`\n` +
+          `   - Background: white or very light (#fafafa)\n` +
+          `   - Grid lines: subtle, light gray where appropriate\n` +
+          `   - Color palette: specify exact colors or D3 scheme name\n\n` +
+          `5. **Interactivity plan**:\n` +
+          `   - Tooltip behavior (div-based tooltip, not SVG title): what content to show, positioning\n` +
+          `   - Hover effects: opacity changes, highlights, stroke changes\n` +
+          `   - Transitions: entrance animations, duration in ms\n` +
+          `   - Any click behaviors, zoom/pan, or filtering (only if appropriate for the chart type)\n\n` +
+          `**Output format**: Write out the complete design specification with all five sections above clearly labeled. Include the actual data values in the data structure section — this will be passed to the next step to generate the HTML file.`
         );
       },
       parseOutput(raw) {
         return raw.trim();
       },
-      next: "summary",
+      next: "generate-visualization",
     },
     {
-      id: "summary",
-      profile: "safe",
+      id: "generate-visualization",
+      profile: "full",
       type: "agent",
       disallowedTools: [SELF_TOOL],
       buildPrompt(ctx) {
-        const requirements = ctx.steps["gather-requirements"].output;
-        const design = ctx.steps["design-visualization"].output;
-        const filePath = ctx.steps["generate-html"].output;
+        const designSpec = ctx.steps["gather-and-design"].output;
         return (
-          preamble("summary") +
-          `You are summarizing a completed data visualization for the user. Write a concise, friendly summary directly — do NOT delegate to any tool.\n\n` +
-          `--- DATA REQUIREMENTS ---\n${requirements}\n--- END REQUIREMENTS ---\n\n` +
-          `--- VISUALIZATION DESIGN ---\n${design}\n--- END DESIGN ---\n\n` +
-          `--- GENERATED FILE ---\n${filePath}\n--- END FILE ---\n\n` +
-          `Write a summary that covers:\n\n` +
-          `1. **What was visualized**: Brief description of the data\n` +
-          `2. **Chart type chosen**: Name the chart type and give a one-sentence reason why it was selected\n` +
-          `3. **Key interactive features**: List the interactive elements included (tooltips, hover effects, transitions, etc.)\n` +
-          `4. **File location**: State the file path clearly\n` +
-          `5. **How to view it**: Tell the user to open the file in a web browser (e.g., "Open the file in your browser" or provide a command like \`open visualization.html\` or \`xdg-open visualization.html\`)\n\n` +
-          `End with 1-2 brief suggestions for potential improvements or extensions (e.g., adding filters, animation, additional data dimensions, or exporting as SVG/PNG).`
+          preamble("generate-visualization") +
+          `You are a senior front-end developer who specializes in D3.js v7 data visualizations. Your task is to implement a visualization based on the design specification below, writing a complete self-contained HTML file.\n\n` +
+          `--- DESIGN SPECIFICATION ---\n${designSpec}\n--- END DESIGN SPECIFICATION ---\n\n` +
+          `**Step 1 — Write the HTML file**\n\n` +
+          `Use the Write tool to create a file at \`/tmp/d3-visualization.html\` with the following structure:\n\n` +
+          `- \`<!DOCTYPE html>\` declaration and \`<html lang="en">\`\n` +
+          `- \`<head>\` containing:\n` +
+          `  - Meta charset UTF-8 and viewport meta tag\n` +
+          `  - A \`<title>\` matching the visualization subject\n` +
+          `  - A \`<style>\` block with ALL CSS (no external stylesheets). Include:\n` +
+          `    - System font stack on body\n` +
+          `    - White or very light background (#fafafa or #fff)\n` +
+          `    - Centered layout (flexbox or margin auto)\n` +
+          `    - Tooltip styling: position absolute, background white, border, border-radius, padding, box-shadow, pointer-events none, opacity 0 by default\n` +
+          `    - Any chart-specific styles (axis lines, grid lines, hover effects via CSS transitions)\n` +
+          `- \`<body>\` containing:\n` +
+          `  - An HTML heading (h1) as the chart title, and a subtitle (h2 or p) if appropriate\n` +
+          `  - A container div for the chart (e.g., \`<div id="chart"></div>\`)\n` +
+          `  - A tooltip div (e.g., \`<div id="tooltip"></div>\`)\n` +
+          `  - A \`<script src="https://d3js.org/d3.v7.min.js"></script>\` tag to load D3 from CDN\n` +
+          `  - A \`<script>\` block containing ALL JavaScript:\n` +
+          `    - Data defined as a \`const\` at the top (embedded directly from the design spec)\n` +
+          `    - D3 margin convention: \`const margin = {top, right, bottom, left}\`, width, height calculations\n` +
+          `    - SVG creation appended to the chart container with viewBox for responsiveness\n` +
+          `    - Scales, axes, grid lines as specified in the design\n` +
+          `    - The main chart rendering (bindings, enter/update patterns, shapes)\n` +
+          `    - Axis labels and legend where the design calls for them\n` +
+          `    - Tooltip interactivity: mouseover/mousemove/mouseout event handlers that position and populate the tooltip div\n` +
+          `    - Entrance transitions (e.g., bars growing from zero, lines drawing in) with appropriate duration\n` +
+          `    - Any additional interactivity from the design spec\n\n` +
+          `**Requirements**:\n` +
+          `- The file must be completely self-contained — zero external dependencies except the D3.js CDN script\n` +
+          `- All CSS must be in the \`<style>\` block, all JS in the \`<script>\` block\n` +
+          `- Use clean, well-structured, readable JavaScript with proper variable naming\n` +
+          `- Ensure no JavaScript syntax errors — the file must open in a browser and render immediately\n\n` +
+          `**Step 2 — Verify the file**\n\n` +
+          `Use the Read tool to read back \`/tmp/d3-visualization.html\` and confirm:\n` +
+          `- It is valid HTML (proper doctype, head, body structure)\n` +
+          `- The D3.js CDN script tag is present\n` +
+          `- The JavaScript block has no obvious syntax errors (balanced braces, no undefined references)\n` +
+          `- The data is embedded correctly\n\n` +
+          `If you find any issues, use the Edit tool to fix them.\n\n` +
+          `**Step 3 — Present the result**\n\n` +
+          `Tell the user:\n` +
+          `- The file has been written to \`/tmp/d3-visualization.html\`\n` +
+          `- What chart type was generated and a brief summary of what it shows\n` +
+          `- They can open it directly in a browser: \`xdg-open /tmp/d3-visualization.html\` (Linux) or \`open /tmp/d3-visualization.html\` (macOS)\n` +
+          `- Alternatively, they can serve it with \`cd /tmp && python3 -m http.server 8000\` and visit http://localhost:8000/d3-visualization.html`
         );
       },
       parseOutput(raw) {

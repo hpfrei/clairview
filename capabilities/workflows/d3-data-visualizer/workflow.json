@@ -1,38 +1,25 @@
 {
   "name": "d3-data-visualizer",
   "description": "Asks the user what data to analyse, designs the optimal visualization approach, then generates a self-contained HTML file using D3.js from CDN with embedded HTML, CSS, and JavaScript.",
-  "inputs": {},
+  "inputs": {
+    "data_description": {
+      "type": "string",
+      "description": "Description of the data to visualize and/or the desired chart type. If empty, the user will be asked interactively.",
+      "required": false
+    }
+  },
   "steps": {
-    "gather-requirements": {
-      "profile": "safe",
-      "do": "Use the AskUserQuestion tool to ask the user what data they want to visualize. Ask them to describe the data (or point to a file/URL), what kind of insights or story they want the visualization to convey, and any preferences for chart type or style. If they reference a file, read it to understand the data shape (columns, types, row count, value ranges). Summarize the data characteristics and the user's goals clearly.",
-      "produces": "A clear description of the data (structure, types, sample values, size), the user's visualization goals, and any stated preferences"
-    },
-    "design-visualization": {
-      "profile": "safe",
-      "do": "Based on the data characteristics and user goals, design the optimal D3.js visualization approach. Consider the data types (categorical, temporal, numerical, hierarchical, network) and choose the most effective chart type (bar, line, scatter, area, pie, treemap, force-directed graph, heatmap, etc.). Specify: (1) the chart type and why it's the best fit, (2) which data fields map to which visual encodings (x-axis, y-axis, color, size, etc.), (3) any data transformations needed (aggregation, filtering, sorting), (4) interactive features (tooltips, zoom, hover effects, transitions), (5) color scheme and styling approach. If the data or goals are ambiguous, use AskUserQuestion to clarify before finalizing the design.",
-      "produces": "A detailed visualization design specification: chart type, data-to-visual mappings, transformations, interactivity plan, color scheme, and layout approach",
-      "context": [
-        "gather-requirements"
-      ]
-    },
-    "generate-html": {
+    "gather-and-design": {
       "profile": "full",
-      "do": "Implement the visualization design as a single self-contained HTML file. The file must: (1) load D3.js from CDN (https://d3js.org/d3.v7.min.js) via a <script> tag, (2) embed all CSS in a <style> block with a clean, modern design (proper fonts, spacing, responsive container), (3) embed all JavaScript in a <script> block, (4) embed the data directly in the JavaScript (as a JSON array or appropriate structure) — do NOT reference external data files, (5) include interactive features from the design (tooltips, hover effects, smooth transitions), (6) include a title, axis labels, and a legend where appropriate, (7) be responsive and look good at common screen widths. Write the file to the current working directory with a descriptive filename like 'visualization.html'. Do NOT call the d3_data_visualizer tool — implement the visualization directly in this step.",
-      "produces": "The absolute file path of the generated self-contained HTML file",
-      "context": [
-        "gather-requirements",
-        "design-visualization"
-      ]
+      "do": "You are designing a D3.js data visualization.\n\n1. **Gather data requirements**: If '{{data_description}}' is provided and non-empty, use it as the data description. Otherwise, use the AskUserQuestion tool to ask the user what data they want to visualize. Ask them to describe: the data itself (or paste it), the type of insight they want, and any preferences for chart type. Encourage specifics — e.g. 'monthly sales by region as a grouped bar chart' or 'network of dependencies as a force-directed graph'.\n\n2. **Design the visualization**: Based on the data description, determine:\n   - The optimal D3.js chart type (bar, line, scatter, pie/donut, treemap, force-directed graph, chord diagram, sankey, heatmap, etc.). Justify why this type best serves the data and insight goal.\n   - Data structure: how the data should be structured in JavaScript (arrays of objects, nested hierarchies, adjacency lists, etc.).\n   - Visual encoding: what maps to x-axis, y-axis, color, size, labels, tooltips.\n   - Layout and styling: dimensions, responsive behavior, color palette, typography, margins.\n   - Interactivity: hover tooltips, transitions, click behaviors, zoom/pan if appropriate.\n   - If the user provided raw data, parse and validate it. If they described data conceptually, generate realistic sample data that demonstrates the visualization well.\n\n3. Output a complete design specification including: chart type, data structure with actual data values, visual mappings, color scheme, dimensions, and all interactive features planned.\n\nIMPORTANT: Do NOT call the d3_data_visualizer MCP tool — you ARE that workflow. Complete this task directly.",
+      "produces": "Complete visualization design specification: chart type, structured data, visual encodings, color palette, dimensions, and interactivity plan"
     },
-    "summary": {
-      "profile": "safe",
-      "do": "Provide a concise summary to the user: (1) what data was visualized, (2) the chart type chosen and why, (3) key interactive features included, (4) the file path of the generated HTML file, and (5) instructions to open it (e.g., 'open visualization.html in a browser'). If anything could be improved or extended, mention one or two brief suggestions.",
-      "produces": "A user-friendly summary of the completed visualization with file path and usage instructions",
+    "generate-visualization": {
+      "profile": "full",
+      "do": "Using the visualization design from the previous step, generate a self-contained HTML file.\n\n1. **Build the HTML file** with these requirements:\n   - Single self-contained .html file — no external dependencies except D3.js from CDN\n   - Load D3.js v7 from `https://d3js.org/d3.v7.min.js` via a <script> tag\n   - Embed ALL CSS in a <style> block within <head>\n   - Embed ALL JavaScript in a <script> block within <body>\n   - Embed the data directly in the JavaScript as a const\n   - The visualization should be responsive and centered on the page\n   - Include a clean, modern design: appropriate font (system font stack), subtle grid lines where applicable, proper margins using D3 margin convention\n   - Add a descriptive title and subtitle rendered in the SVG or as HTML headings\n   - Implement all interactivity from the design: tooltips on hover (using a div tooltip, not title attributes), smooth transitions, and any other planned interactions\n   - Use a professional color palette (e.g. D3 categorical schemes like d3.schemeTableau10, or a custom palette from the design)\n   - Include an axis label and legend where appropriate\n   - The page background should be white or very light, with the chart as the focal point\n\n2. **Write the file** to `/tmp/d3-visualization.html`\n\n3. **Verify** by reading back the file to confirm it is valid HTML with no syntax errors in the embedded JavaScript.\n\n4. **Present the result** to the user: tell them the file location, what chart type was generated, and suggest they open it in a browser. Mention they can also serve it locally with `python3 -m http.server` if needed.\n\nIMPORTANT: Do NOT call the d3_data_visualizer MCP tool — you ARE that workflow. Complete this task directly.",
+      "produces": "A self-contained HTML file at /tmp/d3-visualization.html with embedded D3.js visualization, CSS styling, and JavaScript interactivity",
       "context": [
-        "gather-requirements",
-        "design-visualization",
-        "generate-html"
+        "gather-and-design"
       ]
     }
   }

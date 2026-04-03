@@ -19,7 +19,7 @@
     return {
       tabId,
       cwd: defaultCwd(),
-      phase: 'pick',       // 'pick' | 'input' | 'active'
+      phase: 'pick',       // 'pick' | 'input' | 'active' | 'create'
       workflowName: null,
       workflowData: null,
       compiledSource: null,
@@ -55,8 +55,15 @@
       const btn = document.createElement('button');
       btn.className = 'view-tab' + (id === activeTabId ? ' active' : '');
       btn.dataset.tabId = id;
-      const label = tab.workflowName || id.replace('wfrun-', 'Run ');
+      const label = tab.phase === 'create' ? (tab.workflowName || 'New') : (tab.workflowName || id.replace('wfrun-', 'Run '));
       btn.innerHTML = escHtml(label);
+      // Busy-dot on running tabs (active run or editor generating/compiling)
+      const ed = window.workflowModule?.getEditor?.(id);
+      if ((tab.runId && !tab.finalStatus) || ed?.generating || ed?.compiling) {
+        const dot = document.createElement('span');
+        dot.className = 'busy-dot';
+        btn.appendChild(dot);
+      }
       if (tabs.size > 1) {
         const closeBtn = document.createElement('span');
         closeBtn.className = 'view-tab-close';
@@ -99,6 +106,8 @@
     if (tab?.runId) {
       sendWs({ type: 'workflow:run:cancel', runId: tab.runId });
     }
+    // Clean up editor state if this was a create tab
+    window.workflowModule?.removeEditor(tabId);
     tabs.delete(tabId);
     renderTabStrip();
     renderPhase();
@@ -112,7 +121,24 @@
       case 'pick': renderPickPhase(tab); break;
       case 'input': renderInputPhase(tab); break;
       case 'active': renderActivePhase(tab); break;
+      case 'create': renderCreatePhase(tab); break;
     }
+  }
+
+  // --- Phase: Create (new/edit workflow) ---
+  function renderCreatePhase(tab) {
+    window.workflowModule?.renderCreateForm(
+      container, tab.tabId,
+      tab.workflowData || {
+        name: tab.workflowName || '', description: '', inputMode: 'none', inputs: {},
+        steps: {
+          'step-1': { profile: 'full', do: 'Describe what to do', produces: 'description of output' },
+          'done': { do: 'Summarize what was done' },
+        },
+      },
+      tab.compiledSource || null,
+      !!tab.workflowName
+    );
   }
 
   // --- Phase: Pick (card grid) ---
@@ -125,27 +151,20 @@
     for (const w of workflows) {
       const statusClass = w.status === 'compiled' ? 'tag-sk' : w.status === 'needs-compile' ? 'tag-wr' : 'tag-ro';
       const statusLabel = w.status === 'compiled' ? 'compiled' : w.status === 'needs-compile' ? 'needs compile' : 'draft';
-      html += `<div class="wfrun-card" data-name="${escHtml(w.name)}">
+      html += `<div class="wfrun-card wfrun-card-clickable" data-name="${escHtml(w.name)}">
         <div class="wfrun-card-name">${escHtml(w.name)}</div>
         <div class="wfrun-card-desc">${escHtml(w.description || 'No description')}</div>
         <div class="wfrun-card-meta">${escHtml(w.stepCount || '?')} steps &middot; <span class="ref-tag ${statusClass}">${statusLabel}</span></div>
-        <div class="wfrun-card-actions">
-          <button class="wfrun-card-btn wfrun-card-run" data-name="${escHtml(w.name)}" title="Run">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="4,2 14,8 4,14"/></svg>
-          </button>
-          <button class="wfrun-card-btn wfrun-card-edit" data-name="${escHtml(w.name)}" title="Edit">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M12.1 1.3a1.2 1.2 0 011.7 0l.9.9a1.2 1.2 0 010 1.7L5.8 12.8l-3.2.8.8-3.2z"/></svg>
-          </button>
-          <button class="wfrun-card-btn wfrun-card-del" data-name="${escHtml(w.name)}" title="Delete">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2V1h6v1h4v1H1V2h4zm1 3v8h1V5H6zm3 0v8h1V5H9zM3 4l1 11h8l1-11H3z"/></svg>
-          </button>
-        </div>
+        <button class="wfrun-card-run" data-name="${escHtml(w.name)}" title="Run workflow">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><polygon points="4,2 14,8 4,14"/></svg>
+          Run
+        </button>
       </div>`;
     }
     html += '</div>';
     container.innerHTML = html;
 
-    // Delegated click handlers on card actions
+    // Run button
     container.querySelectorAll('.wfrun-card-run').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -155,19 +174,20 @@
         sendWs({ type: 'workflow:load', name });
       });
     });
-    container.querySelectorAll('.wfrun-card-edit').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sendWs({ type: 'workflow:load', name: btn.dataset.name });
-      });
-    });
-    container.querySelectorAll('.wfrun-card-del').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const name = btn.dataset.name;
-        if (confirm(`Delete workflow "${name}"?`)) {
-          sendWs({ type: 'workflow:delete', name });
-        }
+    // Clicking the card itself opens the editor
+    container.querySelectorAll('.wfrun-card-clickable').forEach(card => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.wfrun-card-run')) return;
+        const name = card.dataset.name;
+        const id = 'wfrun-' + nextTabNum++;
+        const t = createTabState(id);
+        t.phase = 'create';
+        t.workflowName = name;
+        tabs.set(id, t);
+        module.pendingEdit = { tabId: id, name };
+        sendWs({ type: 'workflow:load', name });
+        switchTab(id);
+        renderTabStrip();
       });
     });
   }
@@ -365,7 +385,7 @@
 
   // --- Phase: Active (running + complete) ---
   function renderActivePhase(tab) {
-    const icons = { pending: '\u25cb', running: '\u27f3', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
+    const icons = { pending: '\u25cb', running: '<span class="busy-dot"></span>', done: '\u2713', failed: '\u2717', skipped: '\u2013' };
     let html = '<div class="wfrun-active-panel">';
 
     // Header
@@ -608,7 +628,36 @@
         if (tab?.phase === 'pick') renderPhase();
         break;
 
+      case 'workflow:renamed': {
+        // Update any tab that references the old name
+        for (const [id, t] of tabs) {
+          if (t.workflowName === msg.oldName) {
+            t.workflowName = msg.newName;
+            // Update editor state
+            const ed = window.workflowModule?.getEditor(id);
+            if (ed) ed.editingName = msg.newName;
+          }
+        }
+        renderTabStrip();
+        break;
+      }
+
       case 'workflow:loaded': {
+        // Check if this is an edit load for a create tab
+        if (module.pendingEdit && module.pendingEdit.name === msg.name) {
+          const editTabId = module.pendingEdit.tabId;
+          module.pendingEdit = null;
+          const t = tabs.get(editTabId);
+          if (t) {
+            t.workflowData = msg.workflow;
+            t.compiledSource = msg.compiledSource || null;
+            t.phase = 'create';
+            // Reset editor so it picks up the real workflow data
+            window.workflowModule?.removeEditor(editTabId);
+            if (editTabId === activeTabId) renderPhase();
+          }
+          break;
+        }
         module.pendingLoad = null;
         const t = tabs.get(activeTabId);
         if (t && t.workflowName === msg.name) {
@@ -713,12 +762,53 @@
         if (msg.tabId === activeTabId) renderActivePhase(t);
         break;
       }
+
+      case 'files:list': {
+        const t = findTab(msg.tabId);
+        if (!t) break;
+        t._files = msg.files || [];
+        t._filesCwd = msg.cwd || '';
+        if (msg.tabId === activeTabId) renderWfrunFilesBar(t);
+        break;
+      }
     }
   }
 
   function findTab(tabId) {
     if (!tabId) return null;
     return tabs.get(tabId) || null;
+  }
+
+  function renderWfrunFilesBar(tab) {
+    const existing = container.querySelector('.wfrun-files-bar');
+    if (!tab._files || !tab._files.length) {
+      if (existing) existing.remove();
+      return;
+    }
+    const chips = tab._files.map(f => {
+      const sizeStr = f.size < 1024 ? f.size + ' B'
+        : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB'
+        : (f.size / 1048576).toFixed(1) + ' MB';
+      const href = '/api/file?path=' + encodeURIComponent(f.path);
+      return `<a class="files-bar-chip" href="${escHtml(href)}" target="_blank" title="${escHtml(f.path)}">${escHtml(f.name)} <span class="files-bar-size">${sizeStr}</span></a>`;
+    }).join('');
+    const html = `<div class="wfrun-files-bar">
+      <div class="files-bar-header">
+        <span class="files-bar-title">Files</span>
+        <span class="files-bar-count">${tab._files.length}</span>
+      </div>
+      <div class="files-bar-list">${chips}</div>
+    </div>`;
+    if (existing) {
+      existing.outerHTML = html;
+    } else {
+      // Insert after header in active panel
+      const panel = container.querySelector('.wfrun-active-panel');
+      if (panel) {
+        const header = panel.querySelector('.wfrun-active-header');
+        if (header) header.insertAdjacentHTML('afterend', html);
+      }
+    }
   }
 
   function updateStep(tab, stepId, status, elapsed) {
@@ -744,6 +834,16 @@
     }
   }
 
+  // --- + New button ---
+  wfNewBtn?.addEventListener('click', () => {
+    const id = 'wfrun-' + nextTabNum++;
+    const t = createTabState(id);
+    t.phase = 'create';
+    tabs.set(id, t);
+    switchTab(id);
+    renderTabStrip();
+  });
+
   // --- Init ---
   renderTabStrip();
   renderPhase();
@@ -758,7 +858,25 @@
     sendWs({ type: 'workflow:load', name });
   }
 
+  function updateTabLabel(tabId, label) {
+    const t = tabs.get(tabId);
+    if (t) {
+      t.workflowName = label;
+      renderTabStrip();
+    }
+  }
+
+  function getCreateTabId() {
+    // Find the active create tab, or any create tab
+    const active = tabs.get(activeTabId);
+    if (active?.phase === 'create') return activeTabId;
+    for (const [id, t] of tabs) {
+      if (t.phase === 'create') return id;
+    }
+    return null;
+  }
+
   // --- Export ---
-  const module = { handleMessage, handleSettings, pendingLoad: null, startRun };
+  const module = { handleMessage, handleSettings, pendingLoad: null, pendingEdit: null, startRun, updateTabLabel, getCreateTabId, renderTabStrip };
   window.workflowRunModule = module;
 })();

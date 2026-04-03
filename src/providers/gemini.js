@@ -55,9 +55,11 @@ class GeminiProvider extends BaseProvider {
     const functionDeclarations = [];
     for (const t of (body.tools || [])) {
       if ((t.type && /^web_(search|fetch)_/.test(t.type)) || ANTHROPIC_TOOL_NAMES.has(t.name)) {
-        if ((t.type && t.type.startsWith('web_search_')) || t.name === 'WebSearch' || t.name === 'web_search') {
+        if (modelDef.webSearch !== false &&
+            ((t.type && t.type.startsWith('web_search_')) || t.name === 'WebSearch' || t.name === 'web_search')) {
           hasWebSearch = true;
         }
+        // All Anthropic-only tools are stripped from the function declarations
       } else {
         functionDeclarations.push(this._convertTool(t, modelDef));
       }

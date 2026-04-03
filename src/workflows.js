@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, createStreamJsonParser, ensureDir } = require('./utils');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, ensureDir, listFiles } = require('./utils');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
@@ -110,6 +110,36 @@ function saveCompiledSource(cwd, name, source) {
   const dir = path.join(workflowsDir(cwd), name);
   if (!fs.existsSync(dir)) return false;
   fs.writeFileSync(path.join(dir, 'compiled.js'), source);
+  return true;
+}
+
+function renameWorkflow(cwd, oldName, newName) {
+  if (!oldName || !newName || oldName === newName) return false;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(newName)) return false;
+  const oldDir = path.join(workflowsDir(cwd), oldName);
+  const newDir = path.join(workflowsDir(cwd), newName);
+  if (!fs.existsSync(oldDir)) return false;
+  if (fs.existsSync(newDir)) return false; // target already exists
+  fs.renameSync(oldDir, newDir);
+  // Update name inside workflow.json
+  const jsonPath = path.join(newDir, 'workflow.json');
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const wf = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      wf.name = newName;
+      fs.writeFileSync(jsonPath, JSON.stringify(wf, null, 2));
+    } catch {}
+  }
+  // Update name inside compiled.js (rewrite the name property)
+  const compiledPath = path.join(newDir, 'compiled.js');
+  if (fs.existsSync(compiledPath)) {
+    try {
+      let src = fs.readFileSync(compiledPath, 'utf-8');
+      // Replace the name field in the module.exports object
+      src = src.replace(/name:\s*["'].*?["']/, `name: "${newName}"`);
+      fs.writeFileSync(compiledPath, src);
+    } catch {}
+  }
   return true;
 }
 
@@ -440,6 +470,12 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
 
   broadcaster.broadcast({ type: 'workflow:run:complete', runId, tabId: tabId || undefined, status: run.status, output: finalOutput });
 
+  // Broadcast output files from the working directory
+  const outputFiles = listFiles(cwd);
+  if (outputFiles.length) {
+    broadcaster.broadcast({ type: 'files:list', tabId: tabId || undefined, cwd, files: outputFiles });
+  }
+
   // Save run
   saveRun(cwd, name, runId, run, ctx);
   activeRuns.delete(runId);
@@ -732,13 +768,31 @@ function generateWorkflow(description, feedback, { proxyPort, cwd, envContext, e
       if (parts.length) envSection = '\n\nEnvironment context:\n' + parts.join('\n\n');
     }
 
+    // Compute target path — agent writes the file directly (same pattern as compileWorkflow)
+    const targetDir = existingName
+      ? path.join(workflowsDir(cwd), existingName)
+      : path.join(workflowsDir(cwd), `wf-draft-${Date.now()}`);
+    ensureDir(targetDir);
+    const targetPath = path.join(targetDir, 'workflow.json');
+
     let prompt = `You are a workflow designer. Create a workflow JSON definition based on this description:
 
 "${description}"
 
 ${feedback ? `Additional feedback from the user: "${feedback}"` : ''}${envSection}
 
-Output ONLY valid JSON in this exact format (no markdown, no explanation):
+## Core principle
+
+Each step spawns a FULL Claude Code agent session (claude -p). A single step can read files, write files, run shell commands, search the web, spawn sub-agents, use multi-turn reasoning, call MCP tools, and interact with the user via AskUserQuestion. Treat steps like separate work sessions — not like function calls or lines of code.
+
+Most workflows should have 2-4 steps. A step that explores a codebase, searches the web for documentation, validates feasibility, AND writes the result is perfectly normal. Only create a new step when the work genuinely requires a separate session — for example, when a later step needs to react to the complete output of an earlier one, or when different security profiles are needed.
+
+## Output
+
+Write the workflow definition as valid JSON to this file:
+${targetPath}
+
+Use the Write tool to create the file. Write ONLY the JSON — no markdown fences, no explanation. The JSON format:
 {
   "name": "kebab-case-name",
   "description": "Concise action phrase — becomes the MCP tool description (e.g., 'Analyze a codebase and generate a dependency report')",
@@ -749,53 +803,83 @@ Output ONLY valid JSON in this exact format (no markdown, no explanation):
   "steps": {
     "step-name": {
       "profile": "full",
-      "do": "natural language instruction for this step",
-      "produces": "description of expected output",
-      "context": ["previous-step-ids"],
-      "condition": "optional: natural language condition",
-      "then": "step-if-true",
-      "else": "step-if-false",
-      "next": "explicit-next-step",
-      "maxRetries": 3,
-      "timeout": 120000,
-      "onError": "error-handler-step"
-    },
-    "fan-out-step": {
-      "parallel": ["step-a", "step-b", "step-c"],
-      "join": "merge-step",
-      "onError": "error-handler-step"
+      "do": "Natural language instruction — be detailed, this is the full brief for an autonomous agent",
+      "produces": "Description of expected output",
+      "context": ["previous-step-id"]
     }
   }
 }
 
-Rules:
+## Good vs bad decomposition
+
+BAD — over-decomposed (7 steps for adding a model):
+  1. analyze-current-setup → read config files
+  2. research-model → web search
+  3. validate-adapter → check compatibility
+  4. check-adapter-validation → condition branch
+  5. confirm-with-user → show JSON, ask approval
+  6. write-model-entry → write to file
+  7. summary → recap what happened
+
+GOOD — same task in 3 steps:
+  1. research-and-validate → Read the existing config files AND search the web for the model specs AND check adapter compatibility. Output the complete findings or a clear reason why the model cannot be added.
+  2. add-model → Using the research, build the JSON entry, present it to the user via AskUserQuestion for confirmation, then write it to the config file. Handle any user adjustments in the same session.
+  3. verify → Read back the file to confirm the write succeeded. Summarize what was added and remind the user about API key setup if needed.
+
+BAD — unnecessary separation:
+  1. gather-requirements → ask user what they want
+  2. validate-requirements → check if the request makes sense
+  3. plan-implementation → design the approach
+  4. implement → do the work
+  5. verify → check the work
+  6. summarize → tell user what happened
+
+GOOD — consolidated:
+  1. gather-and-plan → Ask the user what they need (via AskUserQuestion), then analyze the codebase and design the approach. Output the plan.
+  2. implement-and-verify → Execute the plan, verify the results, and present a summary to the user.
+
+## Rules
+
+Step mechanics:
+- The first step in the "steps" object is the entry point
+- Steps execute in declared order unless overridden by "next"
+- Use "context" to pass output from previous steps — the referenced step's output is injected into the prompt automatically
+- Each step's "do" field should be a thorough brief: the agent has no memory of other steps beyond what "context" provides
+- Use "produces" to describe what the step outputs (this helps downstream steps and the runtime)
+- When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool — this does NOT require a separate step
+
+Naming and inputs:
 - IMPORTANT: This workflow becomes an MCP tool. The "name" becomes the tool name (hyphens → underscores, "-workflow" suffix stripped, e.g., "analyze-code" → tool named "analyze_code"). The "description" becomes the tool description visible to the LLM.
-- IMPORTANT: The "inputs" object defines the tool's typed parameters — they are what the caller passes when invoking the tool.
-  - Each input key becomes a named parameter (e.g., "topic" → tool is called with { topic: "..." })
-  - Use clear, descriptive parameter names like function arguments (e.g., "file_path", "language", "max_results") — avoid generic names like "input" or "data"
-  - String value is shorthand for a required string param. Use object form { type, description, required } for non-string types or optional params.
-  - Only define inputs the workflow truly needs from the caller. If a step gathers info interactively (via AskUserQuestion), that is NOT an input.
-  - Steps reference inputs via {{key}} placeholders in their "do" text. Every defined input must be used by at least one step.
-- IMPORTANT: Each step spawns a full Claude Code agent session (claude -p). A single step can perform complex multi-file operations, multi-turn reasoning, read/write files, run shell commands, search the web, spawn sub-agents, and more. Do NOT over-decompose — combine related work into fewer, more capable steps rather than splitting into many trivial ones.
-- Each step's "do" field should be a clear, detailed instruction for the Claude Code agent that will execute it
-- Use "context" to reference outputs from previous steps that this step needs
-- Use "condition" for branching decisions
-- The first step in the object is the entry point
-- Steps execute in order unless overridden by "next", "then", or "else"
-- Use "parallel" to fan out: the step has no "do", only a list of step IDs to run concurrently. Use "join" to specify where to converge after all parallel branches complete.
-- Use "timeout" (milliseconds) on steps that may hang (e.g., long computations, web fetches)
-- Use "onError" to redirect to a fallback step if the current step fails
-- When a step needs user input or confirmation, instruct it to use the AskUserQuestion tool
+- The "inputs" object defines the tool's typed parameters — each key becomes a named parameter the caller passes when invoking the tool
+- Use clear, descriptive parameter names like function arguments (e.g., "file_path", "language", "max_results") — avoid generic names like "input" or "data"
+- String value is shorthand for a required string param. Use object form { type, description, required } for non-string types or optional params.
+- Only define inputs the workflow truly needs from the caller. If a step gathers info interactively (via AskUserQuestion), that is NOT an input.
+- Steps reference inputs via {{key}} placeholders in their "do" text. Every defined input must be used by at least one step.
+
+Profiles:
+- Match each step's profile to its requirements using the capabilities listed above
+- Steps that write or edit files MUST use a profile with Write/Edit tools
+- Steps that run shell commands MUST use a profile with Bash
+- Steps that search the web MUST use a profile with WebSearch/WebFetch
+- Steps that only read/analyze code can use a read-only profile
+- Only use profiles from the "Available profiles" list above
+
+Integration:
 - If a step can leverage an existing MCP tool (listed above), mention the tool by name in the "do" instruction
 - If a step can delegate to another workflow, call it directly by its tool name (e.g., analyze_code)
-- Match each step's profile to its requirements using the capabilities listed above:
-  - Steps that write or edit files MUST use a profile with Write/Edit tools
-  - Steps that run shell commands MUST use a profile with Bash
-  - Steps that search the web MUST use a profile with WebSearch/WebFetch
-  - Steps that only read/analyse code can use a read-only profile
-- Only use profiles from the "Available profiles" list above
-- Always include a final summary step
-- IMPORTANT: The workflow itself becomes an MCP tool that steps can call. If a step's task overlaps with the workflow's overall purpose, its "do" text should explicitly instruct the agent to complete the task directly rather than re-invoking the workflow tool. This prevents accidental infinite recursion. Only add this when confusion risk exists — steps with clearly distinct tasks don't need it.`;
+- IMPORTANT: The workflow itself becomes an MCP tool that steps can call. If a step's task overlaps with the workflow's overall purpose, its "do" text should explicitly instruct the agent to complete the task directly rather than re-invoking the workflow tool. This prevents infinite recursion. Only add this warning when confusion risk exists.
+
+## Advanced features (use sparingly — most workflows need none of these)
+
+These fields are supported but rarely needed. Do NOT use them unless the workflow genuinely requires them:
+- "condition" + "then"/"else": Branch based on a step's output. Only needed when the workflow has truly divergent paths (not just error checking — agents handle errors naturally).
+- "next": Override the default sequential flow to jump to a specific step.
+- "parallel" + "join": Fan out to run multiple steps concurrently, then converge. Only useful when independent workstreams can genuinely run in parallel.
+- "maxRetries": Retry a step on failure. Rarely needed — agents are resilient.
+- "timeout": Kill a step after N milliseconds. Only for steps that might genuinely hang.
+- "onError": Redirect to a fallback step on failure. Rarely needed — prefer letting the agent handle errors within the step.
+
+When tempted to use conditions or branching, first ask: could the agent within a single step handle both paths? Usually yes.`;
 
     const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
     const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full', instanceId: `wf-generate-${Date.now()}` });
@@ -803,39 +887,33 @@ Rules:
     const genTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, 120000);
+    }, 300000);
 
     proc.stdin.write(prompt);
     proc.stdin.end();
 
-    let result = null;
     let stderrBuf = '';
-    const parser = createStreamJsonParser((event) => {
-      if (event.type === 'result' && event.result) result = event.result;
-    });
-
-    proc.stdout.on('data', (chunk) => parser.write(chunk));
+    proc.stdout.on('data', () => {}); // drain stdout
     proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
 
     proc.on('close', (code) => {
       clearTimeout(genTimeout);
-      parser.flush();
 
-      if (!result) {
+      if (!fs.existsSync(targetPath)) {
         const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
-        reject(new Error(`Generation produced no output (exit ${code})${detail}`));
+        reject(new Error(`Generation produced no output file (exit ${code})${detail}`));
         return;
       }
 
       try {
-        const jsonMatch = result.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          resolve(JSON.parse(jsonMatch[0]));
-        } else {
-          reject(new Error('No JSON found in generation output'));
+        const workflow = JSON.parse(fs.readFileSync(targetPath, 'utf-8'));
+        // If we used a temp draft dir, clean it up — the caller will save to the real name
+        if (!existingName) {
+          try { fs.unlinkSync(targetPath); fs.rmdirSync(targetDir); } catch {}
         }
+        resolve(workflow);
       } catch (e) {
-        reject(new Error(`Failed to parse generated workflow: ${e.message}`));
+        reject(new Error(`Failed to parse generated workflow file: ${e.message}`));
       }
     });
 
@@ -1083,7 +1161,7 @@ Example for a quiz-generator workflow:
     const compileTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, 120000);
+    }, 600000);
 
     proc.stdin.write(prompt);
     proc.stdin.end();
@@ -1183,6 +1261,7 @@ module.exports = {
   loadCompiledSource,
   saveWorkflow,
   saveCompiledSource,
+  renameWorkflow,
   deleteWorkflow,
   runWorkflow,
   cancelRun,

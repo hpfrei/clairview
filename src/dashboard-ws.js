@@ -1,6 +1,6 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance } = require('./utils');
+const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, resolveOutputDir, listFiles } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
@@ -287,6 +287,10 @@ class DashboardBroadcaster {
           } else if (msg.type === 'mcp:bridge:call') {
             // Bridge reporting a tool call for inspector logging
             if (this.mcpHandler?.handleBridgeReport) this.mcpHandler.handleBridgeReport(msg);
+          } else if (msg.type === 'files:refresh') {
+            const dir = resolveOutputDir(msg.cwd || '');
+            const files = listFiles(dir);
+            ws.send(JSON.stringify({ type: 'files:list', tabId: msg.tabId || undefined, cwd: dir, files }));
           } else if (msg.type.startsWith('mcp:')) {
             if (this.mcpHandler) this.mcpHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('workflow:')) {

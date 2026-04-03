@@ -7,6 +7,7 @@ const path = require('path');
 const workflows = require('./workflows');
 const caps = require('./capabilities');
 const mcpServers = require('./mcp/servers');
+const mcpIndex = require('./mcp/index');
 const { resolveOutputDir } = require('./utils');
 
 const PROJECT_ROOT = path.dirname(__dirname);
@@ -53,6 +54,8 @@ async function handleMessage(ws, msg, bc) {
         const ok = workflows.saveWorkflow(cwd, msg.name, msg.workflow);
         if (ok) {
           broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+          mcpIndex.broadcastToolList();
+          mcpIndex.markNeedsRestart();
         } else {
           send({ type: 'workflow:error', error: `Cannot save workflow: ${msg.name} (invalid name — use lowercase alphanumeric with hyphens)` });
         }
@@ -62,15 +65,32 @@ async function handleMessage(ws, msg, bc) {
         const okJs = workflows.saveCompiledSource(cwd, msg.name, msg.compiledSource || '');
         if (okJs) {
           broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+          mcpIndex.broadcastToolList();
+          mcpIndex.markNeedsRestart();
         } else {
           send({ type: 'workflow:error', error: `Cannot save compiled JS for: ${msg.name}` });
         }
         break;
 
+      case 'workflow:rename': {
+        const renamed = workflows.renameWorkflow(cwd, msg.oldName, msg.newName);
+        if (renamed) {
+          broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+          broadcaster.broadcast({ type: 'workflow:renamed', oldName: msg.oldName, newName: msg.newName });
+          mcpIndex.broadcastToolList();
+          mcpIndex.markNeedsRestart();
+        } else {
+          send({ type: 'workflow:error', error: `Cannot rename workflow "${msg.oldName}" to "${msg.newName}" (invalid name, target exists, or source not found)` });
+        }
+        break;
+      }
+
       case 'workflow:delete':
         const deleted = workflows.deleteWorkflow(cwd, msg.name);
         if (deleted) {
           broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+          mcpIndex.broadcastToolList();
+          mcpIndex.markNeedsRestart();
         } else {
           send({ type: 'workflow:error', error: `Cannot delete workflow: ${msg.name}` });
         }

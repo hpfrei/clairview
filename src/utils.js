@@ -23,8 +23,11 @@ function buildClaudeArgs(profile) {
   if (profile.allowedTools?.length > 0) {
     args.push('--allowedTools', ...profile.allowedTools);
   }
-  // Always allow integrated MCP tools so workflow tools don't require manual approval
-  args.push('--allowedTools', 'mcp__integrated__*');
+  // Allow integrated MCP tools unless the profile explicitly disables some
+  const hasMcpDisabled = profile.disabledTools?.some(t => t.startsWith('mcp__'));
+  if (!hasMcpDisabled) {
+    args.push('--allowedTools', 'mcp__integrated__*');
+  }
   if (profile.disabledTools?.length > 0) {
     args.push('--disallowedTools', ...profile.disabledTools);
   }
@@ -265,6 +268,21 @@ function sanitizeForDashboard(interaction) {
   return clone;
 }
 
+function listFiles(dir) {
+  try {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => {
+        try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; }
+      })
+      .map(f => {
+        const full = path.join(dir, f);
+        const stat = fs.statSync(full);
+        return { name: f, path: full, size: stat.size, mtime: stat.mtimeMs };
+      });
+  } catch { return []; }
+}
+
 module.exports = {
   generateId,
   filterRequestHeaders,
@@ -283,4 +301,5 @@ module.exports = {
   ensureDir,
   readJSON,
   writeJSON,
+  listFiles,
 };

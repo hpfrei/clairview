@@ -1350,9 +1350,13 @@
     // Footer tokens section — arrows for in/out
     const tokensEl = document.getElementById('footerTokens');
     if (tokensEl) {
-      tokensEl.innerHTML =
-        `<span class="ft-in"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1L7 5H1Z" fill="currentColor"/></svg> ${inputTokens.toLocaleString()}</span>` +
-        `<span class="ft-out"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 7L1 3H7Z" fill="currentColor"/></svg> ${outputTokens.toLocaleString()}</span>`;
+      if (inputTokens || outputTokens) {
+        tokensEl.innerHTML =
+          `<span class="ft-in"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1L7 5H1Z" fill="currentColor"/></svg> ${inputTokens.toLocaleString()}</span>` +
+          `<span class="ft-out"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 7L1 3H7Z" fill="currentColor"/></svg> ${outputTokens.toLocaleString()}</span>`;
+      } else {
+        tokensEl.innerHTML = '<span class="footer-placeholder">tokens</span>';
+      }
     }
 
     // Footer cache section — cache icon with create/read
@@ -1365,14 +1369,14 @@
         if (cacheRead) parts += `<span class="ft-cache-r">${icon} ${cacheRead.toLocaleString()} r</span>`;
         cacheEl.innerHTML = parts;
       } else {
-        cacheEl.innerHTML = '';
+        cacheEl.innerHTML = '<span class="footer-placeholder">cache</span>';
       }
     }
 
     // Footer cost section with gauge
     const costEl = document.getElementById('footerCost');
     if (costEl) {
-      costEl.innerHTML = hasCost ? costGauge(totalCost) : '';
+      costEl.innerHTML = hasCost ? costGauge(totalCost) : '<span class="footer-placeholder">price</span>';
     }
   }
 
@@ -1380,7 +1384,19 @@
     if (!emptyState) return;
     if (state.interactions.length > 0) return;
     emptyState.innerHTML = '<p>No interaction selected.</p>'
-      + '<p class="hint">Run <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code> to capture API calls.</p>';
+      + '<p class="empty-state-sub">Start capturing Claude Code API streams:</p>'
+      + '<ul class="empty-state-list">'
+      + '<li><b>External Claude</b> &mdash; run with the proxy env var:<br><code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code></li>'
+      + '<li><b>Chat</b> &mdash; use the <span class="empty-state-link" data-view="claude">Chat</span> tab to talk to Claude directly through the proxy</li>'
+      + '<li><b>Workflow</b> &mdash; run a multi-step workflow from the <span class="empty-state-link" data-view="workflow-runs">Workflows</span> tab</li>'
+      + '<li><b>API</b> &mdash; POST to <code>/api/run</code> with a prompt to get an SSE stream</li>'
+      + '</ul>';
+    emptyState.querySelectorAll('.empty-state-link').forEach(el => {
+      el.addEventListener('click', () => {
+        const view = el.dataset.view;
+        if (view) document.querySelector(`.header-tab[data-view="${view}"]`)?.click();
+      });
+    });
   }
 
   // --- Message handler ---

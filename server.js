@@ -1,5 +1,6 @@
 const http = require('http');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const path = require('path');
@@ -160,6 +161,29 @@ workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashb
 
 // Mount REST API
 dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN }));
+
+// Restart endpoint (auth handled by middleware)
+dashboardApp.post('/api/restart', (req, res) => {
+  res.json({ ok: true, message: 'Server restarting...' });
+  setTimeout(() => {
+    broadcaster.broadcast({ type: 'server:restarting' });
+    for (const client of wss.clients) client.close(1012, 'Server restarting');
+    let closed = 0;
+    const onClosed = () => {
+      if (++closed < 2) return;
+      mcp.shutdown();
+      const child = spawn(process.argv[0], process.argv.slice(1), {
+        detached: true, stdio: 'inherit', cwd: process.cwd(),
+        env: { ...process.env, AUTH_TOKEN },
+      });
+      child.unref();
+      process.exit(0);
+    };
+    dashboardServer.close(onClosed);
+    proxyServer.close(onClosed);
+    setTimeout(() => { mcp.shutdown(); process.exit(1); }, 5000);
+  }, 500);
+});
 
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {

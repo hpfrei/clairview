@@ -84,9 +84,7 @@ function activeFilePath(baseDir) {
 }
 
 function listProfiles(baseDir) {
-  const builtins = Object.values(BUILTIN_PROFILES).map(p => ({
-    name: p.name, label: p.label, description: p.description, builtin: true,
-  }));
+  const builtins = Object.values(BUILTIN_PROFILES).map(p => JSON.parse(JSON.stringify(p)));
   const dir = profilesDir(baseDir);
   let customs = [];
   try {
@@ -96,7 +94,7 @@ function listProfiles(baseDir) {
         .map(f => {
           try {
             const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
-            return { name: data.name, label: data.label || data.name, description: data.description || '', builtin: false };
+            return validateProfile(data);
           } catch { return null; }
         })
         .filter(Boolean)
@@ -202,7 +200,7 @@ const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
 
 function validateProfile(p) {
   const modelDef = typeof p.modelDef === 'string' && p.modelDef.trim() ? p.modelDef.trim() : null;
-  let disabledTools = Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t)) : [];
+  let disabledTools = Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t) || t.startsWith('mcp__')) : [];
   // WebFetch is Anthropic server-side only — force-disable for non-Anthropic profiles
   if (modelDef && !disabledTools.includes('WebFetch')) {
     disabledTools.push('WebFetch');
@@ -215,7 +213,7 @@ function validateProfile(p) {
     model: p.model || null,
     effort: VALID_EFFORTS.includes(p.effort) ? p.effort : null,
     permissionMode: VALID_PERMISSIONS.includes(p.permissionMode) ? p.permissionMode : 'default',
-    allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t)) : [],
+    allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t) || t.startsWith('mcp__')) : [],
     disabledTools,
     disableSlashCommands: !!p.disableSlashCommands,
     bare: !!p.bare,
@@ -429,7 +427,7 @@ function deleteHook(cwd, event, entryIndex) {
 // --- Hook reporter auto-injection ---
 
 const HOOK_REPORTER_MARKER = '__vistaclair_reporter__';
-const HOOK_REPORTER_MARKERS = ['__vistaclair_reporter__', '__claude_doc_reporter__'];
+const HOOK_REPORTER_MARKERS = ['__vistaclair_reporter__', '__claude_doc_reporter__', '__clairview_reporter__'];
 
 function isReporterHook(h) {
   return HOOK_REPORTER_MARKERS.some(m => h.command?.includes(m));

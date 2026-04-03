@@ -1,499 +1,504 @@
 // ============================================================
-// WORKFLOW MODULE — List, edit, generate, compile
+// WORKFLOW MODULE — Create / edit workflows (renders into tab container)
 // ============================================================
 (function workflowModule() {
   'use strict';
   const { state, sendWs, escHtml } = window.dashboard;
 
-  // --- Internal state ---
-  const wf = {
-    workflows: [],
-    generating: false,
-    compiling: false,
-    lastGenerated: null,
-    // Modal tab state
-    activeTab: 'source',   // 'source' | 'compiled'
-    sourceContent: '',
-    compiledContent: null,
-    jsonDirty: false,
-    jsDirty: false,
-  };
-
-  // --- DOM refs ---
-  const wfErrorBar = document.getElementById('wfErrorBar');
-
-  // Edit modal
-  const wfModal = document.getElementById('wfModal');
-  const wfModalTitle = document.getElementById('wfModalTitle');
-  const wfName = document.getElementById('wfName');
-  const wfDesc = document.getElementById('wfDesc');
-  const wfTextarea = document.getElementById('wfTextarea');
-  const wfRedoBar = document.getElementById('wfRedoBar');
-  const wfRedoInput = document.getElementById('wfRedoInput');
-  const wfRedoBtn = document.getElementById('wfRedoBtn');
-  const wfSaveJson = document.getElementById('wfSaveJson');
-  const wfSaveJs = document.getElementById('wfSaveJs');
-  const wfGenerateBtn = document.getElementById('wfGenerateBtn');
-  const wfRegenBtn = document.getElementById('wfRegenBtn');
-  const wfCompileBtn = document.getElementById('wfCompileBtn');
-  const wfTabSource = document.getElementById('wfTabSource');
-  const wfTabCompiled = document.getElementById('wfTabCompiled');
-  const wfTabHelp = document.getElementById('wfTabHelp');
-  const wfHelpPanel = document.getElementById('wfHelpPanel');
-  const wfLog = document.getElementById('wfLog');
-  const wfModalCancel = document.getElementById('wfModalCancel');
-  const wfModalClose = document.getElementById('wfModalClose');
-  const wfProfileList = document.getElementById('wfProfileList');
-  const wfInputModeNone = document.getElementById('wfInputModeNone');
-  const wfInputModePrompt = document.getElementById('wfInputModePrompt');
-  const wfInputModeHelp = document.getElementById('wfInputModeHelp');
+  // --- Internal state per create-tab (keyed by tabId) ---
+  const editors = new Map();
 
   const INPUT_MODE_HELP = {
     none: 'Runs autonomously. Steps can still use AskUserQuestion, fetch from the web, read files, check git, etc.',
     prompt: 'Shows a prompt input when running. The user\u2019s message is available as {{prompt}} in step instructions.',
   };
 
-  function syncInputModeRadio(mode) {
-    if (mode === 'prompt') {
-      if (wfInputModePrompt) wfInputModePrompt.checked = true;
+  function createEditorState(tabId) {
+    return {
+      tabId,
+      editingName: null,
+      generating: false,
+      compiling: false,
+      activeTab: 'source',
+      sourceContent: '',
+      compiledContent: null,
+      jsonDirty: false,
+      jsDirty: false,
+    };
+  }
+
+  function getEditor(tabId) {
+    if (!editors.has(tabId)) editors.set(tabId, createEditorState(tabId));
+    return editors.get(tabId);
+  }
+
+  function removeEditor(tabId) {
+    editors.delete(tabId);
+  }
+
+  // --- Render the create/edit form into a container ---
+  function renderCreateForm(container, tabId, workflowData, compiledSource, isEdit) {
+    const ed = getEditor(tabId);
+    const isFirstRender = !ed._initialized;
+
+    // Only initialize state on first render — preserve state on re-renders (tab switches)
+    if (isFirstRender) {
+      ed._initialized = true;
+      ed.editingName = isEdit ? (workflowData?.name || null) : null;
+      ed.sourceContent = JSON.stringify(workflowData || {}, null, 2);
+      ed.compiledContent = compiledSource || null;
+      ed.activeTab = 'source';
+      ed.jsonDirty = false;
+      ed.jsDirty = false;
+      ed.generating = false;
+      ed.compiling = false;
     } else {
-      if (wfInputModeNone) wfInputModeNone.checked = true;
-    }
-    if (wfInputModeHelp) wfInputModeHelp.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
-  }
-
-  function onInputModeChange() {
-    const mode = wfInputModePrompt?.checked ? 'prompt' : 'none';
-    if (wfInputModeHelp) wfInputModeHelp.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
-    // Sync into JSON source
-    try {
-      const json = JSON.parse(wfTextarea?.value || '{}');
-      json.inputMode = mode;
-      const updated = JSON.stringify(json, null, 2);
-      if (wfTextarea) wfTextarea.value = updated;
-      wf.sourceContent = updated;
-      wf.jsonDirty = true;
-      updateSaveButtons();
-    } catch {}
-  }
-
-  wfInputModeNone?.addEventListener('change', onInputModeChange);
-  wfInputModePrompt?.addEventListener('change', onInputModeChange);
-
-  // --- Error display (page-level) ---
-  function showWfError(message) {
-    if (!wfErrorBar) return;
-    wfErrorBar.textContent = message;
-    wfErrorBar.classList.remove('hidden');
-  }
-  function clearWfError() {
-    if (wfErrorBar) wfErrorBar.classList.add('hidden');
-  }
-
-  // --- Log area (in-modal) ---
-  function appendLog(text, cls) {
-    if (!wfLog) return;
-    wfLog.classList.remove('hidden', 'log-error', 'log-success', 'log-busy');
-    if (cls) wfLog.classList.add(cls);
-    wfLog.textContent += text;
-    wfLog.scrollTop = wfLog.scrollHeight;
-  }
-  function setLog(text, cls) {
-    if (!wfLog) return;
-    wfLog.classList.remove('hidden', 'log-error', 'log-success', 'log-busy');
-    if (cls) wfLog.classList.add(cls);
-    wfLog.textContent = text;
-    wfLog.scrollTop = wfLog.scrollHeight;
-  }
-  function clearLog() {
-    if (!wfLog) return;
-    wfLog.textContent = '';
-    wfLog.classList.add('hidden');
-    wfLog.classList.remove('log-error', 'log-success', 'log-busy');
-  }
-
-  // --- Rendering ---
-
-
-  // --- Edit Modal ---
-
-  let editingName = null;
-
-  function openEditModal(name, workflow, compiledSource, showRedo) {
-    if (!wfModal) return;
-    editingName = name;
-    if (wfModalTitle) wfModalTitle.textContent = name ? `Edit: ${name}` : 'New Workflow';
-    if (wfName) { wfName.value = workflow?.name || name || ''; wfName.disabled = !!name; }
-    if (wfDesc) wfDesc.value = workflow?.description || '';
-
-    // Sync inputMode radio
-    syncInputModeRadio(workflow?.inputMode || 'none');
-
-    // Populate profile checklist
-    if (wfProfileList) {
-      const profiles = state.profiles || [];
-      wfProfileList.innerHTML = profiles.map(p =>
-        `<label><input type="checkbox" value="${escHtml(p.name)}" checked> ${escHtml(p.label || p.name)}</label>`
-      ).join('');
-    }
-
-    // Tab content
-    wf.sourceContent = JSON.stringify(workflow || {}, null, 2);
-    wf.compiledContent = compiledSource || null;
-    wf.activeTab = 'source';
-    if (wfTextarea) wfTextarea.value = wf.sourceContent;
-    updateTabUI();
-
-    // Generate button: show only for new workflows
-    if (wfGenerateBtn) wfGenerateBtn.classList.toggle('hidden', !!name);
-
-    // Regenerate button: show only for existing workflows
-    if (wfRegenBtn) wfRegenBtn.classList.toggle('hidden', !name);
-
-    // Redo bar
-    if (wfRedoBar) wfRedoBar.classList.toggle('hidden', !showRedo);
-    if (wfRedoInput) wfRedoInput.value = '';
-
-    // Highlight compile button when JS is stale
-    const needsCompile = !!name && !compiledSource;
-    updateCompileHighlight(needsCompile);
-
-    // Reset dirty and busy states
-    wf.jsonDirty = false;
-    wf.jsDirty = false;
-    updateSaveButtons();
-    clearLog();
-    wf.compiling = false;
-    setCompileBusy(false);
-
-    wfModal.classList.remove('hidden');
-  }
-
-  function closeEditModal() {
-    if (wfModal) wfModal.classList.add('hidden');
-    editingName = null;
-    wf.generating = false;
-    wf.compiling = false;
-    setGenerateBusy(false);
-  }
-
-  function updateTabUI() {
-    const hasCompiled = wf.compiledContent != null;
-    const isHelp = wf.activeTab === 'help';
-    if (wfTabSource) wfTabSource.classList.toggle('active', wf.activeTab === 'source');
-    if (wfTabCompiled) {
-      wfTabCompiled.classList.toggle('active', wf.activeTab === 'compiled');
-      wfTabCompiled.classList.toggle('disabled', !hasCompiled);
-    }
-    if (wfTabHelp) wfTabHelp.classList.toggle('active', isHelp);
-    if (wfTextarea) wfTextarea.classList.toggle('hidden', isHelp);
-    if (wfHelpPanel) wfHelpPanel.classList.toggle('hidden', !isHelp);
-    if (wfRedoBar && isHelp) wfRedoBar.classList.add('hidden');
-    if (wfCompileBtn) wfCompileBtn.disabled = wf.compiling;
-  }
-
-  function switchTab(tab) {
-    if (tab === 'compiled' && wf.compiledContent == null) return;
-    // Save current textarea content to the right variable
-    if (wf.activeTab === 'source') {
-      wf.sourceContent = wfTextarea?.value || '';
-    } else if (wf.activeTab === 'compiled') {
-      wf.compiledContent = wfTextarea?.value || '';
-    }
-    // Switch
-    wf.activeTab = tab;
-    if (tab !== 'help' && wfTextarea) {
-      wfTextarea.value = tab === 'source' ? wf.sourceContent : (wf.compiledContent || '');
-    }
-    updateTabUI();
-  }
-
-  // Tab clicks
-  wfTabSource?.addEventListener('click', () => switchTab('source'));
-  wfTabCompiled?.addEventListener('click', () => switchTab('compiled'));
-  wfTabHelp?.addEventListener('click', () => switchTab('help'));
-
-  // Track manual edits in textarea for dirty state
-  wfTextarea?.addEventListener('input', () => {
-    if (wf.activeTab === 'source') {
-      wf.jsonDirty = true;
-    } else if (wf.activeTab === 'compiled') {
-      wf.jsDirty = true;
-    }
-    updateSaveButtons();
-  });
-
-  function updateSaveButtons() {
-    const busy = isAnyBusy();
-    if (wfSaveJson) wfSaveJson.disabled = busy || !wf.jsonDirty;
-    if (wfSaveJs) wfSaveJs.disabled = busy || !wf.jsDirty;
-  }
-
-  function saveWorkflowJson() {
-    if (wf.activeTab === 'source') {
-      wf.sourceContent = wfTextarea?.value || '';
-    }
-    let workflow;
-    try {
-      workflow = JSON.parse(wf.sourceContent || '{}');
-    } catch (e) {
-      setLog('Invalid JSON: ' + e.message, 'log-error');
-      return;
-    }
-    const name = wfName?.value?.trim() || workflow.name || '';
-    if (!name) { setLog('Name is required', 'log-error'); return; }
-    workflow.name = name;
-    if (wfDesc?.value) workflow.description = wfDesc.value;
-
-    sendWs({ type: 'workflow:save', name, workflow });
-    wf.jsonDirty = false;
-    updateSaveButtons();
-    setLog('JSON saved.', 'log-success');
-  }
-
-  function saveCompiledJs() {
-    if (wf.activeTab === 'compiled') {
-      wf.compiledContent = wfTextarea?.value || '';
-    }
-    if (!wf.compiledContent) { setLog('No compiled JS to save', 'log-error'); return; }
-    const name = editingName || wfName?.value?.trim();
-    if (!name) { setLog('Name is required', 'log-error'); return; }
-
-    sendWs({ type: 'workflow:saveCompiled', name, compiledSource: wf.compiledContent });
-    wf.jsDirty = false;
-    updateSaveButtons();
-    setLog('Compiled JS saved.', 'log-success');
-  }
-
-  // Compile
-  function startCompile() {
-    if (isAnyBusy()) return;
-    // Save source first
-    if (wf.activeTab === 'source') {
-      wf.sourceContent = wfTextarea?.value || '';
-    }
-    let workflow;
-    try {
-      workflow = JSON.parse(wf.sourceContent || '{}');
-    } catch (e) {
-      setLog('Cannot compile — invalid JSON: ' + e.message, 'log-error');
-      return;
-    }
-    const name = wfName?.value?.trim() || workflow.name || '';
-    if (!name) { setLog('Cannot compile — name is required', 'log-error'); return; }
-    workflow.name = name;
-    if (wfDesc?.value) workflow.description = wfDesc.value;
-
-    // Save then compile
-    sendWs({ type: 'workflow:save', name, workflow });
-    editingName = name;
-
-    wf.compiling = true;
-    setCompileBusy(true);
-    setLog('Compiling\u2026', 'log-busy');
-    setTimeout(() => sendWs({ type: 'workflow:compile', name }), 300);
-  }
-
-  wfCompileBtn?.addEventListener('click', startCompile);
-
-  // Busy states — only one operation at a time
-  function isAnyBusy() { return wf.generating || wf.compiling; }
-
-  function updateBusyState() {
-    const busy = isAnyBusy();
-    // Generate (footer)
-    if (wfGenerateBtn) {
-      wfGenerateBtn.disabled = busy;
-      wfGenerateBtn.textContent = wf.generating ? 'Generating\u2026' : 'Generate';
-      wfGenerateBtn.classList.toggle('wf-btn-busy', wf.generating);
-    }
-    // Regenerate JSON (tabbar)
-    if (wfRegenBtn) {
-      wfRegenBtn.disabled = busy;
-      wfRegenBtn.textContent = wf.generating ? 'Regenerating\u2026' : 'Regenerate JSON';
-      wfRegenBtn.classList.toggle('wf-btn-busy', wf.generating);
-    }
-    // Redo (feedback bar)
-    if (wfRedoBtn) wfRedoBtn.disabled = busy;
-    // Compile (tabbar)
-    if (wfCompileBtn) {
-      if (wf.compiling) {
-        wfCompileBtn.disabled = true;
-        wfCompileBtn.textContent = 'Compiling\u2026';
-        wfCompileBtn.classList.remove('wf-btn-highlight');
-        wfCompileBtn.classList.add('wf-btn-busy');
-      } else {
-        wfCompileBtn.disabled = busy;
-        wfCompileBtn.classList.remove('wf-btn-busy');
+      // Save current textarea content before DOM is destroyed
+      if (ed._ui?.textareaEl) {
+        if (ed.activeTab === 'source') ed.sourceContent = ed._ui.textareaEl.value || '';
+        else if (ed.activeTab === 'compiled') ed.compiledContent = ed._ui.textareaEl.value || '';
       }
+      if (ed._ui?.nameEl) ed._savedName = ed._ui.nameEl.value;
+      if (ed._ui?.descEl) ed._savedDesc = ed._ui.descEl.value;
     }
-    // Footer save/cancel buttons
-    if (wfSaveJson) wfSaveJson.disabled = busy || !wf.jsonDirty;
-    if (wfSaveJs) wfSaveJs.disabled = busy || !wf.jsDirty;
-    if (wfModalCancel) wfModalCancel.disabled = false; // always allow cancel
-  }
 
-  function setGenerateBusy() { updateBusyState(); }
-  function setCompileBusy() { updateBusyState(); }
-  function updateCompileHighlight(stale) {
-    if (!wfCompileBtn) return;
-    if (stale && !wf.compiling) {
-      wfCompileBtn.classList.add('wf-btn-highlight');
-      wfCompileBtn.textContent = 'Compile Now';
-    } else if (!stale) {
-      wfCompileBtn.classList.remove('wf-btn-highlight');
-      if (!wf.compiling) wfCompileBtn.textContent = 'Compile';
+    const name = ed._savedName || workflowData?.name || '';
+    const desc = ed._savedDesc || workflowData?.description || '';
+    const inputMode = workflowData?.inputMode || 'none';
+    const profiles = state.profiles || [];
+    const hasName = !!ed.editingName;
+    const needsCompile = hasName && !ed.compiledContent;
+
+    container.innerHTML = `
+      <div class="wfc-form">
+        <div class="wfc-top-row">
+          <div class="wfc-field">
+            <label class="wfc-label">Name</label>
+            <input type="text" class="wfc-input" id="wfc-name-${tabId}" placeholder="my-workflow" value="${escHtml(name)}">
+            <button class="wfc-name-save hidden" id="wfc-name-save-${tabId}">Rename</button>
+          </div>
+          <div class="wfc-field wfc-field-grow">
+            <label class="wfc-label">Description</label>
+            <textarea class="wfc-input wfc-desc" id="wfc-desc-${tabId}" rows="8" placeholder="Describe what this workflow does — used as the AI prompt for generation.">${escHtml(desc)}</textarea>
+          </div>
+        </div>
+
+        <div class="wfc-options-row">
+          <div class="wfc-option-group">
+            <span class="wfc-label">Input</span>
+            <label class="wfc-radio"><input type="radio" name="wfcInputMode-${tabId}" value="none" ${inputMode !== 'prompt' ? 'checked' : ''}> None</label>
+            <label class="wfc-radio"><input type="radio" name="wfcInputMode-${tabId}" value="prompt" ${inputMode === 'prompt' ? 'checked' : ''}> Prompt</label>
+            <span class="wfc-input-hint" id="wfc-input-hint-${tabId}">${INPUT_MODE_HELP[inputMode] || INPUT_MODE_HELP.none}</span>
+          </div>
+          <div class="wfc-option-group">
+            <span class="wfc-label">Profiles</span>
+            <div class="wfc-profile-list" id="wfc-profiles-${tabId}">
+              ${profiles.map(p => `<label class="wfc-checkbox"><input type="checkbox" value="${escHtml(p.name)}" checked> ${escHtml(p.label || p.name)}</label>`).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="wfc-toolbar">
+          <button class="wfc-tab active" data-tab="source" id="wfc-tab-source-${tabId}">Source JSON</button>
+          <button class="wfc-tab ${ed.compiledContent ? '' : 'disabled'}" data-tab="compiled" id="wfc-tab-compiled-${tabId}">Compiled JS</button>
+          <button class="wfc-tab" data-tab="help" id="wfc-tab-help-${tabId}">Help</button>
+          <div class="wfc-toolbar-spacer"></div>
+          <button class="wfc-btn wfc-btn-primary" id="wfc-generate-${tabId}">Generate JSON</button>
+          <button class="wfc-btn wfc-btn-accent" id="wfc-compile-${tabId}">Compile</button>
+        </div>
+
+        <textarea class="wfc-code" id="wfc-textarea-${tabId}" spellcheck="false" rows="20">${escHtml(ed.sourceContent)}</textarea>
+
+        <div class="wfc-help hidden" id="wfc-help-${tabId}">
+          <div class="wf-help-columns">
+            <div class="wf-help-col">
+              <h4>Source JSON</h4>
+              <pre class="wf-help-pre">{
+  "name": "my-workflow",
+  "description": "What this workflow does",
+  "inputMode": "none" or "prompt",
+  "inputs": {
+    "topic": "The topic to process"
+  },
+  "steps": {
+    "step-id": { ... }
+  }
+}</pre>
+              <p class="wf-help-note"><b>inputMode</b>: <code>none</code> (default) runs autonomously. <code>prompt</code> shows a text input when running &mdash; the value is available as <code>{{prompt}}</code> in step instructions.</p>
+
+              <h4>Step fields</h4>
+              <pre class="wf-help-pre"><b>do</b>           The prompt sent to claude -p.
+             Use {{key}} for input substitution.
+<b>profile</b>      Profile name for this step.
+<b>produces</b>     Describes expected output format.
+<b>context</b>      Array of step IDs whose output is
+             prepended to this step's prompt.</pre>
+
+              <h4>Navigation</h4>
+              <pre class="wf-help-pre"><b>next</b>         Unconditional jump to step ID.
+<b>condition</b>    Natural-language branch condition.
+<b>then / else</b>  Branch targets from evaluate().</pre>
+
+              <h4>Advanced</h4>
+              <pre class="wf-help-pre"><b>parallel</b>     Array of step IDs to run concurrently.
+<b>join</b>         Step ID to resume after parallel done.
+<b>maxRetries</b>   Retry count on failure (default: 0).
+<b>timeout</b>      Step timeout in ms.
+<b>onError</b>      Step ID to jump to on failure.</pre>
+            </div>
+            <div class="wf-help-col">
+              <h4>Compiled JS</h4>
+              <pre class="wf-help-pre">module.exports = {
+  name: "my-workflow",
+  sourceHash: "f68b47ebd7a6",
+  inputs: { topic: { type: "string", ... } },
+  steps: [ { id, profile, buildPrompt,
+             parseOutput, evaluate, ... } ]
+};</pre>
+
+              <h4>Step object</h4>
+              <pre class="wf-help-pre"><b>buildPrompt(ctx)</b>
+  Returns the full prompt string.
+  ctx.inputs.key / ctx.steps.id.output
+
+<b>parseOutput(raw)</b>
+  Transforms the raw agent output.
+
+<b>evaluate(ctx)</b>
+  Deterministic JS predicate for branching.</pre>
+
+              <h4>Runtime context</h4>
+              <pre class="wf-help-pre">ctx = {
+  inputs: { topic: "user value" },
+  steps: {
+    "research": { output: "..." },
+    "failed-step": { output: null, error: "..." }
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="wfc-log hidden" id="wfc-log-${tabId}"></div>
+
+        <div class="wfc-footer">
+          <button class="wfc-btn wfc-btn-danger ${hasName ? '' : 'hidden'}" id="wfc-delete-${tabId}">Delete Workflow</button>
+        </div>
+      </div>`;
+
+    // --- Wire up events ---
+    const nameEl = container.querySelector(`#wfc-name-${tabId}`);
+    const nameSaveBtn = container.querySelector(`#wfc-name-save-${tabId}`);
+    const descEl = container.querySelector(`#wfc-desc-${tabId}`);
+    const textareaEl = container.querySelector(`#wfc-textarea-${tabId}`);
+    const helpEl = container.querySelector(`#wfc-help-${tabId}`);
+    const logEl = container.querySelector(`#wfc-log-${tabId}`);
+    const generateBtn = container.querySelector(`#wfc-generate-${tabId}`);
+    const compileBtn = container.querySelector(`#wfc-compile-${tabId}`);
+    const deleteBtn = container.querySelector(`#wfc-delete-${tabId}`);
+
+    // --- Helpers ---
+
+    function hasSourceJson() {
+      const src = (ed.activeTab === 'source' ? textareaEl?.value : ed.sourceContent) || '';
+      try { const j = JSON.parse(src); return j && Object.keys(j.steps || {}).length > 0; } catch { return false; }
     }
-  }
 
-  // Footer buttons
-  wfSaveJson?.addEventListener('click', () => saveWorkflowJson());
-  wfSaveJs?.addEventListener('click', () => saveCompiledJs());
-  wfModalCancel?.addEventListener('click', closeEditModal);
-  wfModalClose?.addEventListener('click', closeEditModal);
+    function updateNameSaveBtn() {
+      if (!nameSaveBtn || !ed.editingName) return;
+      const current = nameEl?.value?.trim() || '';
+      nameSaveBtn.classList.toggle('hidden', current === ed.editingName || !current);
+    }
 
-  // Generate (now in footer)
-  wfGenerateBtn?.addEventListener('click', () => {
-    if (isAnyBusy()) return;
-    const desc = wfDesc?.value?.trim();
-    if (!desc) { setLog('Enter a description first', 'log-error'); return; }
-    wf.generating = true;
-    setGenerateBusy(true);
-    clearWfError();
-    setLog('Generating workflow\u2026', 'log-busy');
-    sendWs({ type: 'workflow:generate', description: desc, selectedProfiles: getSelectedProfiles() });
-  });
+    function updateButtonStates() {
+      const busy = ed.generating || ed.compiling;
+      const hasName = !!nameEl?.value?.trim();
+      const hasDesc = !!descEl?.value?.trim();
+      generateBtn.disabled = busy || !hasName || !hasDesc;
+      compileBtn.disabled = busy || !hasSourceJson();
+      generateBtn.innerHTML = ed.generating ? '<span class="busy-dot"></span> Generating\u2026' : 'Generate JSON';
+      compileBtn.innerHTML = ed.compiling ? '<span class="busy-dot"></span> Compiling\u2026' : 'Compile';
+      updateNameSaveBtn();
+      window.workflowRunModule?.renderTabStrip?.();
+    }
 
-  // Redo
-  wfRedoBtn?.addEventListener('click', () => {
-    if (isAnyBusy()) return;
-    const feedback = wfRedoInput?.value?.trim();
-    if (!feedback) return;
-    wf.generating = true;
-    updateBusyState();
-    setLog('Regenerating workflow\u2026', 'log-busy');
-    // Pass current source as context + feedback
-    if (wf.activeTab === 'source') wf.sourceContent = wfTextarea?.value || '';
-    sendWs({ type: 'workflow:generate', description: wf.sourceContent, feedback, existingName: editingName || undefined, selectedProfiles: getSelectedProfiles() });
-  });
+    nameEl?.addEventListener('input', () => { updateButtonStates(); updateNameSaveBtn(); });
 
-  // Regenerate (for existing workflows — regenerates JSON from description)
-  wfRegenBtn?.addEventListener('click', () => {
-    if (isAnyBusy()) return;
-    const desc = wfDesc?.value?.trim();
-    if (!desc) { setLog('Enter a description first', 'log-error'); return; }
-    wf.generating = true;
-    updateBusyState();
-    setLog('Regenerating source JSON\u2026', 'log-busy');
-    sendWs({ type: 'workflow:generate', description: desc, existingName: editingName || undefined, selectedProfiles: getSelectedProfiles() });
-  });
+    nameSaveBtn?.addEventListener('click', () => {
+      const newName = nameEl?.value?.trim();
+      if (!newName || !ed.editingName || newName === ed.editingName) return;
+      sendWs({ type: 'workflow:rename', oldName: ed.editingName, newName });
+      ed.editingName = newName;
+      nameSaveBtn.classList.add('hidden');
+      if (window.workflowRunModule?.updateTabLabel) {
+        window.workflowRunModule.updateTabLabel(tabId, newName);
+      }
+      setLog(`Renamed to "${newName}".`, 'log-success');
+    });
+    descEl?.addEventListener('input', updateButtonStates);
+    textareaEl?.addEventListener('input', updateButtonStates);
+    updateButtonStates();
 
-  // New workflow
-  document.getElementById('wfNewBtn')?.addEventListener('click', () => {
-    openEditModal(null, {
-      name: '',
-      description: '',
-      inputMode: 'none',
-      inputs: {},
-      steps: {
-        'step-1': { profile: 'full', do: 'Describe what to do', produces: 'description of output' },
-        'done': { do: 'Summarize what was done' },
-      },
-    }, null);
-  });
+    // Input mode radios
+    container.querySelectorAll(`input[name="wfcInputMode-${tabId}"]`).forEach(radio => {
+      radio.addEventListener('change', () => {
+        const mode = radio.value;
+        const hint = container.querySelector(`#wfc-input-hint-${tabId}`);
+        if (hint) hint.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
+        try {
+          const json = JSON.parse(textareaEl?.value || '{}');
+          json.inputMode = mode;
+          const updated = JSON.stringify(json, null, 2);
+          if (textareaEl) textareaEl.value = updated;
+          ed.sourceContent = updated;
+        } catch {}
+      });
+    });
 
+    // Tab switching
+    function switchEditorTab(tab) {
+      if (tab === 'compiled' && !ed.compiledContent) return;
+      if (ed.activeTab === 'source') ed.sourceContent = textareaEl?.value || '';
+      else if (ed.activeTab === 'compiled') ed.compiledContent = textareaEl?.value || '';
 
-  // --- Helpers ---
+      ed.activeTab = tab;
+      container.querySelectorAll('.wfc-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      const isHelp = tab === 'help';
+      textareaEl?.classList.toggle('hidden', isHelp);
+      helpEl?.classList.toggle('hidden', !isHelp);
+      if (!isHelp && textareaEl) {
+        textareaEl.value = tab === 'source' ? ed.sourceContent : (ed.compiledContent || '');
+      }
+      const compiledTab = container.querySelector(`#wfc-tab-compiled-${tabId}`);
+      compiledTab?.classList.toggle('disabled', !ed.compiledContent);
+    }
 
-  function getSelectedProfiles() {
-    if (!wfProfileList) return [];
-    return [...wfProfileList.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
-  }
+    container.querySelectorAll('.wfc-tab').forEach(t => {
+      t.addEventListener('click', () => switchEditorTab(t.dataset.tab));
+    });
 
-  function isModalOpen() {
-    return wfModal && !wfModal.classList.contains('hidden');
+    // Log helpers
+    function setLog(text, cls) {
+      if (!logEl) return;
+      logEl.classList.remove('hidden', 'log-error', 'log-success', 'log-busy');
+      if (cls) logEl.classList.add(cls);
+      logEl.textContent = text;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function appendLog(text) {
+      if (!logEl) return;
+      logEl.classList.remove('hidden');
+      logEl.textContent += text;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clearLog() {
+      if (!logEl) return;
+      logEl.textContent = '';
+      logEl.classList.add('hidden');
+      logEl.classList.remove('log-error', 'log-success', 'log-busy');
+    }
+
+    function getSelectedProfiles() {
+      const profileList = container.querySelector(`#wfc-profiles-${tabId}`);
+      if (!profileList) return [];
+      return [...profileList.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+    }
+
+    // --- Confirmation modal helper ---
+    function confirmOverwrite(title, detail) {
+      return new Promise(resolve => {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'alert-modal-backdrop';
+        backdrop.innerHTML = `<div class="alert-modal">
+          <div class="alert-modal-message">${escHtml(title)}<br><span style="font-size:11px;color:var(--text-dim)">${escHtml(detail)}</span></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="wfc-btn wfc-btn-secondary" id="wfc-confirm-cancel">Cancel</button>
+            <button class="wfc-btn wfc-btn-primary" id="wfc-confirm-ok">Continue</button>
+          </div>
+        </div>`;
+        document.body.appendChild(backdrop);
+        const dismiss = (val) => { backdrop.remove(); resolve(val); };
+        backdrop.querySelector('#wfc-confirm-cancel').addEventListener('click', () => dismiss(false));
+        backdrop.querySelector('#wfc-confirm-ok').addEventListener('click', () => dismiss(true));
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) dismiss(false); });
+        backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') dismiss(false); });
+        backdrop.querySelector('#wfc-confirm-ok').focus();
+      });
+    }
+
+    // --- Generate JSON ---
+    generateBtn?.addEventListener('click', async () => {
+      if (ed.generating || ed.compiling) return;
+      const desc = descEl?.value?.trim();
+      const name = nameEl?.value?.trim();
+      if (!desc || !name) return;
+
+      // Confirm overwrite if JSON already exists
+      if (hasSourceJson()) {
+        const ok = await confirmOverwrite(
+          'Overwrite existing JSON?',
+          'This will replace the current workflow source with a newly generated version.'
+        );
+        if (!ok) return;
+      }
+
+      ed.generating = true;
+      updateButtonStates();
+      clearLog();
+      setLog('Generating workflow\u2026', 'log-busy');
+      sendWs({ type: 'workflow:generate', description: desc, existingName: ed.editingName || undefined, selectedProfiles: getSelectedProfiles() });
+    });
+
+    // --- Compile ---
+    compileBtn?.addEventListener('click', async () => {
+      if (ed.generating || ed.compiling) return;
+      if (ed.activeTab === 'source') ed.sourceContent = textareaEl?.value || '';
+      let workflow;
+      try { workflow = JSON.parse(ed.sourceContent || '{}'); }
+      catch (e) { setLog('Cannot compile \u2014 invalid JSON: ' + e.message, 'log-error'); return; }
+      const wfName = nameEl?.value?.trim() || workflow.name || '';
+      if (!wfName) { setLog('Cannot compile \u2014 name is required', 'log-error'); return; }
+      workflow.name = wfName;
+      if (descEl?.value) workflow.description = descEl.value;
+
+      // Confirm overwrite if compiled JS already exists
+      if (ed.compiledContent) {
+        const ok = await confirmOverwrite(
+          'Overwrite existing compiled JS?',
+          'This will replace the current compiled JavaScript with a freshly compiled version.'
+        );
+        if (!ok) return;
+      }
+
+      sendWs({ type: 'workflow:save', name: wfName, workflow });
+      ed.editingName = wfName;
+      ed.compiling = true;
+      updateButtonStates();
+      setLog('Compiling\u2026', 'log-busy');
+      setTimeout(() => sendWs({ type: 'workflow:compile', name: wfName }), 300);
+    });
+
+    // --- Delete workflow ---
+    deleteBtn?.addEventListener('click', async () => {
+      const wfName = ed.editingName || nameEl?.value?.trim();
+      if (!wfName) return;
+      const backdrop = document.createElement('div');
+      backdrop.className = 'alert-modal-backdrop';
+      backdrop.innerHTML = `<div class="alert-modal">
+        <div class="alert-modal-message" style="color:var(--red)">Delete workflow "${escHtml(wfName)}"?<br><span style="font-size:11px;color:var(--text-dim)">This will remove the workflow definition and compiled JS. This cannot be undone.</span></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-del-cancel">Cancel</button>
+          <button class="wfc-btn wfc-btn-danger" id="wfc-del-confirm">Delete</button>
+        </div>
+      </div>`;
+      document.body.appendChild(backdrop);
+      backdrop.querySelector('#wfc-del-cancel').addEventListener('click', () => backdrop.remove());
+      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+      backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') backdrop.remove(); });
+      backdrop.querySelector('#wfc-del-confirm').addEventListener('click', () => {
+        backdrop.remove();
+        sendWs({ type: 'workflow:delete', name: wfName });
+        if (window.workflowRunModule) {
+          removeEditor(tabId);
+          const closeBtn = document.querySelector(`.view-tab[data-tab-id="${tabId}"] .view-tab-close`);
+          if (closeBtn) closeBtn.click();
+        }
+      });
+      backdrop.querySelector('#wfc-del-confirm').focus();
+    });
+
+    // Store update handlers on the editor so handleMessage can call them
+    ed._ui = { textareaEl, nameEl, descEl, logEl, helpEl, compileBtn, generateBtn, deleteBtn,
+               setLog, appendLog, clearLog, updateButtonStates, switchEditorTab };
   }
 
   // --- Message handling ---
+  function handleMessage(msg, targetTabId) {
+    // Find the editor for the active create tab
+    const tabId = targetTabId || findActiveCreateTabId();
+    if (!tabId) return;
+    const ed = editors.get(tabId);
+    if (!ed) return;
+    const ui = ed._ui;
+    if (!ui) return;
 
-  function handleMessage(msg) {
     switch (msg.type) {
       case 'workflow:list':
-        wf.workflows = msg.workflows || [];
+        // Nothing to do in editor for list updates
         break;
 
       case 'workflow:loaded':
-        openEditModal(msg.name, msg.workflow, msg.compiledSource || null);
+        // Re-render handled by workflow-runs module
         break;
 
       case 'workflow:generated':
-        wf.generating = false;
-        updateBusyState();
-        wf.lastGenerated = msg.workflow;
-        wf.sourceContent = JSON.stringify(msg.workflow, null, 2);
-        wf.compiledContent = null;
-        wf.activeTab = 'source';
-        if (wfTextarea) wfTextarea.value = wf.sourceContent;
-        if (wfName) { wfName.value = msg.workflow.name || ''; wfName.disabled = false; }
-        if (wfDesc) wfDesc.value = msg.workflow.description || wfDesc.value;
-        updateTabUI();
-        updateCompileHighlight(true);
-        if (wfRedoBar) wfRedoBar.classList.remove('hidden');
-        // Auto-save the generated JSON
+        ed.generating = false;
+        ed.sourceContent = JSON.stringify(msg.workflow, null, 2);
+        ed.compiledContent = null;
+        ed.activeTab = 'source';
+        if (ui.textareaEl) ui.textareaEl.value = ed.sourceContent;
+        if (ui.nameEl) ui.nameEl.value = msg.workflow.name || '';
+        if (ui.descEl) ui.descEl.value = msg.workflow.description || ui.descEl.value;
+
+        // Update compiled tab state
+        const compiledTab = ui.textareaEl?.closest('.wfc-form')?.querySelector(`#wfc-tab-compiled-${tabId}`);
+        compiledTab?.classList.toggle('disabled', true);
+
+        // Auto-save
         {
-          const name = wfName?.value?.trim() || msg.workflow.name || '';
+          const name = ui.nameEl?.value?.trim() || msg.workflow.name || '';
           if (name) {
             const wfToSave = { ...msg.workflow, name };
-            if (wfDesc?.value) wfToSave.description = wfDesc.value;
+            if (ui.descEl?.value) wfToSave.description = ui.descEl.value;
             sendWs({ type: 'workflow:save', name, workflow: wfToSave });
-            editingName = name;
-            if (wfName) wfName.disabled = true;
+            ed.editingName = name;
+            if (ui.deleteBtn) ui.deleteBtn.classList.remove('hidden');
           }
         }
-        wf.jsonDirty = false;
-        wf.jsDirty = false;
-        updateSaveButtons();
-        setLog('Generated and saved. Click "Compile Now" to create the executable JS.', 'log-success');
-        // Open modal if not already open
-        if (!isModalOpen()) wfModal?.classList.remove('hidden');
+        ui.updateButtonStates();
+        ui.setLog('Generated and saved.', 'log-success');
+
+        if (window.workflowRunModule?.updateTabLabel) {
+          window.workflowRunModule.updateTabLabel(tabId, msg.workflow.name || 'New');
+        }
         break;
 
       case 'workflow:compile:progress':
-        if (isModalOpen()) appendLog(msg.text);
+        if (ui.appendLog) ui.appendLog(msg.text);
         break;
 
       case 'workflow:compiled':
-        wf.compiling = false;
-        updateBusyState();
-        updateCompileHighlight(false);
-        if (msg.compiledSource && isModalOpen()) {
-          wf.compiledContent = msg.compiledSource;
-          // Clear the streaming log and show success — the code is now in the textarea
-          clearLog();
-          setLog('Compiled and saved.', 'log-success');
-          // Auto-switch to compiled tab
-          switchTab('compiled');
+        ed.compiling = false;
+        if (msg.compiledSource) {
+          ed.compiledContent = msg.compiledSource;
+          ui.clearLog();
+          ui.setLog('Compiled and saved.', 'log-success');
+          ui.switchEditorTab('compiled');
         }
-        wf.jsonDirty = false;
-        wf.jsDirty = false;
-        updateSaveButtons();
-        // List will be refreshed by the workflow:list that follows
+        ui.updateButtonStates();
         break;
 
       case 'workflow:error':
-        wf.generating = false;
-        wf.compiling = false;
-        updateBusyState();
-        if (isModalOpen()) {
-          setLog(msg.error || 'Unknown error', 'log-error');
-        } else {
-          showWfError(msg.error || 'Unknown error');
-        }
+        ed.generating = false;
+        ed.compiling = false;
+        ui.updateButtonStates();
+        ui.setLog(msg.error || 'Unknown error', 'log-error');
         break;
-
     }
   }
 
+  function findActiveCreateTabId() {
+    // Find the first editor that exists
+    for (const [tabId] of editors) return tabId;
+    return null;
+  }
+
   // --- Export ---
-  window.workflowModule = { handleMessage };
+  window.workflowModule = {
+    handleMessage,
+    renderCreateForm,
+    getEditor,
+    removeEditor,
+    hasEditor(tabId) { return editors.has(tabId); },
+  };
 })();

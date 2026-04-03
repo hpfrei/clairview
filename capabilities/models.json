@@ -169,6 +169,23 @@
       "cacheCreateCostPerMTok": 0.3
     },
     {
+      "name": "gemini-2.5-flash-lite",
+      "label": "Gemini 2.5 Flash Lite",
+      "description": "Google's lightest and cheapest Gemini model, optimized for ultra-low latency and cost efficiency (1M context)",
+      "providerKey": "google",
+      "provider": "gemini",
+      "modelId": "gemini-2.5-flash-lite",
+      "systemPromptMode": "replace",
+      "reasoning": true,
+      "webSearch": false,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "inputCostPerMTok": 0.1,
+      "outputCostPerMTok": 0.4,
+      "cacheReadCostPerMTok": 0.01,
+      "cacheCreateCostPerMTok": 0.1
+    },
+    {
       "name": "deepseek-v3",
       "label": "DeepSeek V3.2",
       "description": "DeepSeek's general-purpose model, non-thinking mode (128K context)",

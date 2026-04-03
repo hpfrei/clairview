@@ -34,7 +34,8 @@ class OpenAIProvider extends BaseProvider {
     for (const t of (body.tools || [])) {
       if ((t.type && /^web_(search|fetch)_/.test(t.type)) || ANTHROPIC_TOOL_NAMES.has(t.name)) {
         // Detect web search specifically (not web fetch) for provider injection
-        if ((t.type && t.type.startsWith('web_search_')) || t.name === 'WebSearch' || t.name === 'web_search') {
+        if (modelDef.webSearch !== false &&
+            ((t.type && t.type.startsWith('web_search_')) || t.name === 'WebSearch' || t.name === 'web_search')) {
           hasWebSearch = true;
         }
         // All Anthropic-only tools are stripped from the function tools list

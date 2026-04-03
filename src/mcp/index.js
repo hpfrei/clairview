@@ -485,4 +485,4 @@ function handleBridgeReport(report) {
   }
 }
 
-module.exports = { init, shutdown, handleBridgeReport };
+module.exports = { init, shutdown, handleBridgeReport, broadcastToolList, markNeedsRestart };

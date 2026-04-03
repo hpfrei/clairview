@@ -116,6 +116,34 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
     }
   });
 
+  // ── GET /api/file — serve a file from the outputs directory ───────
+  router.get('/file', (req, res) => {
+    const filePath = req.query.path;
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'Missing path parameter' });
+    }
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(OUTPUTS_DIR)) {
+      return res.status(403).json({ error: 'Access denied — file must be inside outputs directory' });
+    }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const ext = path.extname(resolved).toLowerCase();
+    const mimeTypes = {
+      '.html': 'text/html', '.htm': 'text/html',
+      '.json': 'application/json', '.js': 'text/javascript',
+      '.css': 'text/css', '.txt': 'text/plain', '.md': 'text/markdown',
+      '.csv': 'text/csv', '.xml': 'application/xml',
+      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+    };
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    fs.createReadStream(resolved).pipe(res);
+  });
+
   return router;
 }
 

@@ -40,6 +40,7 @@
       <button id="sessionPickerBtn" class="session-picker-btn" title="Click to manage sessions"></button>
       <button id="newSessionBtn" class="session-new-btn" title="New session">+ New</button>
       <button class="task-launcher hidden" id="taskLauncher" title="Show tasks &amp; todos">&#9745;</button>
+      <button class="restart-server-btn" id="restartServerBtn" title="Restart server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
     </div>
@@ -80,7 +81,13 @@
       <section id="detail">
         <div id="empty-state">
           <p>No interaction selected.</p>
-          <p class="hint">Run <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code> to capture API calls.</p>
+          <p class="empty-state-sub">Start capturing Claude Code API streams:</p>
+          <ul class="empty-state-list">
+            <li><b>External Claude</b> &mdash; run with the proxy env var:<br><code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code></li>
+            <li><b>Chat</b> &mdash; use the <span class="empty-state-link" data-view="claude">Chat</span> tab to talk to Claude directly through the proxy</li>
+            <li><b>Workflow</b> &mdash; run a multi-step workflow from the <span class="empty-state-link" data-view="workflow-runs">Workflows</span> tab</li>
+            <li><b>API</b> &mdash; POST to <code>/api/run</code> with a prompt to get an SSE stream</li>
+          </ul>
         </div>
         <div id="detail-content" class="hidden"></div>
       </section>
@@ -94,6 +101,20 @@
       <button class="view-tab-new" id="chatTabNew" title="New tab">+</button>
     </div>
     <div class="chat-container">
+      <div class="chat-files-panel collapsed" id="chatFilesBar">
+        <div class="chat-files-body" id="chatFilesBody">
+          <div class="chat-files-header">
+            <span class="chat-files-title">Files</span>
+            <span class="chat-files-count" id="chatFilesCount"></span>
+            <button class="chat-files-refresh" id="chatFilesRefresh" title="Refresh">&#8635;</button>
+          </div>
+          <div class="chat-files-list" id="chatFilesList"></div>
+        </div>
+        <button class="chat-files-handle" id="chatFilesHandle" title="Toggle files panel">
+          <span class="chat-files-handle-badge" id="chatFilesHandleBadge">&#128196; <span id="chatFilesHandleCount">0</span></span>
+          <span class="chat-files-handle-chevron">&#9662;</span>
+        </button>
+      </div>
       <div class="chat-messages" id="chatMessages">
         <div class="chat-welcome">
           Type a message below to start chatting with Claude.
@@ -1517,6 +1538,7 @@ any of these formats in its response.</pre>
   <!-- ===== MODELS VIEW ===== -->
   <div id="view-models" class="hidden" style="display:none">
     <div class="view-nav" id="modelsNav">
+      <button class="cap-action-btn view-nav-action" id="capRefreshModels" title="Reload models from disk">Refresh Models</button>
       <button class="cap-action-btn view-nav-action" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
     </div>
     <div class="view-body" id="modelsContent">
@@ -1525,16 +1547,24 @@ any of these formats in its response.</pre>
     </div>
   </div>
 
+  <div class="footer-gradient-bar">
+    <div class="footer-sep" style="left:200px"></div>
+    <div class="footer-sep" style="left:400px"></div>
+    <div class="footer-sep" style="left:600px"></div>
+    <div class="footer-sep" style="left:800px"></div>
+  </div>
   <footer>
     <div class="footer-section" id="footerStats">0 turns</div>
-    <div class="footer-section" id="footerTokens"></div>
-    <div class="footer-section" id="footerCache"></div>
-    <div class="footer-section" id="footerCost"></div>
-    <button class="footer-reset" id="footerReset" title="Reset counters">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.3 4V2.7a.7.7 0 01.7-.7h4a.7.7 0 01.7.7V4m1.3 0v9.3a1.3 1.3 0 01-1.3 1.3H5.3A1.3 1.3 0 014 13.3V4"/></svg>
-    </button>
+    <div class="footer-section" id="footerTokens"><span class="footer-placeholder">tokens</span></div>
+    <div class="footer-section" id="footerCache"><span class="footer-placeholder">cache</span></div>
+    <div class="footer-section" id="footerCost"><span class="footer-placeholder">price</span></div>
+    <div class="footer-section footer-section-reset">
+      <button class="footer-reset" id="footerReset" title="Reset counters">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.3 4V2.7a.7.7 0 01.7-.7h4a.7.7 0 01.7.7V4m1.3 0v9.3a1.3 1.3 0 01-1.3 1.3H5.3A1.3 1.3 0 014 13.3V4"/></svg>
+      </button>
+    </div>
     <div class="footer-spacer"></div>
-    <a class="footer-credit" href="https://hpfreilabs.com" target="_blank" rel="noopener">hpfreilabs.com</a>
+    <a class="footer-credit" href="https://hpfreilabs.com" target="_blank" rel="noopener">&copy; hpfreilabs.com</a>
   </footer>
 
   <!-- Directory Picker Modal -->

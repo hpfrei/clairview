@@ -19,6 +19,53 @@
   const tabStrip = document.getElementById('chatTabStrip');
   const tabNewBtn = document.getElementById('chatTabNew');
 
+  // --- Files panel ---
+  const filesPanel = document.getElementById('chatFilesBar');
+  const filesBody = document.getElementById('chatFilesBody');
+  const filesList = document.getElementById('chatFilesList');
+  const filesCount = document.getElementById('chatFilesCount');
+  const filesRefreshBtn = document.getElementById('chatFilesRefresh');
+  const filesHandle = document.getElementById('chatFilesHandle');
+
+  const filesHandleBadge = document.getElementById('chatFilesHandleBadge');
+  const filesHandleCount = document.getElementById('chatFilesHandleCount');
+
+  const tabFiles = new Map(); // tabId → { cwd, files[] }
+  let filesCollapsed = true;
+
+  function renderFilesBar(tabId) {
+    const data = tabFiles.get(tabId);
+    const count = data?.files?.length || 0;
+    if (!count) {
+      filesPanel?.classList.add('no-files');
+      return;
+    }
+    filesPanel?.classList.remove('no-files');
+    if (filesCount) filesCount.textContent = count;
+    if (filesHandleCount) filesHandleCount.textContent = count;
+    if (!filesList) return;
+    filesList.innerHTML = data.files.map(f => {
+      const sizeStr = f.size < 1024 ? f.size + ' B'
+        : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB'
+        : (f.size / 1048576).toFixed(1) + ' MB';
+      const ext = (f.name.split('.').pop() || '').toLowerCase();
+      const icon = { js: '\u{1F4C4}', json: '\u{1F4CB}', html: '\u{1F310}', css: '\u{1F3A8}', md: '\u{1F4DD}', txt: '\u{1F4C3}', png: '\u{1F5BC}', jpg: '\u{1F5BC}', svg: '\u{1F5BC}' }[ext] || '\u{1F4C4}';
+      const href = '/api/file?path=' + encodeURIComponent(f.path);
+      return `<a class="chat-files-chip" href="${escHtml(href)}" target="_blank" title="${escHtml(f.path)}">${icon} ${escHtml(f.name)} <span class="chat-files-size">${sizeStr}</span></a>`;
+    }).join('');
+  }
+
+  filesHandle?.addEventListener('click', () => {
+    filesCollapsed = !filesCollapsed;
+    filesPanel?.classList.toggle('collapsed', filesCollapsed);
+  });
+
+  filesRefreshBtn?.addEventListener('click', () => {
+    const data = tabFiles.get(activeTabId);
+    const cwd = data?.cwd || '';
+    window.dashboard.sendWs({ type: 'files:refresh', tabId: activeTabId, cwd });
+  });
+
   // Register default tab
   if (chatMessages) {
     tabs.set('tab-1', { container: chatMessages, currentEl: null, status: 'idle' });
@@ -47,15 +94,21 @@
 
   function renderTabStrip(tabList) {
     if (!tabStrip) return;
-    // Remove existing tab buttons (keep the + button)
     tabStrip.querySelectorAll('.view-tab').forEach(b => b.remove());
     const list = tabList || Array.from(tabs.keys());
     for (const tabId of list) {
+      const tab = tabs.get(tabId);
       const btn = document.createElement('button');
       btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '');
       btn.dataset.tabId = tabId;
       const label = tabId.startsWith('wf-') ? tabId : tabId.replace('tab-', 'Tab ');
       btn.innerHTML = escHtml(label);
+      if (tab?.status === 'running') {
+        const dot = document.createElement('span');
+        dot.className = 'busy-dot';
+        dot.style.marginLeft = '6px';
+        btn.appendChild(dot);
+      }
       if (tabId !== 'tab-1') {
         const closeBtn = document.createElement('span');
         closeBtn.className = 'view-tab-close';
@@ -116,6 +169,8 @@
     });
     // Sync shared state
     state.chatCurrentEl = active.currentEl;
+    // Update files bar for this tab
+    renderFilesBar(tabId);
   }
 
   // --- Send / input ---
@@ -246,7 +301,21 @@
     const tid = tabId || activeTabId;
     const tab = tabs.get(tid);
     if (tab) tab.status = status;
-    // Only update DOM if this is the active tab
+    // Update tab strip busy-dot for this tab
+    const tabBtn = tabStrip?.querySelector(`.view-tab[data-tab-id="${tid}"]`);
+    if (tabBtn) {
+      const existingDot = tabBtn.querySelector('.busy-dot');
+      if (status === 'running' && !existingDot) {
+        const dot = document.createElement('span');
+        dot.className = 'busy-dot';
+        dot.style.marginLeft = '6px';
+        const closeBtn = tabBtn.querySelector('.view-tab-close');
+        tabBtn.insertBefore(dot, closeBtn);
+      } else if (status !== 'running' && existingDot) {
+        existingDot.remove();
+      }
+    }
+    // Only update input area DOM if this is the active tab
     if (tid === activeTabId) {
       if (chatStatusEl) {
         chatStatusEl.textContent = status;
@@ -550,6 +619,12 @@
       case 'ask:timeout':
         markQuestionTimeout(msg.toolUseId);
         break;
+      case 'files:list': {
+        const fTabId = msg.tabId || activeTabId;
+        tabFiles.set(fTabId, { cwd: msg.cwd || '', files: msg.files || [] });
+        if (fTabId === activeTabId) renderFilesBar(fTabId);
+        break;
+      }
       case 'session:switched':
         resetChatView();
         if (msg.chatHistory?.length > 0) {
@@ -628,17 +703,20 @@
   }
 
   function handleTabList(tabList) {
-    // Sync local tab map with server's tab list
+    // Detect newly added tabs
+    let newTabId = null;
     for (const t of tabList) {
       if (!tabs.has(t.tabId)) {
         const container = document.createElement('div');
         container.className = 'chat-messages';
         container.innerHTML = welcomeHTML;
         tabs.set(t.tabId, { container, currentEl: null, status: t.status });
+        newTabId = t.tabId;
       }
     }
     const ids = tabList.map(t => t.tabId);
-    if (ids.length && !ids.includes(activeTabId)) switchTab(ids[0]);
+    if (newTabId) switchTab(newTabId);
+    else if (ids.length && !ids.includes(activeTabId)) switchTab(ids[0]);
     renderTabStrip(ids);
   }
 

@@ -191,6 +191,10 @@ Available templates in this skill directory:
             <input type="checkbox" id="pmAllowAllTools"${dis}> Allow all tools (pass <code>--allowedTools</code> — bypasses permission prompts)
           </label>
           <div class="pm-tool-grid" id="pmToolGrid"></div>
+          <div id="pmMcpToolSection" style="margin-top:12px">
+            <p class="cap-modal-hint" style="margin-bottom:6px"><strong>MCP Tools</strong> — integrated MCP server tools</p>
+            <div class="pm-tool-grid" id="pmMcpGrid"></div>
+          </div>
         </div>
         <div class="pm-form-group">
           <h4>System Prompts</h4>
@@ -273,6 +277,33 @@ minimal  plan mode, Read/Glob/Grep</pre>
       }
     }
 
+    // MCP tool checkbox grid
+    const mcpGrid = document.getElementById('pmMcpGrid');
+    const mcpSection = document.getElementById('pmMcpToolSection');
+    if (mcpGrid) {
+      mcpGrid.innerHTML = '';
+      const mcpTools = (state.mcpServers || []).filter(t => t.enabled !== false);
+      if (mcpTools.length === 0) {
+        if (mcpSection) mcpSection.style.display = 'none';
+      } else {
+        if (mcpSection) mcpSection.style.display = '';
+        const disabled = new Set(profile.disabledTools || []);
+        for (const tool of mcpTools) {
+          const fullName = 'mcp__integrated__' + tool.name;
+          const item = document.createElement('label');
+          item.className = 'pm-tool-item';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !disabled.has(fullName);
+          cb.dataset.tool = fullName;
+          if (isBuiltin) cb.disabled = true;
+          item.appendChild(cb);
+          item.appendChild(document.createTextNode(' ' + tool.name));
+          mcpGrid.appendChild(item);
+        }
+      }
+    }
+
     // Save button
     document.getElementById('pmSave')?.addEventListener('click', saveCurrentProfile);
     // Delete button
@@ -299,10 +330,11 @@ minimal  plan mode, Read/Glob/Grep</pre>
     document.querySelectorAll('#pmToolGrid input[type="checkbox"]').forEach(cb => {
       if (!cb.checked) disabledTools.push(cb.dataset.tool);
     });
-    const mcpServers = [];
+    // Collect disabled MCP tools
     document.querySelectorAll('#pmMcpGrid input[type="checkbox"]').forEach(cb => {
-      if (cb.checked) mcpServers.push(cb.dataset.slug);
+      if (!cb.checked) disabledTools.push(cb.dataset.tool);
     });
+    const mcpServers = [];
     const maxT = parseInt(document.getElementById('pmMaxTurns')?.value);
     const maxB = parseFloat(document.getElementById('pmMaxBudget')?.value);
     const profile = {
@@ -1005,6 +1037,19 @@ minimal  plan mode, Read/Glob/Grep</pre>
 
   document.getElementById('capModelCancel')?.addEventListener('click', closeModelModal);
   document.getElementById('capModelCancel2')?.addEventListener('click', closeModelModal);
+
+  // --- Refresh Models from disk ---
+  document.getElementById('capRefreshModels')?.addEventListener('click', () => {
+    const btn = document.getElementById('capRefreshModels');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="busy-dot"></span> Refreshing\u2026';
+    sendWs({ type: 'model:list' });
+    sendWs({ type: 'provider:list' });
+    // Re-enable after render (model:list response triggers renderModelsPanel)
+    const restore = () => { btn.disabled = false; btn.textContent = 'Refresh Models'; };
+    setTimeout(restore, 2000);
+  });
 
   // --- Refresh Pricing via claude -p ---
   document.getElementById('capRefreshPricing')?.addEventListener('click', () => {

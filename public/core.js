@@ -41,6 +41,7 @@ const state = {
   editingModel: null,
   mcpServers: [],
   outputsDir: '',
+  serverRestarting: false,
   // Tasks
   tasks: {},
   todos: [],
@@ -312,6 +313,40 @@ function showAlert(message) {
   backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') backdrop.remove(); });
 }
 
+// --- Restart server ---
+function showRestartingOverlay() {
+  state.serverRestarting = true;
+  document.querySelector('.restart-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'restart-overlay';
+  overlay.innerHTML = `<div class="restart-overlay-content"><div class="restart-spinner"></div><div class="restart-overlay-text">Server restarting\u2026</div></div>`;
+  document.body.appendChild(overlay);
+}
+
+async function doRestart() {
+  try {
+    const resp = await fetch('/api/restart', { method: 'POST' });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      showAlert(data.error || 'Restart failed');
+      return;
+    }
+    showRestartingOverlay();
+  } catch (err) {
+    showAlert('Failed to contact server: ' + err.message);
+  }
+}
+
+document.getElementById('restartServerBtn')?.addEventListener('click', doRestart);
+
+// Wire up clickable view links in empty state
+document.querySelectorAll('#empty-state .empty-state-link').forEach(el => {
+  el.addEventListener('click', () => {
+    const view = el.dataset.view;
+    if (view) document.querySelector(`.header-tab[data-view="${view}"]`)?.click();
+  });
+});
+
 // --- Expose API for modules ---
 window.dashboard = {
   showAlert,
@@ -345,9 +380,19 @@ function connect() {
     statusEl.textContent = 'connected';
     statusEl.className = 'status connected';
     state.reconnectDelay = 1000;
+    if (state.serverRestarting) {
+      state.serverRestarting = false;
+      document.querySelector('.restart-overlay')?.remove();
+    }
   };
 
   ws.onclose = (evt) => {
+    if (state.serverRestarting) {
+      statusEl.textContent = 'restarting';
+      statusEl.className = 'status disconnected';
+      setTimeout(connect, 1500);
+      return;
+    }
     if (evt.code === 1006 && state.reconnectDelay === 1000) {
       statusEl.textContent = 'unauthorized';
       statusEl.className = 'status disconnected';
@@ -413,6 +458,11 @@ function handleMessage(msg) {
       window.workflowRunModule?.handleSettings?.(msg);
       break;
 
+    // Server restart
+    case 'server:restarting':
+      showRestartingOverlay();
+      break;
+
     // Capabilities
     case 'skill:list':
     case 'agent:list':
@@ -432,25 +482,37 @@ function handleMessage(msg) {
       window.workflowRunModule?.handleMessage(msg);
       break;
     case 'workflow:loaded':
-      // Route to runs module if it requested the load
-      if (window.workflowRunModule?.pendingLoad === msg.name) {
+      // Route to runs module if it requested the load (run or edit)
+      if (window.workflowRunModule?.pendingLoad === msg.name || window.workflowRunModule?.pendingEdit?.name === msg.name) {
         window.workflowRunModule.handleMessage(msg);
       } else {
         window.workflowModule?.handleMessage(msg);
       }
       break;
+    case 'workflow:renamed':
+      window.workflowRunModule?.handleMessage(msg);
+      break;
     case 'workflow:generated':
     case 'workflow:compile:progress':
-    case 'workflow:compiled':
-      window.workflowModule?.handleMessage(msg);
+    case 'workflow:compiled': {
+      // Route to the create tab's editor
+      const createTabId = window.workflowRunModule?.getCreateTabId?.();
+      if (createTabId) {
+        window.workflowModule?.handleMessage(msg, createTabId);
+      }
       break;
+    }
     case 'workflow:error':
       if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
         window.workflowRunModule?.handleMessage(msg);
       } else if (msg.tabId) {
         window.chatModule?.handleMessage(msg);
       } else {
-        window.workflowModule?.handleMessage(msg);
+        // Route to create tab editor if one exists
+        const errCreateTabId = window.workflowRunModule?.getCreateTabId?.();
+        if (errCreateTabId) {
+          window.workflowModule?.handleMessage(msg, errCreateTabId);
+        }
       }
       break;
 
@@ -460,6 +522,15 @@ function handleMessage(msg) {
     case 'workflow:step:progress':
     case 'workflow:step:complete':
     case 'workflow:run:complete':
+      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
+        window.workflowRunModule?.handleMessage(msg);
+      } else {
+        window.chatModule?.handleMessage(msg);
+      }
+      break;
+
+    // Output files
+    case 'files:list':
       if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
         window.workflowRunModule?.handleMessage(msg);
       } else {
@@ -543,7 +614,7 @@ sessionPickerBtn?.addEventListener('click', () => {
       if (e.target.closest('.session-modal-del')) return;
       const id = parseInt(row.dataset.id, 10);
       if (id && state.ws?.readyState === WebSocket.OPEN) {
-        sendWs({ type: 'session:switch', id });
+        window.dashboard.sendWs({ type: 'session:switch', id });
       }
       close();
     });
@@ -555,7 +626,7 @@ sessionPickerBtn?.addEventListener('click', () => {
       e.stopPropagation();
       const id = parseInt(btn.dataset.id, 10);
       if (id && state.ws?.readyState === WebSocket.OPEN) {
-        sendWs({ type: 'session:delete', id });
+        window.dashboard.sendWs({ type: 'session:delete', id });
       }
       btn.closest('.session-modal-item').remove();
     });
@@ -566,7 +637,7 @@ sessionPickerBtn?.addEventListener('click', () => {
     if (state.ws?.readyState !== WebSocket.OPEN) return;
     for (const s of cachedSessions) {
       if (s.id !== state.activeSessionId) {
-        sendWs({ type: 'session:delete', id: s.id });
+        window.dashboard.sendWs({ type: 'session:delete', id: s.id });
       }
     }
     backdrop.querySelectorAll('.session-modal-item:not(.active)').forEach(el => el.remove());

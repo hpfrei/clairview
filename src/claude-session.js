@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, createStreamJsonParser, resolveOutputDir, OUTPUTS_DIR } = require('./utils');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, resolveOutputDir, OUTPUTS_DIR, listFiles } = require('./utils');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
@@ -33,6 +33,9 @@ class ClaudeSession {
   setCwd(dir) {
     this.cwd = resolveOutputDir(dir);
     this._broadcastSettings();
+    // Broadcast files in the new directory
+    const files = listFiles(this.cwd);
+    this.broadcaster.broadcast({ type: 'files:list', tabId: this.tabId, cwd: this.cwd, files });
     return true;
   }
 
@@ -192,6 +195,11 @@ class ClaudeSession {
     this.proc.on('close', (code) => {
       parser.flush();
       this._cleanupMcpConfig();
+      // Broadcast output files from the working directory
+      const files = listFiles(this.cwd);
+      if (files.length) {
+        this.broadcaster.broadcast({ type: 'files:list', tabId: this.tabId, cwd: this.cwd, files });
+      }
       this.broadcaster.broadcast({ type: 'chat:status', status: 'idle', exitCode: code });
       this.proc = null;
     });
