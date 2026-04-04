@@ -7,6 +7,7 @@ const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDash
 const { getProvider } = require('./providers/registry');
 const caps = require('./capabilities');
 const { getModelPricing } = caps;
+const enhancedAskTool = require('./ask-schema');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
@@ -66,11 +67,12 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instan
   }
   if (event.eventType === 'content_block_stop') {
     const tb = activeToolBlocks.get(event.data?.index);
-    if (tb && tb.name === 'AskUserQuestion') {
+    if (tb && tb.name === 'AskUserQuestion' && instanceId) {
       try {
         const input = JSON.parse(tb.inputJson);
         // Capture workflow context now (not later) to avoid race conditions with parallel steps
-        pendingQuestions.set(tb.id, { questions: input.questions || [], resolve: null, reject: null, ctx: getInstanceContext(instanceId) });
+        // Store full form data for enhanced AskUserQuestion (title, description, submitLabel, cancelLabel, questions)
+        pendingQuestions.set(tb.id, { formData: input, questions: input.questions || [], resolve: null, reject: null, ctx: getInstanceContext(instanceId) });
       } catch {}
     }
     activeToolBlocks.delete(event.data?.index);
@@ -110,7 +112,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     // --- AskUserQuestion interception ---
     // Scan request messages for error tool_results matching a pending question
     let intercepted = false;
-    if (body.messages) {
+    if (body.messages && req.instanceId) {
       for (const msg of body.messages) {
         if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
         for (let i = 0; i < msg.content.length; i++) {
@@ -133,6 +135,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
               type: 'ask:question',
               toolUseId,
               questions: pending.questions,
+              formData: pending.formData,
               ...(qCtx.tabId ? { tabId: qCtx.tabId, runId: qCtx.runId, stepId: qCtx.stepId } : {}),
             });
 
@@ -157,6 +160,24 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           }
         }
       }
+    }
+
+    // Replace AskUserQuestion schema with enhanced version (internal sessions only)
+    if (Array.isArray(body.tools) && req.instanceId) {
+      body.tools = body.tools.map(t => t.name === 'AskUserQuestion' ? enhancedAskTool : t);
+    }
+
+    // Remove tools that should never be sent to API endpoints
+    const REMOVED_TOOLS = new Set([
+      'mcp__claude_ai_Gmail__authenticate',
+      'mcp__claude_ai_Google_Calendar__authenticate',
+      'CronCreate', 'CronDelete', 'CronList',
+      'EnterWorktree', 'ExitWorktree',
+      'NotebookEdit',
+      'RemoteTrigger',
+    ]);
+    if (Array.isArray(body.tools)) {
+      body.tools = body.tools.filter(t => !REMOVED_TOOLS.has(t.name));
     }
 
     // Resolve profile and model from per-request URL context
@@ -230,6 +251,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
             });
           }
         }
+
+        // Re-snapshot request after profile-based tool filtering
+        interaction.request = { ...body };
 
         const translated = provider.translateRequest(body, modelDef);
         console.log(`[proxy] Translating to ${modelDef.name} (${modelDef.provider}) → ${translated.url}`);
@@ -473,8 +497,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           // Track AskUserQuestion in non-streaming responses too
           if (interaction.response.body.content) {
             for (const block of interaction.response.body.content) {
-              if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+              if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && interaction.instanceId) {
                 pendingQuestions.set(block.id, {
+                  formData: block.input || {},
                   questions: block.input?.questions || [],
                   resolve: null,
                   reject: null,

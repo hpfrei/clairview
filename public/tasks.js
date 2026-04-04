@@ -26,6 +26,49 @@
     completed:   '\u2611',  // ☑
   };
 
+  // --- Helpers ---
+
+  function getTaskSet(instanceId) {
+    const key = instanceId || '_none';
+    if (!state.taskSets[key]) {
+      state.taskSets[key] = { tasks: {}, todos: [] };
+    }
+    return state.taskSets[key];
+  }
+
+  function instanceIdForInteraction(interactionId) {
+    if (!interactionId) return '_none';
+    const interaction = state.interactions.find(i => i.id === interactionId);
+    return interaction?.instanceId || '_none';
+  }
+
+  function allTaskCount() {
+    let total = 0, done = 0;
+    for (const set of Object.values(state.taskSets)) {
+      const tasks = Object.values(set.tasks);
+      const todos = set.todos;
+      total += tasks.length + todos.length;
+      done += tasks.filter(t => t.status === 'completed').length;
+      done += todos.filter(t => t.status === 'completed').length;
+    }
+    return { total, done };
+  }
+
+  function hasAnyItems() {
+    for (const set of Object.values(state.taskSets)) {
+      if (Object.keys(set.tasks).length > 0 || set.todos.length > 0) return true;
+    }
+    return false;
+  }
+
+  function instanceLabel(instanceId) {
+    if (!instanceId || instanceId === '_none') return 'External';
+    if (window.inspectorModule?.instanceDisplayLabel) {
+      return window.inspectorModule.instanceDisplayLabel(instanceId);
+    }
+    return instanceId;
+  }
+
   // --- Panel controls ---
 
   taskPanelClose?.addEventListener('click', () => {
@@ -42,9 +85,12 @@
 
   function updateTaskLauncher() {
     if (!taskLauncher) return;
-    const hasItems = Object.keys(state.tasks).length > 0 || state.todos.length > 0;
-    if (hasItems && state.taskPanelCollapsed) {
+    const has = hasAnyItems();
+    if (has) {
+      const { total, done } = allTaskCount();
+      taskLauncher.textContent = `Tasks ${done}/${total}`;
       taskLauncher.classList.remove('hidden');
+      taskLauncher.classList.toggle('task-launcher-active', done < total);
     } else {
       taskLauncher.classList.add('hidden');
     }
@@ -59,11 +105,10 @@
       if (e.target.closest('.task-panel-close')) return;
       dragging = true;
       const rect = taskPanel.getBoundingClientRect();
-      const parentRect = taskPanel.offsetParent.getBoundingClientRect();
       startX = e.clientX;
       startY = e.clientY;
-      startLeft = rect.left - parentRect.left;
-      startTop = rect.top - parentRect.top;
+      startLeft = rect.left;
+      startTop = rect.top;
       taskPanel.style.left = startLeft + 'px';
       taskPanel.style.top = startTop + 'px';
       taskPanel.style.right = 'auto';
@@ -75,11 +120,10 @@
       if (!dragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      const parentRect = taskPanel.offsetParent.getBoundingClientRect();
       let newLeft = startLeft + dx;
       let newTop = startTop + dy;
-      newLeft = Math.max(0, Math.min(newLeft, parentRect.width - taskPanel.offsetWidth));
-      newTop = Math.max(0, Math.min(newTop, parentRect.height - taskPanel.offsetHeight));
+      newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - taskPanel.offsetWidth));
+      newTop = Math.max(0, Math.min(newTop, window.innerHeight - taskPanel.offsetHeight));
       taskPanel.style.left = newLeft + 'px';
       taskPanel.style.top = newTop + 'px';
     });
@@ -93,11 +137,11 @@
 
   // --- SSE interception ---
 
-  function interceptTaskToolSSE(event) {
+  function interceptTaskToolSSE(event, interactionId) {
     if (event.eventType === 'content_block_start' && event.data?.content_block?.type === 'tool_use') {
       const cb = event.data.content_block;
       if (cb.name === 'TaskCreate' || cb.name === 'TaskUpdate' || cb.name === 'TodoWrite') {
-        state.pendingTaskTools[event.data.index] = { name: cb.name, inputJson: '' };
+        state.pendingTaskTools[event.data.index] = { name: cb.name, inputJson: '', interactionId };
       }
     } else if (event.eventType === 'content_block_delta' && event.data?.delta?.type === 'input_json_delta') {
       const pending = state.pendingTaskTools[event.data.index];
@@ -108,14 +152,15 @@
       const pending = state.pendingTaskTools[event.data?.index];
       if (pending) {
         delete state.pendingTaskTools[event.data.index];
+        const instanceId = instanceIdForInteraction(pending.interactionId);
         try {
           const input = JSON.parse(pending.inputJson);
           if (pending.name === 'TaskCreate') {
-            applyTaskCreate(input);
+            applyTaskCreate(input, instanceId);
           } else if (pending.name === 'TaskUpdate') {
-            applyTaskUpdate(input);
+            applyTaskUpdate(input, instanceId);
           } else if (pending.name === 'TodoWrite') {
-            applyTodoWrite(input);
+            applyTodoWrite(input, instanceId);
           }
         } catch {}
       }
@@ -124,9 +169,10 @@
 
   // --- Apply functions ---
 
-  function applyTaskCreate(input) {
+  function applyTaskCreate(input, instanceId) {
+    const set = getTaskSet(instanceId);
     const id = input.id || input.taskId || `task-${Date.now()}`;
-    state.tasks[id] = {
+    set.tasks[id] = {
       id,
       subject: input.subject || input.title || '',
       description: input.description || '',
@@ -138,10 +184,11 @@
     renderTaskPanel();
   }
 
-  function applyTaskUpdate(input) {
+  function applyTaskUpdate(input, instanceId) {
+    const set = getTaskSet(instanceId);
     const id = input.id || input.taskId;
     if (!id) return;
-    const task = state.tasks[id];
+    const task = set.tasks[id];
     if (!task) return;
 
     if (input.status) task.status = input.status;
@@ -159,15 +206,15 @@
       const deps = Array.isArray(input.addBlocks) ? input.addBlocks : [input.addBlocks];
       for (const dep of deps) {
         if (!task.blocks.includes(dep)) task.blocks.push(dep);
-        if (state.tasks[dep] && !state.tasks[dep].blockedBy.includes(id)) {
-          state.tasks[dep].blockedBy.push(id);
+        if (set.tasks[dep] && !set.tasks[dep].blockedBy.includes(id)) {
+          set.tasks[dep].blockedBy.push(id);
         }
       }
     }
 
     if (task.status === 'completed') {
       for (const downstreamId of task.blocks) {
-        const downstream = state.tasks[downstreamId];
+        const downstream = set.tasks[downstreamId];
         if (!downstream) continue;
         downstream.blockedBy = downstream.blockedBy.filter(b => b !== id);
         if (downstream.blockedBy.length === 0 && downstream.status === 'blocked') {
@@ -179,9 +226,10 @@
     renderTaskPanel();
   }
 
-  function applyTodoWrite(input) {
+  function applyTodoWrite(input, instanceId) {
+    const set = getTaskSet(instanceId);
     const todos = input.todos || [];
-    state.todos = todos.map((t, i) => ({
+    set.todos = todos.map((t, i) => ({
       id: t.id || `todo-${i}`,
       content: t.content || '',
       status: t.status || 'pending',
@@ -194,9 +242,7 @@
 
   function renderTaskPanel() {
     if (!taskPanel || !taskPanelList) return;
-    const tasks = Object.values(state.tasks);
-    const todos = state.todos;
-    if (tasks.length === 0 && todos.length === 0) {
+    if (!hasAnyItems()) {
       taskPanel.classList.add('hidden');
       updateTaskLauncher();
       return;
@@ -207,14 +253,33 @@
     updateTaskLauncher();
 
     const headerLabel = taskPanel.querySelector('.task-panel-header span');
-    if (headerLabel) {
-      if (tasks.length > 0 && todos.length > 0) headerLabel.textContent = 'Tasks & Todos';
-      else if (todos.length > 0) headerLabel.textContent = 'Todos';
-      else headerLabel.textContent = 'Tasks';
-    }
+    if (headerLabel) headerLabel.textContent = 'Tasks';
 
     taskPanelList.innerHTML = '';
 
+    const instanceIds = Object.keys(state.taskSets).filter(k => {
+      const s = state.taskSets[k];
+      return Object.keys(s.tasks).length > 0 || s.todos.length > 0;
+    });
+    const multiInstance = instanceIds.length > 1;
+
+    for (const instId of instanceIds) {
+      const set = state.taskSets[instId];
+      const tasks = Object.values(set.tasks);
+      const todos = set.todos;
+
+      if (multiInstance) {
+        const label = document.createElement('div');
+        label.className = 'task-section-label task-instance-label';
+        label.textContent = instanceLabel(instId);
+        taskPanelList.appendChild(label);
+      }
+
+      renderTaskItems(tasks, todos, set.tasks);
+    }
+  }
+
+  function renderTaskItems(tasks, todos, tasksMap) {
     const order = { in_progress: 0, pending: 1, blocked: 2, failed: 3, cancelled: 4, completed: 5 };
 
     if (tasks.length > 0) {
@@ -259,7 +324,7 @@
         if (task.blockedBy.length > 0) {
           const bl = document.createElement('div');
           bl.className = 'task-blocked-label';
-          const names = task.blockedBy.map(bid => state.tasks[bid]?.subject || bid).join(', ');
+          const names = task.blockedBy.map(bid => tasksMap[bid]?.subject || bid).join(', ');
           bl.textContent = `blocked by: ${names}`;
           body.appendChild(bl);
         }
@@ -309,10 +374,9 @@
   // --- Session reset ---
 
   function resetTasks() {
-    state.tasks = {};
-    state.todos = [];
+    state.taskSets = {};
     state.pendingTaskTools = {};
-    state.taskPanelCollapsed = false;
+    state.taskPanelCollapsed = true;
     if (taskPanel) taskPanel.classList.add('hidden');
     updateTaskLauncher();
   }

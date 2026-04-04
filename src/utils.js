@@ -283,6 +283,56 @@ function listFiles(dir) {
   } catch { return []; }
 }
 
+// --- AskUserQuestion file upload processing ---
+
+/**
+ * Process uploaded files from an ask:answer message.
+ * Saves files to outputs/_uploads/<toolUseId>/, patches the answer array with relative paths.
+ * @param {string} toolUseId - The tool_use_id for namespacing
+ * @param {Array} files - Array of { questionId, name, data } where data is a base64 data URL
+ * @param {Array} answer - The answer array to patch (file-type entries get path arrays)
+ * @returns {Array} The patched answer array
+ */
+function processUploadedFiles(toolUseId, files, answer) {
+  if (!files || !files.length) return answer;
+
+  const uploadDir = path.join(OUTPUTS_DIR, '_uploads', toolUseId);
+  ensureDir(uploadDir);
+
+  // Group files by questionId
+  const byQuestion = {};
+  for (const f of files) {
+    if (!byQuestion[f.questionId]) byQuestion[f.questionId] = [];
+
+    // Sanitize filename: strip path separators, limit length, allowlist chars
+    let safeName = (f.name || 'file').replace(/[/\\]/g, '_').replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (safeName.length > 200) safeName = safeName.slice(0, 200);
+
+    // Decode base64 data URL
+    const match = (f.data || '').match(/^data:[^;]*;base64,(.+)$/);
+    if (!match) continue;
+
+    const buffer = Buffer.from(match[1], 'base64');
+    const filePath = path.join(uploadDir, safeName);
+    fs.writeFileSync(filePath, buffer);
+
+    // Relative path from project root
+    const relPath = `_uploads/${toolUseId}/${safeName}`;
+    byQuestion[f.questionId].push(relPath);
+  }
+
+  // Patch answer entries
+  if (Array.isArray(answer)) {
+    for (const entry of answer) {
+      if (byQuestion[entry.id]) {
+        entry.answer = byQuestion[entry.id];
+      }
+    }
+  }
+
+  return answer;
+}
+
 module.exports = {
   generateId,
   filterRequestHeaders,
@@ -302,4 +352,5 @@ module.exports = {
   readJSON,
   writeJSON,
   listFiles,
+  processUploadedFiles,
 };

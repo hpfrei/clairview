@@ -1,6 +1,6 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, resolveOutputDir, listFiles } = require('./utils');
+const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, resolveOutputDir, listFiles, processUploadedFiles } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
@@ -132,7 +132,12 @@ class DashboardBroadcaster {
             // Resolve a pending AskUserQuestion
             const pending = pendingQuestions.get(msg.toolUseId);
             if (pending?.resolve) {
-              pending.resolve(msg.answer);
+              let answer = msg.answer;
+              // Process file uploads if present
+              if (msg.files?.length && Array.isArray(answer)) {
+                answer = processUploadedFiles(msg.toolUseId, msg.files, answer);
+              }
+              pending.resolve(answer);
             }
           // --- Capabilities / Profiles ---
           } else if (msg.type === 'chat:setCapabilities' && this.sessionManager) {

@@ -29,8 +29,30 @@
   let activeInstanceTab = 'all';
   const inspectorTabStrip = document.getElementById('inspectorTabStrip');
 
+  // --- External session tabs ---
+  let extTabCounter = 0;
+  let activeExtTab = null; // e.g. 'ext-1'
+
+  function stampExtInteraction(interaction) {
+    // Assign null-instanceId interactions to the active ext tab (auto-create if needed)
+    if (interaction.instanceId) return;
+    if (!activeExtTab) {
+      extTabCounter++;
+      activeExtTab = `ext-${extTabCounter}`;
+      knownInstances.set(activeExtTab, {
+        instanceId: activeExtTab, profileName: null,
+        status: 'running', spawnedAt: interaction.timestamp || Date.now(),
+      });
+      renderInspectorTabStrip();
+    }
+    interaction.instanceId = activeExtTab;
+  }
+
   function instanceDisplayLabel(instanceId) {
     if (!instanceId || instanceId === 'all') return 'Others';
+    // ext-1 → "Ext 1"
+    const extMatch = instanceId.match(/^ext-(\d+)$/);
+    if (extMatch) return `Ext ${extMatch[1]}`;
     // chat-tab-1 → "Chat 1"
     const chatMatch = instanceId.match(/^chat-tab-(\d+)$/);
     if (chatMatch) return `Chat ${chatMatch[1]}`;
@@ -520,7 +542,12 @@
     const idx = state.interactions.findIndex(i => i.id === updated.id);
     if (idx >= 0) {
       const localEvents = state.interactions[idx].response?.sseEvents || [];
+      const localInstanceId = state.interactions[idx].instanceId;
       state.interactions[idx] = { ...updated, response: { ...updated.response, sseEvents: localEvents } };
+      // Preserve locally-stamped ext instanceId (server sends null for external sessions)
+      if (!updated.instanceId && localInstanceId) {
+        state.interactions[idx].instanceId = localInstanceId;
+      }
     }
 
     updateTurnBadge(updated.id, updated.status || 'complete');
@@ -791,6 +818,7 @@
     if (!tab) return;
     const busy = state.interactions.some(i => i.status === 'pending' || i.status === 'streaming');
     tab.classList.toggle('busy', busy);
+    document.title = busy ? '● vistaclair' : 'vistaclair';
     updateInstanceBusy();
   }
 
@@ -1404,14 +1432,22 @@
     switch (msg.type) {
       case 'init':
         _userPinnedSelection = false;
+        extTabCounter = 0;
+        activeExtTab = null;
         state.interactions = msg.interactions || [];
-        // Rebuild instance map from historical interactions
+        // Stamp null-instanceId interactions as ext tabs, rebuild instance map
         for (const i of state.interactions) {
+          stampExtInteraction(i);
           if (i.instanceId && !knownInstances.has(i.instanceId)) {
             knownInstances.set(i.instanceId, {
               instanceId: i.instanceId, profileName: i.profile, status: 'exited', spawnedAt: i.timestamp,
             });
           }
+        }
+        // Mark ext tabs as exited on init (they're historical)
+        for (let n = 1; n <= extTabCounter; n++) {
+          const ext = knownInstances.get(`ext-${n}`);
+          if (ext) ext.status = 'exited';
         }
         renderInspectorTabStrip();
         renderTimeline();
@@ -1425,6 +1461,7 @@
         break;
 
       case 'interaction:start':
+        stampExtInteraction(msg.interaction);
         state.interactions.push(msg.interaction);
         // Auto-discover instance from interaction
         if (msg.interaction.instanceId && !knownInstances.has(msg.interaction.instanceId)) {
@@ -1477,6 +1514,8 @@
         state.selection = null;
         knownInstances.clear();
         activeInstanceTab = 'all';
+        extTabCounter = 0;
+        activeExtTab = null;
         renderInspectorTabStrip();
         renderTimeline();
         updateStats();
@@ -1502,6 +1541,8 @@
         state.selection = null;
         knownInstances.clear();
         activeInstanceTab = 'all';
+        extTabCounter = 0;
+        activeExtTab = null;
         renderInspectorTabStrip();
         timelineList.innerHTML = '';
         detailContent.innerHTML = '';
@@ -1539,5 +1580,15 @@
     });
   }
 
-  window.inspectorModule = { handleMessage };
+  function newExtTab() {
+    extTabCounter++;
+    activeExtTab = `ext-${extTabCounter}`;
+    knownInstances.set(activeExtTab, {
+      instanceId: activeExtTab, profileName: null,
+      status: 'running', spawnedAt: Date.now(),
+    });
+    switchInstanceTab(activeExtTab);
+  }
+
+  window.inspectorModule = { handleMessage, newExtTab, instanceDisplayLabel };
 })();

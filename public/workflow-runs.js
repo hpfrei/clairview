@@ -516,54 +516,25 @@
       renderTabStrip();
     });
 
-    // Event: escalation option toggle (never auto-submit)
-    const escSubmitBtn = container.querySelector('.wfrun-esc-submit');
-    function checkEscReady() {
-      if (!escSubmitBtn || !tab.pendingQuestion) return;
+    // Event: escalation form interactivity via shared askFormBind
+    const escEl = container.querySelector('.wfrun-escalation');
+    if (escEl && tab.pendingQuestion) {
       const pq = tab.pendingQuestion;
-      const ready = (pq.questions || []).some((_, qi) => {
-        const sel = container.querySelectorAll(`.wfrun-esc-option.selected[data-qi="${qi}"]`);
-        const ta = container.querySelector(`.wfrun-esc-textarea[data-qi="${qi}"]`);
-        return sel.length > 0 || (ta && ta.value.trim());
-      });
-      escSubmitBtn.disabled = !ready;
-    }
-    container.querySelectorAll('.wfrun-esc-option').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (!tab.pendingQuestion) return;
-        const qi = btn.dataset.qi;
-        container.querySelectorAll(`.wfrun-esc-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
-        btn.classList.add('selected');
-        checkEscReady();
-      });
-    });
-    container.querySelectorAll('.wfrun-esc-textarea').forEach(ta => {
-      ta.addEventListener('input', checkEscReady);
-    });
-    if (escSubmitBtn) {
-      escSubmitBtn.addEventListener('click', () => {
-        if (!tab.pendingQuestion) return;
-        const pq = tab.pendingQuestion;
-        const answer = (pq.questions || []).map((q, qi) => {
-          const ta = container.querySelector(`.wfrun-esc-textarea[data-qi="${qi}"]`);
-          const freeText = ta?.value?.trim() || '';
-          if (freeText) {
-            const sel = container.querySelectorAll(`.wfrun-esc-option.selected[data-qi="${qi}"]`);
-            const labels = Array.from(sel).map(b => b.dataset.label);
-            return { question: q?.question || '', answer: labels.length > 0 ? `${labels.join(', ')} — ${freeText}` : freeText };
-          }
-          const sel = container.querySelectorAll(`.wfrun-esc-option.selected[data-qi="${qi}"]`);
-          const labels = Array.from(sel).map(b => b.dataset.label);
-          return { question: q?.question || '', answer: labels[0] || '' };
-        });
-        sendWs({ type: 'ask:answer', toolUseId: pq.toolUseId, answer });
-        tab.answeredQuestions.push({
-          stepId: pq.stepId,
-          questions: pq.questions,
-          answer,
-        });
-        tab.pendingQuestion = null;
-        renderActivePhase(tab);
+      const fd = pq.formData || { questions: pq.questions || [] };
+      dashboard.askFormBind(escEl, fd, {
+        onSubmit(answer, files) {
+          const msg = { type: 'ask:answer', toolUseId: pq.toolUseId, answer };
+          if (files) msg.files = files;
+          sendWs(msg);
+          tab.answeredQuestions.push({ stepId: pq.stepId, questions: pq.questions, answer });
+          tab.pendingQuestion = null;
+          renderActivePhase(tab);
+        },
+        onCancel() {
+          sendWs({ type: 'ask:answer', toolUseId: pq.toolUseId, answer: { cancelled: true } });
+          tab.pendingQuestion = null;
+          renderActivePhase(tab);
+        },
       });
     }
 
@@ -582,26 +553,8 @@
   }
 
   function renderEscalation(pq) {
-    let html = '<div class="wfrun-escalation">';
-    for (let qi = 0; qi < (pq.questions || []).length; qi++) {
-      const q = pq.questions[qi];
-      if (q.header) html += `<div class="wfrun-esc-header">${escHtml(q.header)}</div>`;
-      if (q.question) html += `<div class="wfrun-esc-question markdown-body">${inlineMd(q.question)}</div>`;
-      if (q.options && q.options.length > 0) {
-        html += '<div class="wfrun-esc-options">';
-        for (const opt of q.options) {
-          html += `<button class="wfrun-esc-option" data-qi="${qi}" data-label="${escHtml(opt.label)}">`;
-          html += `<span class="wfrun-esc-opt-label">${escHtml(opt.label)}</span>`;
-          if (opt.description) html += `<span class="wfrun-esc-opt-desc markdown-body">${inlineMd(opt.description)}</span>`;
-          html += `</button>`;
-        }
-        html += '</div>';
-      }
-      html += `<textarea class="wfrun-esc-textarea" data-qi="${qi}" rows="2" placeholder="Or type your answer here..."></textarea>`;
-    }
-    html += `<button class="wfrun-esc-submit" disabled>Submit</button>`;
-    html += '</div>';
-    return html;
+    const fd = pq.formData || { questions: pq.questions || [] };
+    return '<div class="wfrun-escalation">' + dashboard.askFormBuildHTML(fd) + '</div>';
   }
 
   function renderAnsweredQuestion(aq) {
@@ -745,6 +698,7 @@
         t.pendingQuestion = {
           toolUseId: msg.toolUseId,
           questions: msg.questions || [],
+          formData: msg.formData || { questions: msg.questions || [] },
           stepId: msg.stepId,
         };
         if (msg.tabId === activeTabId) renderActivePhase(t);

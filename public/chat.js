@@ -393,7 +393,7 @@
   // ASK USER QUESTION
   // ============================================================
 
-  function showAskQuestion(toolUseId, questions, tabId) {
+  function showAskQuestion(toolUseId, questions, tabId, formData) {
     const tid = tabId || activeTabId;
     const tab = tabs.get(tid);
     const container = tab?.container || chatMessages;
@@ -413,140 +413,48 @@
     bubble.className = 'chat-bubble chat-question';
     bubble.dataset.toolUseId = toolUseId;
 
-    let html = '';
-    for (let qi = 0; qi < (questions || []).length; qi++) {
-      const q = questions[qi];
-      const isMulti = !!q.multiSelect;
+    // Use enhanced form rendering from core.js
+    const fd = formData || { questions: questions || [] };
+    bubble.innerHTML = dashboard.askFormBuildHTML(fd) + `<span class="chat-time">${formatTime()}</span>`;
 
-      if (qi > 0) html += `<div class="chat-question-divider"></div>`;
-      if (q.header) {
-        html += `<div class="chat-question-header">${escHtml(q.header)}</div>`;
-      }
-      html += `<div class="chat-question-text markdown-body">${inlineMd(q.question)}</div>`;
-      if (isMulti) {
-        html += `<div class="chat-question-hint">Select one or more</div>`;
-      }
-
-      if (q.options && q.options.length > 0) {
-        html += `<div class="chat-options" data-qi="${qi}" data-multi="${isMulti}">`;
-        for (const opt of q.options) {
-          html += `<button class="chat-option-btn" data-qi="${qi}" data-label="${escHtml(opt.label)}">`;
-          if (isMulti) {
-            html += `<span class="chat-option-check"></span>`;
-          }
-          html += `<span class="chat-option-label">${escHtml(opt.label)}</span>`;
-          if (opt.description) {
-            html += `<span class="chat-option-desc markdown-body">${inlineMd(opt.description)}</span>`;
-          }
-          html += `</button>`;
+    dashboard.askFormBind(bubble, fd, {
+      onSubmit(answer, files) {
+        sendQuestionAnswer(toolUseId, answer, files);
+        // Show submitted answer summary
+        const answerText = answer.map(a => {
+          const val = Array.isArray(a.answer) ? a.answer.join(', ') : a.answer;
+          return typeof val === 'boolean' ? (val ? 'Yes' : 'No') : val;
+        }).filter(v => v !== undefined && v !== null && v !== '').join('; ');
+        if (answerText) {
+          const answerEl = document.createElement('div');
+          answerEl.className = 'chat-question-answer';
+          answerEl.textContent = answerText;
+          bubble.appendChild(answerEl);
         }
-        html += `</div>`;
-      }
-
-      // Free-text input
-      html += `<textarea class="chat-question-textarea" data-qi="${qi}" rows="2" placeholder="Or type your answer here..."></textarea>`;
-    }
-
-    // Always show submit + timestamp
-    html += `<button class="chat-submit-btn" disabled>Submit</button>`;
-    html += `<span class="chat-time">${formatTime()}</span>`;
-
-    bubble.innerHTML = html;
-
-    const allQuestions = questions || [];
-    const submitBtn = bubble.querySelector('.chat-submit-btn');
-
-    function checkSubmitReady() {
-      if (!submitBtn) return;
-      const ready = allQuestions.some((_, qi) => {
-        const sel = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
-        const ta = bubble.querySelector(`.chat-question-textarea[data-qi="${qi}"]`);
-        return sel.length > 0 || (ta && ta.value.trim());
-      });
-      submitBtn.disabled = !ready;
-    }
-
-    // Option click: toggle selection (never auto-submit)
-    bubble.querySelectorAll('.chat-option-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const qi = parseInt(btn.dataset.qi);
-        const q = allQuestions[qi];
-        const isMulti = !!q?.multiSelect;
-        const optionsContainer = bubble.querySelector(`.chat-options[data-qi="${qi}"]`);
-
-        if (isMulti) {
-          btn.classList.toggle('selected');
-        } else {
-          optionsContainer.querySelectorAll('.chat-option-btn').forEach(b => b.classList.remove('selected'));
-          btn.classList.add('selected');
-        }
-
-        checkSubmitReady();
-      });
-    });
-
-    // Textarea input: enable submit when text entered
-    bubble.querySelectorAll('.chat-question-textarea').forEach(ta => {
-      ta.addEventListener('input', checkSubmitReady);
-    });
-
-    submitBtn.addEventListener('click', () => {
-      const answer = allQuestions.map((q, qi) => {
-        const ta = bubble.querySelector(`.chat-question-textarea[data-qi="${qi}"]`);
-        const freeText = ta?.value?.trim() || '';
-
-        // Free text takes priority if filled
-        if (freeText) {
-          const selected = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
-          const labels = Array.from(selected).map(b => b.dataset.label);
-          return {
-            question: q.question,
-            answer: labels.length > 0 ? `${labels.join(', ')} — ${freeText}` : freeText,
-          };
-        }
-
-        const selected = bubble.querySelectorAll(`.chat-option-btn.selected[data-qi="${qi}"]`);
-        const labels = Array.from(selected).map(b => b.dataset.label);
-        return {
-          question: q.question,
-          answer: q.multiSelect ? labels : labels[0] || '',
-        };
-      });
-
-      sendQuestionAnswer(toolUseId, answer);
-      bubble.querySelectorAll('.chat-option-btn').forEach(b => b.disabled = true);
-      bubble.querySelectorAll('.chat-question-textarea').forEach(ta => ta.disabled = true);
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'Submitted';
-      bubble.classList.add('answered');
-
-      // Show submitted answer
-      const answerText = answer.map(a => {
-        const val = Array.isArray(a.answer) ? a.answer.join(', ') : a.answer;
-        return val;
-      }).filter(Boolean).join('; ');
-      if (answerText) {
+      },
+      onCancel() {
+        sendQuestionAnswer(toolUseId, { cancelled: true });
         const answerEl = document.createElement('div');
-        answerEl.className = 'chat-question-answer';
-        answerEl.textContent = answerText;
+        answerEl.className = 'chat-question-answer chat-question-cancelled';
+        answerEl.textContent = 'Cancelled';
         bubble.appendChild(answerEl);
-      }
+      },
     });
 
     container.appendChild(bubble);
-    // Typeset math in question content
     if (window.MathJax?.typesetPromise) window.MathJax.typesetPromise([bubble]).catch(() => {});
     if (tid === activeTabId) chatScrollToBottom();
   }
 
-  function sendQuestionAnswer(toolUseId, answer) {
+  function sendQuestionAnswer(toolUseId, answer, files) {
     if (state.ws?.readyState === WebSocket.OPEN) {
-      sendWs({ type: 'ask:answer', toolUseId, answer });
+      const msg = { type: 'ask:answer', toolUseId, answer };
+      if (files) msg.files = files;
+      sendWs(msg);
     }
   }
 
   function markQuestionAnswered(toolUseId) {
-    // Search all tabs for the question bubble
     for (const tab of tabs.values()) {
       const bubble = tab.container?.querySelector(`.chat-question[data-tool-use-id="${toolUseId}"]`);
       if (bubble) { bubble.classList.add('answered'); return; }
@@ -611,7 +519,7 @@
         handleTabList(msg.tabs || []);
         break;
       case 'ask:question':
-        showAskQuestion(msg.toolUseId, msg.questions, tabId);
+        showAskQuestion(msg.toolUseId, msg.questions, tabId, msg.formData);
         break;
       case 'ask:answered':
         markQuestionAnswered(msg.toolUseId);

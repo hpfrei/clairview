@@ -42,11 +42,10 @@ const state = {
   mcpServers: [],
   outputsDir: '',
   serverRestarting: false,
-  // Tasks
-  tasks: {},
-  todos: [],
+  // Tasks — keyed by instanceId (or '_none' for external/unknown)
+  taskSets: {},       // { [instanceId]: { tasks: {}, todos: [] } }
   pendingTaskTools: {},
-  taskPanelCollapsed: false,
+  taskPanelCollapsed: true,
 };
 
 // --- Utilities ---
@@ -348,12 +347,502 @@ document.querySelectorAll('#empty-state .empty-state-link').forEach(el => {
 });
 
 // --- Expose API for modules ---
+// --- AskUserQuestion: shared form rendering ---
+
+function askFormBuildHTML(formData) {
+  const questions = formData.questions || [];
+  let html = '';
+
+  // Form chrome
+  if (formData.title) {
+    html += `<div class="ask-form-title">${escHtml(formData.title)}</div>`;
+  }
+  if (formData.description) {
+    html += `<div class="ask-form-desc markdown-body">${inlineMd(formData.description)}</div>`;
+  }
+
+  for (let qi = 0; qi < questions.length; qi++) {
+    const q = questions[qi];
+    const qId = q.id || `q${qi}`;
+    const qType = q.type || (q.options?.length ? (q.multiSelect ? 'multiselect' : 'select') : 'textarea');
+    const isRequired = q.required !== false;
+
+    if (qi > 0) html += '<div class="ask-divider"></div>';
+
+    // Question container (showIf makes it hideable)
+    const showIfAttr = q.showIf ? ` data-showif='${escHtml(JSON.stringify(q.showIf))}'` : '';
+    const hiddenClass = q.showIf ? ' ask-q-hidden' : '';
+    html += `<div class="ask-question${hiddenClass}" data-qid="${escHtml(qId)}" data-qtype="${escHtml(qType)}" data-qi="${qi}" data-required="${isRequired}"${showIfAttr}>`;
+
+    // Header chip
+    if (q.header) {
+      html += `<div class="ask-header">${escHtml(q.header)}${!isRequired ? '<span class="ask-optional">optional</span>' : ''}</div>`;
+    } else if (!isRequired) {
+      html += `<div class="ask-header"><span class="ask-optional">optional</span></div>`;
+    }
+
+    // Question text
+    html += `<div class="ask-text markdown-body">${inlineMd(q.question)}</div>`;
+
+    // Render by type
+    html += askFieldHTML(q, qi, qType, qId);
+
+    html += '</div>'; // .ask-question
+  }
+
+  // Buttons
+  html += '<div class="ask-buttons">';
+  if (formData.cancelLabel) {
+    html += `<button class="ask-cancel-btn">${escHtml(formData.cancelLabel)}</button>`;
+  }
+  html += `<button class="ask-submit-btn" disabled>${escHtml(formData.submitLabel || 'Submit')}</button>`;
+  html += '</div>';
+
+  return html;
+}
+
+function askFieldHTML(q, qi, qType, qId) {
+  let html = '';
+
+  switch (qType) {
+    case 'select': {
+      html += `<div class="ask-options" data-qid="${escHtml(qId)}" data-multi="false">`;
+      for (const opt of (q.options || [])) {
+        const isDef = q.defaultValue === opt.label;
+        html += `<button class="ask-option-btn${isDef ? ' selected' : ''}" data-qid="${escHtml(qId)}" data-label="${escHtml(opt.label)}">`;
+        html += `<span class="ask-option-label">${escHtml(opt.label)}</span>`;
+        if (opt.description) html += `<span class="ask-option-desc">${inlineMd(opt.description)}</span>`;
+        html += '</button>';
+      }
+      html += '</div>';
+      // Preview panel
+      html += `<div class="ask-preview" data-qid="${escHtml(qId)}"></div>`;
+      // Free-text fallback
+      html += `<textarea class="ask-freetext" data-qid="${escHtml(qId)}" rows="1" placeholder="${escHtml(q.placeholder || 'Or type your answer...')}"></textarea>`;
+      break;
+    }
+
+    case 'multiselect': {
+      html += '<div class="ask-hint">Select one or more</div>';
+      html += `<div class="ask-options" data-qid="${escHtml(qId)}" data-multi="true">`;
+      const defaults = Array.isArray(q.defaultValue) ? q.defaultValue : [];
+      for (const opt of (q.options || [])) {
+        const isDef = defaults.includes(opt.label);
+        html += `<button class="ask-option-btn${isDef ? ' selected' : ''}" data-qid="${escHtml(qId)}" data-label="${escHtml(opt.label)}">`;
+        html += '<span class="ask-option-check"></span>';
+        html += `<span class="ask-option-label">${escHtml(opt.label)}</span>`;
+        if (opt.description) html += `<span class="ask-option-desc">${inlineMd(opt.description)}</span>`;
+        html += '</button>';
+      }
+      html += '</div>';
+      html += `<div class="ask-preview" data-qid="${escHtml(qId)}"></div>`;
+      html += `<textarea class="ask-freetext" data-qid="${escHtml(qId)}" rows="1" placeholder="${escHtml(q.placeholder || 'Or type your answer...')}"></textarea>`;
+      break;
+    }
+
+    case 'dropdown': {
+      html += `<select class="ask-dropdown" data-qid="${escHtml(qId)}">`;
+      html += '<option value="">Select...</option>';
+      for (const opt of (q.options || [])) {
+        const isDef = q.defaultValue === opt.label;
+        html += `<option value="${escHtml(opt.label)}"${isDef ? ' selected' : ''}>${escHtml(opt.label)}${opt.description ? ' — ' + escHtml(opt.description) : ''}</option>`;
+      }
+      html += '</select>';
+      html += `<div class="ask-preview" data-qid="${escHtml(qId)}"></div>`;
+      html += `<textarea class="ask-freetext" data-qid="${escHtml(qId)}" rows="1" placeholder="${escHtml(q.placeholder || 'Or type your answer...')}"></textarea>`;
+      break;
+    }
+
+    case 'text': {
+      const val = q.defaultValue != null ? escHtml(String(q.defaultValue)) : '';
+      html += `<input type="text" class="ask-text-input" data-qid="${escHtml(qId)}" value="${val}" placeholder="${escHtml(q.placeholder || '')}">`;
+      break;
+    }
+
+    case 'textarea': {
+      const val = q.defaultValue != null ? escHtml(String(q.defaultValue)) : '';
+      html += `<textarea class="ask-textarea-input" data-qid="${escHtml(qId)}" rows="3" placeholder="${escHtml(q.placeholder || '')}">${val}</textarea>`;
+      break;
+    }
+
+    case 'number': {
+      const attrs = [];
+      if (q.min != null) attrs.push(`min="${q.min}"`);
+      if (q.max != null) attrs.push(`max="${q.max}"`);
+      if (q.step != null) attrs.push(`step="${q.step}"`);
+      const val = q.defaultValue != null ? ` value="${q.defaultValue}"` : '';
+      html += `<input type="number" class="ask-number-input" data-qid="${escHtml(qId)}"${val} ${attrs.join(' ')} placeholder="${escHtml(q.placeholder || '')}">`;
+      break;
+    }
+
+    case 'toggle': {
+      const checked = q.defaultValue === true ? ' checked' : '';
+      html += `<label class="ask-toggle" data-qid="${escHtml(qId)}">`;
+      html += `<input type="checkbox" class="ask-toggle-input" data-qid="${escHtml(qId)}"${checked}>`;
+      html += '<span class="ask-toggle-track"><span class="ask-toggle-thumb"></span></span>';
+      html += `<span class="ask-toggle-label">${q.defaultValue === true ? 'Yes' : 'No'}</span>`;
+      html += '</label>';
+      break;
+    }
+
+    case 'confirm': {
+      const defYes = q.defaultValue === true;
+      const defNo = q.defaultValue === false;
+      html += `<div class="ask-confirm" data-qid="${escHtml(qId)}">`;
+      html += `<button class="ask-confirm-btn ask-confirm-yes${defYes ? ' selected' : ''}" data-qid="${escHtml(qId)}" data-val="true">Yes</button>`;
+      html += `<button class="ask-confirm-btn ask-confirm-no${defNo ? ' selected' : ''}" data-qid="${escHtml(qId)}" data-val="false">No</button>`;
+      html += '</div>';
+      break;
+    }
+
+    case 'file': {
+      const multi = q.multiple ? ' data-multiple="true"' : '';
+      const accept = q.accept ? ` data-accept="${escHtml(q.accept)}"` : '';
+      html += `<div class="ask-file-zone" data-qid="${escHtml(qId)}"${multi}${accept}>`;
+      html += '<div class="ask-file-icon">&#128206;</div>';
+      html += `<div class="ask-file-label">Drop file${q.multiple ? 's' : ''} here or <span class="ask-file-browse">browse</span></div>`;
+      if (q.accept) html += `<div class="ask-file-accept">${escHtml(q.accept)}</div>`;
+      html += `<input type="file" class="ask-file-input" data-qid="${escHtml(qId)}"${q.accept ? ` accept="${escHtml(q.accept)}"` : ''}${q.multiple ? ' multiple' : ''} style="display:none">`;
+      html += '</div>';
+      html += `<div class="ask-file-list" data-qid="${escHtml(qId)}"></div>`;
+      break;
+    }
+  }
+
+  return html;
+}
+
+function askFormBind(container, formData, callbacks) {
+  const questions = formData.questions || [];
+  const submitBtn = container.querySelector('.ask-submit-btn');
+  const cancelBtn = container.querySelector('.ask-cancel-btn');
+
+  // State: track current answers and file data
+  const currentAnswers = {};
+  const fileStore = {}; // qId -> [{name, data, size}]
+  const visibleSet = new Set();
+
+  // Initialize defaults + visibility
+  for (const q of questions) {
+    const qId = q.id || `q${questions.indexOf(q)}`;
+    const qType = q.type || (q.options?.length ? (q.multiSelect ? 'multiselect' : 'select') : 'textarea');
+    if (q.defaultValue != null) {
+      currentAnswers[qId] = q.defaultValue;
+    }
+    if (!q.showIf) visibleSet.add(qId);
+  }
+  evaluateVisibility();
+
+  // --- Option buttons (select / multiselect) ---
+  container.querySelectorAll('.ask-option-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const qId = btn.dataset.qid;
+      const q = questions.find(qq => (qq.id || `q${questions.indexOf(qq)}`) === qId);
+      const qType = q?.type || (q?.multiSelect ? 'multiselect' : 'select');
+      const optionsContainer = container.querySelector(`.ask-options[data-qid="${qId}"]`);
+
+      if (qType === 'multiselect') {
+        btn.classList.toggle('selected');
+        const labels = Array.from(optionsContainer.querySelectorAll('.ask-option-btn.selected')).map(b => b.dataset.label);
+        currentAnswers[qId] = labels;
+      } else {
+        optionsContainer.querySelectorAll('.ask-option-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        currentAnswers[qId] = btn.dataset.label;
+      }
+
+      // Show preview if available
+      showPreview(qId, q, btn.dataset.label);
+      onChange();
+    });
+  });
+
+  // --- Dropdowns ---
+  container.querySelectorAll('.ask-dropdown').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const qId = sel.dataset.qid;
+      const q = questions.find(qq => (qq.id || `q${questions.indexOf(qq)}`) === qId);
+      currentAnswers[qId] = sel.value || undefined;
+      showPreview(qId, q, sel.value);
+      onChange();
+    });
+  });
+
+  // --- Free-text (for select/multiselect/dropdown fallback) ---
+  container.querySelectorAll('.ask-freetext').forEach(ta => {
+    ta.addEventListener('input', () => {
+      // Free text doesn't update currentAnswers directly — collected at submit time
+      onChange();
+    });
+  });
+
+  // --- Text inputs ---
+  container.querySelectorAll('.ask-text-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      currentAnswers[inp.dataset.qid] = inp.value;
+      onChange();
+    });
+  });
+
+  // --- Textarea inputs ---
+  container.querySelectorAll('.ask-textarea-input').forEach(ta => {
+    ta.addEventListener('input', () => {
+      currentAnswers[ta.dataset.qid] = ta.value;
+      onChange();
+    });
+  });
+
+  // --- Number inputs ---
+  container.querySelectorAll('.ask-number-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      currentAnswers[inp.dataset.qid] = inp.value ? Number(inp.value) : undefined;
+      onChange();
+    });
+  });
+
+  // --- Toggle ---
+  container.querySelectorAll('.ask-toggle-input').forEach(inp => {
+    inp.addEventListener('change', () => {
+      currentAnswers[inp.dataset.qid] = inp.checked;
+      const label = inp.closest('.ask-toggle')?.querySelector('.ask-toggle-label');
+      if (label) label.textContent = inp.checked ? 'Yes' : 'No';
+      onChange();
+    });
+  });
+
+  // --- Confirm buttons ---
+  container.querySelectorAll('.ask-confirm-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const qId = btn.dataset.qid;
+      const confirmContainer = container.querySelector(`.ask-confirm[data-qid="${qId}"]`);
+      confirmContainer.querySelectorAll('.ask-confirm-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      currentAnswers[qId] = btn.dataset.val === 'true';
+      onChange();
+    });
+  });
+
+  // --- File zones ---
+  container.querySelectorAll('.ask-file-zone').forEach(zone => {
+    const qId = zone.dataset.qid;
+    const fileInput = zone.querySelector('.ask-file-input');
+    const fileList = container.querySelector(`.ask-file-list[data-qid="${qId}"]`);
+    const isMulti = zone.dataset.multiple === 'true';
+
+    zone.querySelector('.ask-file-browse')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fileInput.click();
+    });
+    zone.addEventListener('click', () => fileInput.click());
+
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      handleFiles(qId, e.dataTransfer.files, isMulti, fileList);
+    });
+
+    fileInput.addEventListener('change', () => {
+      handleFiles(qId, fileInput.files, isMulti, fileList);
+      fileInput.value = '';
+    });
+  });
+
+  function handleFiles(qId, fileListInput, isMulti, fileListEl) {
+    if (!fileStore[qId]) fileStore[qId] = [];
+    const files = Array.from(fileListInput);
+
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) {
+        showAlert(`File "${file.name}" exceeds 10MB limit.`);
+        continue;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (!isMulti) fileStore[qId] = [];
+        fileStore[qId].push({ name: file.name, data: reader.result, size: file.size });
+        currentAnswers[qId] = fileStore[qId].map(f => f.name);
+        renderFileList(qId, fileListEl);
+        onChange();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function renderFileList(qId, fileListEl) {
+    const items = fileStore[qId] || [];
+    fileListEl.innerHTML = items.map((f, i) => {
+      const sizeStr = f.size < 1024 ? f.size + ' B' : (f.size / 1024).toFixed(1) + ' KB';
+      const isImage = f.data.startsWith('data:image/');
+      return `<div class="ask-file-item" data-qid="${escHtml(qId)}" data-fi="${i}">
+        ${isImage ? `<img class="ask-file-thumb" src="${f.data}" alt="">` : '<span class="ask-file-item-icon">&#128196;</span>'}
+        <span class="ask-file-name">${escHtml(f.name)}</span>
+        <span class="ask-file-size">${sizeStr}</span>
+        <button class="ask-file-remove" data-qid="${escHtml(qId)}" data-fi="${i}">&times;</button>
+      </div>`;
+    }).join('');
+
+    fileListEl.querySelectorAll('.ask-file-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.fi);
+        fileStore[qId].splice(idx, 1);
+        currentAnswers[qId] = fileStore[qId].map(f => f.name);
+        renderFileList(qId, fileListEl);
+        onChange();
+      });
+    });
+  }
+
+  function showPreview(qId, q, selectedLabel) {
+    const previewEl = container.querySelector(`.ask-preview[data-qid="${qId}"]`);
+    if (!previewEl) return;
+    const opt = (q?.options || []).find(o => o.label === selectedLabel);
+    if (opt?.preview) {
+      previewEl.innerHTML = `<div class="ask-preview-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(opt.preview) : escHtml(opt.preview)}</div>`;
+      previewEl.classList.add('visible');
+    } else {
+      previewEl.innerHTML = '';
+      previewEl.classList.remove('visible');
+    }
+  }
+
+  function evaluateVisibility() {
+    for (const q of questions) {
+      const qId = q.id || `q${questions.indexOf(q)}`;
+      const qEl = container.querySelector(`.ask-question[data-qid="${qId}"]`);
+      if (!qEl) continue;
+
+      if (!q.showIf) {
+        visibleSet.add(qId);
+        continue;
+      }
+
+      const depVal = currentAnswers[q.showIf.questionId];
+      let show = false;
+      if ('equals' in q.showIf) show = depVal === q.showIf.equals;
+      else if ('notEquals' in q.showIf) show = depVal !== q.showIf.notEquals;
+      else if ('includes' in q.showIf) show = Array.isArray(depVal) && depVal.includes(q.showIf.includes);
+      else show = !!depVal; // truthy check
+
+      if (show) {
+        visibleSet.add(qId);
+        qEl.classList.remove('ask-q-hidden');
+      } else {
+        visibleSet.delete(qId);
+        qEl.classList.add('ask-q-hidden');
+        // Reset hidden field to default
+        if (q.defaultValue != null) currentAnswers[qId] = q.defaultValue;
+        else delete currentAnswers[qId];
+      }
+    }
+  }
+
+  function checkReady() {
+    for (const q of questions) {
+      const qId = q.id || `q${questions.indexOf(q)}`;
+      if (!visibleSet.has(qId)) continue;
+      if (q.required === false) continue;
+
+      const qType = q.type || (q.options?.length ? (q.multiSelect ? 'multiselect' : 'select') : 'textarea');
+
+      // Check free-text override for option types
+      if (qType === 'select' || qType === 'multiselect' || qType === 'dropdown') {
+        const ft = container.querySelector(`.ask-freetext[data-qid="${qId}"]`);
+        if (ft?.value?.trim()) continue;
+      }
+
+      const val = currentAnswers[qId];
+      if (val === undefined || val === null || val === '') return false;
+      if (Array.isArray(val) && val.length === 0) return false;
+      if (qType === 'confirm' && typeof val !== 'boolean') return false;
+    }
+    return true;
+  }
+
+  function onChange() {
+    evaluateVisibility();
+    if (submitBtn) submitBtn.disabled = !checkReady();
+  }
+
+  // Submit
+  submitBtn?.addEventListener('click', () => {
+    const answer = collectAnswers();
+    callbacks?.onSubmit?.(answer, getFileData());
+    disableForm();
+  });
+
+  // Cancel
+  cancelBtn?.addEventListener('click', () => {
+    callbacks?.onCancel?.();
+    disableForm();
+  });
+
+  function collectAnswers() {
+    const result = [];
+    for (const q of questions) {
+      const qId = q.id || `q${questions.indexOf(q)}`;
+      if (!visibleSet.has(qId)) continue;
+
+      const qType = q.type || (q.options?.length ? (q.multiSelect ? 'multiselect' : 'select') : 'textarea');
+
+      // Free-text override for option types
+      if (qType === 'select' || qType === 'multiselect' || qType === 'dropdown') {
+        const ft = container.querySelector(`.ask-freetext[data-qid="${qId}"]`);
+        if (ft?.value?.trim()) {
+          const sel = (qType === 'multiselect')
+            ? Array.from(container.querySelectorAll(`.ask-option-btn.selected[data-qid="${qId}"]`)).map(b => b.dataset.label)
+            : [];
+          result.push({
+            id: qId,
+            question: q.question,
+            answer: sel.length ? `${sel.join(', ')} — ${ft.value.trim()}` : ft.value.trim(),
+          });
+          continue;
+        }
+      }
+
+      let val = currentAnswers[qId];
+      // For file type, the answer is already an array of names (paths come from server)
+      result.push({ id: qId, question: q.question, answer: val });
+    }
+    return result;
+  }
+
+  function getFileData() {
+    const files = [];
+    for (const qId of Object.keys(fileStore)) {
+      for (const f of fileStore[qId]) {
+        files.push({ questionId: qId, name: f.name, data: f.data });
+      }
+    }
+    return files.length > 0 ? files : null;
+  }
+
+  function disableForm() {
+    container.querySelectorAll('.ask-option-btn, .ask-confirm-btn, .ask-submit-btn, .ask-cancel-btn').forEach(b => b.disabled = true);
+    container.querySelectorAll('input, textarea, select').forEach(el => el.disabled = true);
+    container.querySelectorAll('.ask-file-zone').forEach(z => z.classList.add('disabled'));
+    if (submitBtn) submitBtn.textContent = 'Submitted';
+    container.classList.add('answered');
+  }
+
+  // Initial readiness check
+  onChange();
+
+  return { collectAnswers, getFileData, disableForm };
+}
+
 window.dashboard = {
   showAlert,
   state,
   sendWs(msg) { if (state.ws) state.ws.send(JSON.stringify(msg)); },
   escHtml,
   inlineMd,
+  askFormBuildHTML,
+  askFormBind,
   syncSettings,
   setupCwdToolbar,
   highlightJSON,
@@ -422,7 +911,7 @@ function handleMessage(msg) {
     case 'interaction:error':
     case 'cleared':
       window.inspectorModule?.handleMessage(msg);
-      if (msg.type === 'sse_event') window.taskModule?.interceptSSE(msg.event);
+      if (msg.type === 'sse_event') window.taskModule?.interceptSSE(msg.event, msg.interactionId);
       break;
 
     // Session
@@ -557,6 +1046,11 @@ function handleMessage(msg) {
 
 // --- Session management ---
 newSessionBtn?.addEventListener('click', () => {
+  const view = document.querySelector('.header-tab.active')?.dataset.view;
+  if (view === 'dashboard' && window.inspectorModule?.newExtTab) {
+    window.inspectorModule.newExtTab();
+    return;
+  }
   if (state.ws?.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({ type: 'session:new' }));
   }

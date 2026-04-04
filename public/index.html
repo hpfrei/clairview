@@ -37,15 +37,23 @@
       </nav>
     </div>
     <div class="header-actions">
+      <button class="task-launcher hidden" id="taskLauncher" title="Show tasks &amp; todos">&#9745;</button>
       <button id="sessionPickerBtn" class="session-picker-btn" title="Click to manage sessions"></button>
       <button id="newSessionBtn" class="session-new-btn" title="New session">+ New</button>
-      <button class="task-launcher hidden" id="taskLauncher" title="Show tasks &amp; todos">&#9745;</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
     </div>
   </header>
   <div class="header-gradient-bar"></div>
+
+  <div class="task-panel hidden" id="taskPanel">
+    <div class="task-panel-header">
+      <span>Tasks</span>
+      <button class="task-panel-close" id="taskPanelClose" title="Collapse">&times;</button>
+    </div>
+    <div class="task-panel-list" id="taskPanelList"></div>
+  </div>
 
   <!-- ===== HOME VIEW ===== -->
   <div id="view-home">
@@ -138,13 +146,6 @@
           <textarea id="chatInput" placeholder="Send a prompt to Claude..." rows="3"></textarea>
           <button id="chatSendBtn" class="chat-send">Send</button>
         </div>
-      </div>
-      <div class="task-panel hidden" id="taskPanel">
-        <div class="task-panel-header">
-          <span>Tasks</span>
-          <button class="task-panel-close" id="taskPanelClose" title="Collapse">&times;</button>
-        </div>
-        <div class="task-panel-list" id="taskPanelList"></div>
       </div>
     </div>
   </div>

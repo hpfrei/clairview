@@ -17,8 +17,6 @@
     "Bash",
     "Agent",
     "Skill",
-    "WebSearch",
-    "WebFetch",
     "TaskCreate",
     "TaskGet",
     "TaskList",
@@ -36,7 +34,8 @@
     "RemoteTrigger",
     "mcp__integrated__chat",
     "mcp__integrated__add_llm_model",
-    "mcp__integrated__d3_data_visualizer"
+    "mcp__integrated__d3_data_visualizer",
+    "WebFetch"
   ],
   "disableSlashCommands": true,
   "bare": false,

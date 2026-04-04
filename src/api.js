@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
-const { resolveOutputDir, OUTPUTS_DIR, ensureDir, getInstanceContext } = require('./utils');
+const { resolveOutputDir, OUTPUTS_DIR, ensureDir, getInstanceContext, processUploadedFiles } = require('./utils');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
 
@@ -61,13 +61,17 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
 
   // ── POST /api/run/answer ─────────────────────────────────────────
   router.post('/run/answer', (req, res) => {
-    const { toolUseId, answer } = req.body || {};
+    const { toolUseId, answer, files } = req.body || {};
     if (!toolUseId) return res.status(400).json({ error: 'Missing toolUseId' });
 
     const pending = pendingQuestions.get(toolUseId);
     if (!pending?.resolve) return res.status(404).json({ error: 'No pending question for that toolUseId' });
 
-    pending.resolve(answer);
+    let finalAnswer = answer;
+    if (files?.length && Array.isArray(finalAnswer)) {
+      finalAnswer = processUploadedFiles(toolUseId, files, finalAnswer);
+    }
+    pending.resolve(finalAnswer);
     res.json({ ok: true });
   });
 
