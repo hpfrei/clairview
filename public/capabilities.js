@@ -436,6 +436,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
 
     const groups = {};
     for (const m of state.models) {
+      if (m.disabled) continue;
       const pk = m.providerKey || 'custom';
       const label = providerLabels[pk] || pk;
       if (!groups[label]) groups[label] = [];
@@ -814,11 +815,16 @@ minimal  plan mode, Read/Glob/Grep</pre>
       const pricing = model.inputCostPerMTok != null
         ? `$${model.inputCostPerMTok} / $${model.outputCostPerMTok} per MTok`
         : '';
-      html += `<div class="model-card" data-name="${escHtml(model.name)}" data-kind="model">
-        <div class="model-card-name">${escHtml(model.label || model.name)}</div>
+      const disabledClass = model.disabled ? ' model-card-disabled' : '';
+      html += `<div class="model-card${disabledClass}" data-name="${escHtml(model.name)}" data-kind="model">
+        <div class="model-card-top-row">
+          <div class="model-card-name">${escHtml(model.label || model.name)}</div>
+          <button class="model-toggle-btn" data-model="${escHtml(model.name)}" data-disabled="${model.disabled ? '1' : '0'}" title="${model.disabled ? 'Enable model' : 'Disable model'}">${model.disabled ? 'Enable' : 'Disable'}</button>
+        </div>
         <div class="model-card-id"><code>${escHtml(model.modelId || '')}</code></div>
         ${model.description ? '<div class="model-card-desc">' + escHtml(model.description) + '</div>' : ''}
         <div class="model-card-meta">
+          ${model.disabled ? '<span class="cap-model-disabled-badge">disabled</span>' : ''}
           ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
           ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
           ${pricing ? '<span class="cap-model-pricing">' + escHtml(pricing) + '</span>' : ''}
@@ -830,6 +836,16 @@ minimal  plan mode, Read/Glob/Grep</pre>
     }
     html += '</div>';
     list.innerHTML = html;
+
+    // Toggle button click (stop propagation to avoid opening edit modal)
+    list.querySelectorAll('.model-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = btn.dataset.model;
+        const disabled = btn.dataset.disabled === '0';
+        sendWs({ type: 'model:toggle', name, disabled });
+      });
+    });
 
     // Card click → open edit modal
     list.querySelectorAll('.model-card').forEach(card => {
@@ -908,9 +924,11 @@ minimal  plan mode, Read/Glob/Grep</pre>
     document.getElementById('mmModelId').value = model.modelId || '';
     document.getElementById('mmSystemPromptMode').value = model.systemPromptMode || 'replace';
 
-    // Reasoning + numeric fields
+    // Reasoning, disabled + numeric fields
     const reasoningCb = document.getElementById('mmReasoning');
     if (reasoningCb) reasoningCb.checked = !!model.reasoning;
+    const disabledCb = document.getElementById('mmDisabled');
+    if (disabledCb) disabledCb.checked = !!model.disabled;
     const ctxInput = document.getElementById('mmContextWindow');
     if (ctxInput) ctxInput.value = model.contextWindow || '';
     const maxOutInput = document.getElementById('mmMaxOutputTokens');
@@ -1012,6 +1030,7 @@ minimal  plan mode, Read/Glob/Grep</pre>
       systemPromptMode: document.getElementById('mmSystemPromptMode')?.value || 'replace',
       toolOverrides,
       reasoning: !!document.getElementById('mmReasoning')?.checked,
+      disabled: !!document.getElementById('mmDisabled')?.checked,
       contextWindow: ctxVal > 0 ? ctxVal : null,
       maxOutputTokens: maxOutVal > 0 ? maxOutVal : null,
       inputCostPerMTok: inCost >= 0 ? inCost : null,
@@ -1038,18 +1057,75 @@ minimal  plan mode, Read/Glob/Grep</pre>
   document.getElementById('capModelCancel')?.addEventListener('click', closeModelModal);
   document.getElementById('capModelCancel2')?.addEventListener('click', closeModelModal);
 
-  // --- Refresh Models from disk ---
+  // --- Refresh Models: scan provider APIs ---
+  let scanTimeout = null;
   document.getElementById('capRefreshModels')?.addEventListener('click', () => {
     const btn = document.getElementById('capRefreshModels');
-    if (!btn) return;
+    if (!btn || btn.disabled) return;
     btn.disabled = true;
-    btn.innerHTML = '<span class="busy-dot"></span> Refreshing\u2026';
+    btn.innerHTML = '<span class="busy-dot"></span> Scanning providers\u2026';
+    sendWs({ type: 'model:scan' });
+    if (scanTimeout) clearTimeout(scanTimeout);
+    scanTimeout = setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = 'Refresh Models';
+      const status = document.getElementById('capRefreshStatus');
+      if (status) { status.classList.remove('hidden'); status.textContent = 'Scan timed out. Try again.'; }
+    }, 30000);
+  });
+
+  function showScanError(error) {
+    const btn = document.getElementById('capRefreshModels');
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh Models'; }
+    if (scanTimeout) { clearTimeout(scanTimeout); scanTimeout = null; }
+    const status = document.getElementById('capRefreshStatus');
+    if (status) { status.classList.remove('hidden'); status.textContent = 'Scan error: ' + error; }
+  }
+
+  function showScanResults(results) {
+    const btn = document.getElementById('capRefreshModels');
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh Models'; }
+    if (scanTimeout) { clearTimeout(scanTimeout); scanTimeout = null; }
+
+    // Backend already auto-added new models — show summary and refresh list
+    const providerKeys = Object.keys(results);
+    let totalAdded = 0;
+    let totalScanned = 0;
+    const lines = [];
+
+    for (const key of providerKeys) {
+      const r = results[key];
+      const provLabel = state.providers.find(p => p.key === key)?.label || key;
+      if (r.status === 'ok') {
+        totalScanned++;
+        totalAdded += (r.added || []).length;
+        if (r.added?.length > 0) {
+          lines.push(`${provLabel}: added ${r.added.length} (${r.added.map(m => m.label || m.name).join(', ')})`);
+        } else {
+          lines.push(`${provLabel}: up to date (${r.total || 0} models)`);
+        }
+      } else if (r.status === 'error') {
+        totalScanned++;
+        lines.push(`${provLabel}: error — ${r.error}`);
+      } else {
+        lines.push(`${provLabel}: skipped — ${r.error || 'no API key'}`);
+      }
+    }
+
+    const status = document.getElementById('capRefreshStatus');
+    if (status) {
+      status.classList.remove('hidden');
+      const summary = totalAdded > 0
+        ? `Scanned ${totalScanned} providers. Added ${totalAdded} new model${totalAdded !== 1 ? 's' : ''} (disabled by default). Enable the ones you want, then use Refresh Pricing to fill in costs.`
+        : `Scanned ${totalScanned} providers. All models up to date.`;
+      status.innerHTML = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
+      if (totalAdded === 0) setTimeout(() => status.classList.add('hidden'), 6000);
+    }
+
+    // Refresh the models list from server (backend already saved them)
     sendWs({ type: 'model:list' });
     sendWs({ type: 'provider:list' });
-    // Re-enable after render (model:list response triggers renderModelsPanel)
-    const restore = () => { btn.disabled = false; btn.textContent = 'Refresh Models'; };
-    setTimeout(restore, 2000);
-  });
+  }
 
   // --- Refresh Pricing via claude -p ---
   document.getElementById('capRefreshPricing')?.addEventListener('click', () => {
@@ -1075,7 +1151,7 @@ Steps:
 2. Read ${anthropicPath} to see the current Anthropic pricing entries.
 3. Look up the current official API pricing (per million tokens, in USD) for:
    - Each model found in models.json (third-party models listed below).
-   - All current Anthropic Claude models. You are a Claude model yourself — you know which models Anthropic currently offers. Update existing entries in anthropic-pricing.json with correct current prefix keys (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5) and remove outdated entries that no longer match any current model.
+   - All current Anthropic Claude models. You are a Claude model yourself — you know which models Anthropic currently offers. Update existing entries in anthropic-pricing.json with correct current prefix keys (e.g. claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5) and remove outdated entries that no longer match any current model.
 4. For each model in models.json, update the inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, and cacheCreateCostPerMTok fields directly in the file. Use null for cache fields if not available.
 5. For Anthropic models, update ${anthropicPath} with the same four fields per model.
 
@@ -1247,6 +1323,14 @@ IMPORTANT: You MUST directly edit the files using your Edit or Write tools — d
       case 'provider:list':
         state.providers = msg.providers || [];
         renderModelsPanel();
+        break;
+      case 'model:scan:start':
+        break;
+      case 'model:scan:result':
+        showScanResults(msg.results);
+        break;
+      case 'model:scan:error':
+        showScanError(msg.error);
         break;
       case 'profile:list':
         state.profiles = msg.profiles || [];

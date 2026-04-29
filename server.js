@@ -11,11 +11,13 @@ const ClaudeSessionManager = require('./src/claude-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 const workflowHandler = require('./src/workflow-handler');
+const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
-const DASHBOARD_PORT = parseInt(process.argv[2] || process.env.DASHBOARD_PORT || '3457');
+const PORT_ARG = process.argv.slice(2).find(a => /^\d+$/.test(a));
+const DASHBOARD_PORT = parseInt(PORT_ARG || process.env.DASHBOARD_PORT || '3457');
 const TARGET_URL = process.env.ANTHROPIC_TARGET_URL || 'https://api.anthropic.com';
 const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '200');
 const AUTH_TOKEN = process.env.AUTH_TOKEN || crypto.randomUUID();
@@ -35,7 +37,7 @@ const proxyServer = http.createServer(proxyApp);
 
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
-dashboardApp.use(express.json());
+dashboardApp.use(express.json({ limit: '50mb' }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
 // Auth: cookie parser helper
@@ -117,7 +119,7 @@ sessionManager = new ClaudeSessionManager(PROXY_PORT, { broadcast: (...args) => 
 
 // WebSocket server on dashboard (with auth)
 const wss = new WebSocketServer({ noServer: true });
-broadcaster = new DashboardBroadcaster(wss, store, sessionManager);
+broadcaster = new DashboardBroadcaster(wss, store, sessionManager, { authToken: AUTH_TOKEN });
 setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
@@ -157,21 +159,27 @@ for (const summary of caps.listProfiles(__dirname)) {
 }
 
 // Initialize Workflow Handler
-workflowHandler.init({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
+workflowHandler.init({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
+ruleHandler.init({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
 // Mount REST API
-dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN }));
+dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN }));
 
 // Restart endpoint (auth handled by middleware)
 dashboardApp.post('/api/restart', (req, res) => {
   res.json({ ok: true, message: 'Server restarting...' });
   setTimeout(() => {
     broadcaster.broadcast({ type: 'server:restarting' });
-    for (const client of wss.clients) client.close(1012, 'Server restarting');
-    let closed = 0;
-    const onClosed = () => {
-      if (++closed < 2) return;
-      mcp.shutdown();
+    // Force-close all WebSocket clients
+    for (const client of wss.clients) {
+      try { client.terminate(); } catch {}
+    }
+    // Force-close all HTTP connections so server.close() completes
+    dashboardServer.closeAllConnections?.();
+    proxyServer.closeAllConnections?.();
+    mcp.shutdown();
+
+    const spawnNew = () => {
       const child = spawn(process.argv[0], process.argv.slice(1), {
         detached: true, stdio: 'inherit', cwd: process.cwd(),
         env: { ...process.env, AUTH_TOKEN },
@@ -179,11 +187,35 @@ dashboardApp.post('/api/restart', (req, res) => {
       child.unref();
       process.exit(0);
     };
+
+    let closed = 0;
+    const onClosed = () => { if (++closed >= 2) spawnNew(); };
     dashboardServer.close(onClosed);
     proxyServer.close(onClosed);
-    setTimeout(() => { mcp.shutdown(); process.exit(1); }, 5000);
-  }, 500);
+    // Fallback: force exit and spawn even if close callbacks haven't fired
+    setTimeout(spawnNew, 2000);
+  }, 300);
 });
+
+// Kill stale processes on our ports before binding (handles unclean restarts)
+function killStalePortProcesses() {
+  try {
+    const { execSync } = require('child_process');
+    const myPid = process.pid;
+    for (const port of [PROXY_PORT, DASHBOARD_PORT]) {
+      try {
+        const out = execSync(`lsof -ti :${port} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+        for (const pidStr of out.split('\n').filter(Boolean)) {
+          const pid = parseInt(pidStr);
+          if (pid && pid !== myPid) {
+            try { process.kill(pid, 'SIGKILL'); } catch {}
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+}
+killStalePortProcesses();
 
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {

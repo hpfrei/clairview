@@ -223,6 +223,28 @@ class InteractionStore {
     this._ensureSessionDir();
   }
 
+  removeByInstanceIds(instanceIds) {
+    const idSet = new Set(instanceIds);
+    const toRemove = [];
+    for (const id of this.order) {
+      const interaction = this.interactions.get(id);
+      if (interaction && idSet.has(interaction.instanceId)) {
+        toRemove.push(id);
+      }
+    }
+    for (const id of toRemove) {
+      const seqNum = this.seqMap.get(id);
+      if (seqNum) {
+        const filePath = path.join(this.sessionDir, `${seqNum}.json`);
+        try { fs.unlinkSync(filePath); } catch {}
+      }
+      this.interactions.delete(id);
+      this.seqMap.delete(id);
+    }
+    this.order = this.order.filter(id => !toRemove.includes(id));
+    return toRemove.length;
+  }
+
   deleteSession(id) {
     // Can't delete active session
     if (id === this.sessionId) return false;

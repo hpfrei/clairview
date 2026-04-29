@@ -19,6 +19,12 @@
   const tabStrip = document.getElementById('chatTabStrip');
   const tabNewBtn = document.getElementById('chatTabNew');
 
+  // --- File attachment ---
+  const chatAttachBtn = document.getElementById('chatAttachBtn');
+  const chatFileInput = document.getElementById('chatFileInput');
+  const chatAttachedFiles = document.getElementById('chatAttachedFiles');
+  let pendingFiles = []; // { name, data, size }
+
   // --- Files panel ---
   const filesPanel = document.getElementById('chatFilesBar');
   const filesBody = document.getElementById('chatFilesBody');
@@ -180,11 +186,23 @@
     if (!prompt) return;
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
 
-    appendChatBubble(prompt, 'user', activeTabId);
+    // Show file names in the user bubble if attached
+    let displayPrompt = prompt;
+    if (pendingFiles.length > 0) {
+      const names = pendingFiles.map(f => f.name).join(', ');
+      displayPrompt = `[Attached: ${names}]\n${prompt}`;
+    }
+    appendChatBubble(displayPrompt, 'user', activeTabId);
     const tab = tabs.get(activeTabId);
     if (tab) tab.currentEl = null;
     state.chatCurrentEl = null;
-    sendWs({ type: 'chat:send', tabId: activeTabId, prompt });
+    const msg = { type: 'chat:send', tabId: activeTabId, prompt };
+    if (pendingFiles.length > 0) {
+      msg.files = pendingFiles.map(f => ({ name: f.name, data: f.data }));
+    }
+    sendWs(msg);
+    pendingFiles = [];
+    renderAttachedFiles();
     chatInput.value = '';
     chatInput.style.height = 'auto';
   }
@@ -201,6 +219,75 @@
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
   });
+
+  // --- File attachment handlers ---
+  function renderAttachedFiles() {
+    if (!chatAttachedFiles) return;
+    if (pendingFiles.length === 0) {
+      chatAttachedFiles.classList.add('hidden');
+      chatAttachedFiles.innerHTML = '';
+      return;
+    }
+    chatAttachedFiles.classList.remove('hidden');
+    chatAttachedFiles.innerHTML = pendingFiles.map((f, i) => {
+      const sizeStr = f.size < 1024 ? f.size + ' B'
+        : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB'
+        : (f.size / 1048576).toFixed(1) + ' MB';
+      return `<span class="chat-attached-chip" data-idx="${i}">
+        <span class="chat-attached-name">${escHtml(f.name)}</span>
+        <span class="chat-attached-size">${sizeStr}</span>
+        <button class="chat-attached-remove" data-idx="${i}" title="Remove">&times;</button>
+      </span>`;
+    }).join('');
+    chatAttachedFiles.querySelectorAll('.chat-attached-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pendingFiles.splice(parseInt(btn.dataset.idx), 1);
+        renderAttachedFiles();
+      });
+    });
+  }
+
+  chatAttachBtn?.addEventListener('click', () => chatFileInput?.click());
+
+  chatFileInput?.addEventListener('change', () => {
+    const fileList = chatFileInput.files;
+    if (!fileList || fileList.length === 0) return;
+    let remaining = fileList.length;
+    for (const file of fileList) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        pendingFiles.push({ name: file.name, data: reader.result, size: file.size });
+        remaining--;
+        if (remaining === 0) renderAttachedFiles();
+      };
+      reader.readAsDataURL(file);
+    }
+    chatFileInput.value = '';
+  });
+
+  // Also support drag-and-drop on the chat input area
+  const chatInputArea = chatInput?.closest('.chat-input-area');
+  if (chatInputArea) {
+    chatInputArea.addEventListener('dragover', (e) => { e.preventDefault(); chatInputArea.classList.add('drag-over'); });
+    chatInputArea.addEventListener('dragleave', () => chatInputArea.classList.remove('drag-over'));
+    chatInputArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      chatInputArea.classList.remove('drag-over');
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      let remaining = files.length;
+      for (const file of files) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          pendingFiles.push({ name: file.name, data: reader.result, size: file.size });
+          remaining--;
+          if (remaining === 0) renderAttachedFiles();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
 
   chatStopBtn?.addEventListener('click', () => {
     if (state.ws?.readyState === WebSocket.OPEN) {

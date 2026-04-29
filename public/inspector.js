@@ -99,9 +99,12 @@
       clearBtn.textContent = 'Clear inactive';
       clearBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        const exitedIds = [];
         for (const [id, info] of knownInstances) {
-          if (info.status === 'exited') knownInstances.delete(id);
+          if (info.status === 'exited') exitedIds.push(id);
         }
+        for (const id of exitedIds) knownInstances.delete(id);
+        if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
         if (!knownInstances.has(activeInstanceTab)) switchInstanceTab('all');
         else renderInspectorTabStrip();
       });
@@ -168,6 +171,7 @@
             sendWs({ type: 'claude:killInstance', instanceId: id });
           }
           knownInstances.delete(id);
+          sendWs({ type: 'inspector:clearInstances', instanceIds: [id] });
           if (activeInstanceTab === id) switchInstanceTab('all');
           else renderInspectorTabStrip();
         }
@@ -347,11 +351,17 @@
     if (!interaction.response.sseEvents) interaction.response.sseEvents = [];
     interaction.response.sseEvents.push(event);
 
+    // Maintain running response char counter for live gauge
+    const _evtChars = JSON.stringify(event.data || '').length;
+    interaction._respChars = (interaction._respChars || 0) + _evtChars;
+
     if (event.eventType === 'message_start' && event.data?.message?.usage) {
       interaction.usage = { ...event.data.message.usage };
+      updateTurnTokens(interaction);
     }
     if (event.eventType === 'message_delta' && event.data?.usage) {
       interaction.usage = { ...interaction.usage, ...event.data.usage };
+      updateTurnTokens(interaction);
     }
     if (event.eventType === 'message_start') {
       interaction.status = 'streaming';
@@ -517,6 +527,7 @@
       if (data?.usage) {
         interaction.usage = { ...interaction.usage, ...data.usage };
         updateUsageDisplay(interaction.usage, interaction.pricing);
+        updateTurnTokens(interaction);
       }
       if (interaction.timing) {
         interaction.timing.duration = Date.now() - interaction.timing.startedAt;
@@ -535,6 +546,25 @@
       updateTurnBadge(interaction.id, 'complete');
       updateStats();
     }
+
+    // --- Live-update response char gauge ---
+    const _gaugeEl = document.getElementById('resp-char-gauge');
+    if (_gaugeEl && interaction._respChars) {
+      _gaugeEl.innerHTML = charGauge(interaction._respChars);
+    }
+
+    // --- Live-update Raw SSE Events section ---
+    const _sseDetails = document.getElementById('raw-sse-details');
+    if (_sseDetails) {
+      _sseDetails.hidden = false;
+      const _sseCount = document.getElementById('raw-sse-count');
+      if (_sseCount) _sseCount.textContent = interaction.response.sseEvents.length;
+      const _ssePre = document.getElementById('raw-sse-pre');
+      if (_ssePre) {
+        const _evtHtml = `<span class="json-key">event:</span> ${escHtml(event.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof event.data === 'string' ? event.data : JSON.stringify(event.data))}\n`;
+        _ssePre.insertAdjacentHTML('beforeend', '\n' + _evtHtml);
+      }
+    }
   }
 
   // --- Interaction update ---
@@ -552,6 +582,7 @@
 
     updateTurnBadge(updated.id, updated.status || 'complete');
     updateTurnMeta(updated);
+    updateTurnTokens(state.interactions[idx] || updated);
     rebuildToolEntries(updated.id);
     updateStats();
 
@@ -589,6 +620,7 @@
       } else if (interaction.instanceId !== activeInstanceTab) return;
       appendTurnToTimeline(interaction, idx);
     });
+    updateUserTurnTotals();
   }
 
   function appendTurnToTimeline(interaction, idx) {
@@ -614,14 +646,15 @@
     const stepId = interaction.stepId || '';
     const model = interaction.request?.model || 'unknown';
     const shortModel = model.replace('claude-', '').split('-202')[0];
-    const duration = interaction.timing?.duration ? formatDuration(interaction.timing.duration) : '--';
-    const endpoint = interaction.originalEndpoint || interaction.endpoint || '/v1/messages';
-    const shortEndpoint = endpoint.replace('/v1/', '');
+    const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
     const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     const turnLabel = stepId ? `Turn ${idx + 1} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${idx + 1}`;
     const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
       ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
+    const tokenSummary = compactTokens(interaction.usage);
+    const cost = computeCost(interaction.usage, interaction.pricing);
+    const costHtml = turnCostGauge(cost);
 
     el.innerHTML = `
       <div class="entry-header">
@@ -629,10 +662,13 @@
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
         ${instanceTag}
       </div>
-      <div class="entry-model" data-model="${interaction.id}">${modelLabel}</div>
-      <div class="entry-meta">
-        <span data-endpoint="${interaction.id}">${shortEndpoint}</span>
-        <span data-duration="${interaction.id}">${duration}</span>
+      <div class="entry-model" data-model="${interaction.id}">
+        <span class="entry-model-label">${modelLabel}</span>
+        <span class="entry-duration" data-duration="${interaction.id}">${durationHtml}</span>
+      </div>
+      <div class="entry-meta" data-tokens="${interaction.id}">
+        <span class="entry-tokens" data-tokenlabel="${interaction.id}">${tokenSummary}</span>
+        <span class="entry-cost" data-costgauge="${interaction.id}">${costHtml}</span>
       </div>
     `;
 
@@ -658,6 +694,10 @@
     });
 
     timelineList.appendChild(group);
+
+    if (interaction.status === 'pending' || interaction.status === 'streaming') {
+      startDurationTimer(interaction);
+    }
   }
 
   function appendMcpCallToTimeline(interaction, idx) {
@@ -670,7 +710,7 @@
     el.dataset.id = interaction.id;
 
     const toolName = interaction.request?.tool || 'unknown';
-    const duration = interaction.timing?.duration ? formatDuration(interaction.timing.duration) : '--';
+    const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
     const isError = interaction.status === 'error';
     const source = interaction.mcpSource === 'claude-code' ? 'claude' : 'test';
 
@@ -682,7 +722,7 @@
       <div class="entry-model mcp-tool-name">${escHtml(toolName)}</div>
       <div class="entry-meta">
         <span class="mcp-source-tag mcp-src-${source}">${source}</span>
-        <span>${duration}</span>
+        <span>${durationHtml}</span>
       </div>
     `;
 
@@ -777,31 +817,98 @@
     });
   }
 
+  const _durationTimers = new Map();
+  function startDurationTimer(interaction) {
+    if (_durationTimers.has(interaction.id)) return;
+    const startedAt = interaction.timing?.startedAt || Date.now();
+    const iv = setInterval(() => {
+      const el = document.querySelector(`[data-duration="${interaction.id}"]`);
+      if (el) el.innerHTML = durationGauge(Date.now() - startedAt);
+    }, 1000);
+    _durationTimers.set(interaction.id, iv);
+  }
+  function stopDurationTimer(id) {
+    const iv = _durationTimers.get(id);
+    if (iv != null) { clearInterval(iv); _durationTimers.delete(id); }
+  }
+
   function updateTurnBadge(id, status) {
     const badge = document.querySelector(`[data-badge="${id}"]`);
     if (badge) {
       badge.className = `entry-badge ${badgeClass(status)}`;
       badge.textContent = status;
     }
+    if (status === 'streaming' || status === 'pending') {
+      const interaction = state.interactions.find(i => i.id === id);
+      if (interaction) startDurationTimer(interaction);
+    } else {
+      stopDurationTimer(id);
+    }
   }
 
   function updateTurnMeta(interaction) {
     const durationEl = document.querySelector(`[data-duration="${interaction.id}"]`);
     if (durationEl && interaction.timing?.duration) {
-      durationEl.textContent = formatDuration(interaction.timing.duration);
+      durationEl.innerHTML = durationGauge(interaction.timing.duration);
     }
     const modelEl = document.querySelector(`[data-model="${interaction.id}"]`);
     if (modelEl) {
       const model = interaction.request?.model || 'unknown';
       const shortModel = model.replace('claude-', '').split('-202')[0];
       const profile = interaction.profile || '';
-      modelEl.innerHTML = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+      const modelSpan = modelEl.querySelector('.entry-model-label');
+      if (modelSpan) modelSpan.innerHTML = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     }
-    const endpointEl = document.querySelector(`[data-endpoint="${interaction.id}"]`);
-    if (endpointEl) {
-      const ep = interaction.originalEndpoint || interaction.endpoint || '/v1/messages';
-      endpointEl.textContent = ep.replace(/^https?:\/\//, '').replace('/v1/', '…/');
+  }
+
+  function updateTurnTokens(interaction) {
+    const tokenEl = document.querySelector(`[data-tokenlabel="${interaction.id}"]`);
+    if (tokenEl) tokenEl.innerHTML = compactTokens(interaction.usage);
+    const costEl = document.querySelector(`[data-costgauge="${interaction.id}"]`);
+    if (costEl) {
+      const cost = computeCost(interaction.usage, interaction.pricing);
+      costEl.innerHTML = turnCostGauge(cost);
     }
+    updateUserTurnTotals();
+  }
+
+  function updateUserTurnTotals() {
+    // Remove existing totals
+    timelineList.querySelectorAll('.user-turn-total').forEach(el => el.remove());
+
+    const children = [...timelineList.children];
+    let sectionCost = 0;
+    let lastGroupInSection = null;
+
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el.classList.contains('turn-group')) continue;
+
+      const isNewSection = el.classList.contains('new-user-turn') && lastGroupInSection;
+      if (isNewSection) {
+        // Close previous section
+        insertTurnTotal(lastGroupInSection, sectionCost);
+        sectionCost = 0;
+      }
+
+      const turnId = el.dataset.turnId;
+      const interaction = state.interactions.find(it => it.id === turnId);
+      if (interaction) {
+        const cost = computeCost(interaction.usage, interaction.pricing);
+        if (cost != null) sectionCost += cost;
+      }
+      lastGroupInSection = el;
+    }
+    // Close final section
+    if (lastGroupInSection) insertTurnTotal(lastGroupInSection, sectionCost);
+  }
+
+  function insertTurnTotal(afterEl, cost) {
+    if (!cost) return;
+    const el = document.createElement('div');
+    el.className = 'user-turn-total';
+    el.innerHTML = `\u03A3 ${formatCost(cost)}`;
+    afterEl.after(el);
   }
 
   function badgeClass(status) {
@@ -1045,13 +1152,9 @@
 
     html += `</div>`;
 
-    html += `<div class="detail-panel tokens-panel">`;
-    html += `<div class="usage-bar" id="usage-bar">${interaction.usage ? renderUsage(interaction.usage, interaction.pricing) : '<span class="info-label">--</span>'}</div>`;
-    html += `</div>`;
-
     html += `<div class="detail-panel response-panel">`;
-    const respChars = resp.body ? JSON.stringify(resp.body).length : (resp.sseEvents ? resp.sseEvents.reduce((n, e) => n + JSON.stringify(e.data || '').length, 0) : 0);
-    html += `<div class="section-title">Response ${respChars ? charGauge(respChars) : ''}</div>`;
+    const respChars = interaction._respChars || (resp.body ? JSON.stringify(resp.body).length : (resp.sseEvents ? resp.sseEvents.reduce((n, e) => n + JSON.stringify(e.data || '').length, 0) : 0));
+    html += `<div class="section-title">Response <span id="resp-char-gauge">${respChars ? charGauge(respChars) : ''}</span></div>`;
 
     const statusOk = resp.status >= 200 && resp.status < 300;
     html += `<div class="info-grid">
@@ -1086,14 +1189,12 @@
 
     html += `</div>`;
 
-    if (resp.sseEvents?.length > 0) {
-      html += `<details>
-        <summary>Raw SSE Events (${resp.sseEvents.length})</summary>
-        <pre class="json-block">${resp.sseEvents.map(e =>
-          `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
-        ).join('\n')}</pre>
-      </details>`;
-    }
+    html += `<details id="raw-sse-details"${resp.sseEvents?.length > 0 ? '' : ' hidden'}>
+      <summary>Raw SSE Events (<span id="raw-sse-count">${resp.sseEvents?.length || 0}</span>)</summary>
+      <pre class="json-block" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
+        `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
+      ).join('\n') : ''}</pre>
+    </details>`;
 
     html += `</div>`;
 
@@ -1290,6 +1391,43 @@
     }).join('');
   }
 
+  function compactTokens(usage) {
+    if (!usage) return '';
+    const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+    const arrowUp = '<svg width="7" height="7" viewBox="0 0 8 8"><path d="M4 1L7 5H1Z" fill="currentColor"/></svg>';
+    const arrowDn = '<svg width="7" height="7" viewBox="0 0 8 8"><path d="M4 7L1 3H7Z" fill="currentColor"/></svg>';
+    const cacheIcon = '<svg width="8" height="8" viewBox="0 0 10 10"><ellipse cx="5" cy="2.5" rx="4" ry="1.8" fill="none" stroke="currentColor" stroke-width="0.9"/><path d="M1 2.5v2.2c0 1 1.8 1.8 4 1.8s4-.8 4-1.8V2.5" fill="none" stroke="currentColor" stroke-width="0.9"/><path d="M1 4.7v2.2c0 1 1.8 1.8 4 1.8s4-.8 4-1.8V4.7" fill="none" stroke="currentColor" stroke-width="0.9"/></svg>';
+    let html = '';
+    if (usage.input_tokens != null) html += `<span class="et-in">${arrowUp} ${fmt(usage.input_tokens)}</span>`;
+    if (usage.output_tokens != null) html += `<span class="et-out">${arrowDn} ${fmt(usage.output_tokens)}</span>`;
+    if (usage.cache_creation_input_tokens) html += `<span class="et-cw">${cacheIcon} ${fmt(usage.cache_creation_input_tokens)}w</span>`;
+    if (usage.cache_read_input_tokens) html += `<span class="et-cr">${cacheIcon} ${fmt(usage.cache_read_input_tokens)}r</span>`;
+    return html;
+  }
+
+  function durationGauge(ms) {
+    if (ms == null) return '--';
+    const secs = ms / 1000;
+    const pct = Math.min(secs / 500, 1);
+    const w = 32, h = 8, fill = pct * w;
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    return `<span class="entry-duration-gauge"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" rx="2" fill="var(--bg)" stroke="var(--border)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span class="entry-duration-label" style="color:${color}">${formatDuration(ms)}</span></span>`;
+  }
+
+  function turnCostGauge(cost) {
+    if (cost == null) return '';
+    const pct = Math.min(cost / 1, 1);
+    const w = 32, h = 8, fill = pct * w;
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    return `<span class="entry-cost-gauge"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" rx="2" fill="var(--bg)" stroke="var(--border)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span class="entry-cost-label" style="color:${color}">${formatCost(cost)}</span></span>`;
+  }
+
   function charGauge(chars, suffix) {
     // chars in thousands; gauge 0-200k, green->yellow->red->darkred
     const k = chars / 1000;
@@ -1406,6 +1544,31 @@
     if (costEl) {
       costEl.innerHTML = hasCost ? costGauge(totalCost) : '<span class="footer-placeholder">price</span>';
     }
+
+    // Timeline footer — total busy time and cost of visible turns
+    const tlTimeEl = document.getElementById('timeline-total-time');
+    const tlCostEl = document.getElementById('timeline-total-cost');
+    let visibleCost = 0, visibleTime = 0;
+    let hasVisibleCost = false, hasVisibleTime = false;
+    for (const i of source) {
+      if (!isVisibleInTimeline(i)) continue;
+      const c = computeCost(i.usage, i.pricing);
+      if (c != null) { visibleCost += c; hasVisibleCost = true; }
+      if (i.timing?.duration) { visibleTime += i.timing.duration; hasVisibleTime = true; }
+    }
+    if (tlTimeEl) {
+      tlTimeEl.textContent = hasVisibleTime ? `\u03A3 ${formatDuration(visibleTime)}` : '';
+    }
+    if (tlCostEl) {
+      tlCostEl.textContent = hasVisibleCost ? `\u03A3 ${formatCost(visibleCost)}` : '';
+    }
+  }
+
+  function isVisibleInTimeline(interaction) {
+    if (activeInstanceTab === 'all') {
+      return !(interaction.instanceId && knownInstances.has(interaction.instanceId));
+    }
+    return interaction.instanceId === activeInstanceTab;
   }
 
   function renderEmptyState() {
@@ -1564,6 +1727,17 @@
         }
         renderInspectorTabStrip();
         break;
+
+      case 'inspector:instancesCleared': {
+        const cleared = new Set(msg.instanceIds || []);
+        state.interactions = state.interactions.filter(i => !cleared.has(i.instanceId));
+        for (const id of cleared) knownInstances.delete(id);
+        if (cleared.has(activeInstanceTab)) activeInstanceTab = 'all';
+        renderInspectorTabStrip();
+        renderTimeline();
+        updateStats();
+        break;
+      }
     }
   }
 
@@ -1571,12 +1745,44 @@
   const resetBtn = document.getElementById('footerReset');
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
+      const instanceIds = [...new Set(state.interactions.map(i => i.instanceId).filter(Boolean))];
+      if (instanceIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds });
       state.interactions.length = 0;
       updateStats();
       renderTimeline();
       state.selection = null;
       detailContent.classList.add('hidden');
       emptyState.classList.remove('hidden');
+    });
+  }
+
+  // Timeline clear button — removes visible non-streaming interactions
+  const tlClearBtn = document.getElementById('timeline-clear-btn');
+  if (tlClearBtn) {
+    tlClearBtn.addEventListener('click', () => {
+      const toRemove = new Set();
+      for (const i of state.interactions) {
+        if (isVisibleInTimeline(i) && i.status !== 'streaming' && i.status !== 'pending') {
+          toRemove.add(i.id);
+        }
+      }
+      if (toRemove.size === 0) return;
+      // Collect instance IDs of removed interactions to clear from server
+      const instanceIds = [...new Set(
+        state.interactions.filter(i => toRemove.has(i.id) && i.instanceId).map(i => i.instanceId)
+      )];
+      state.interactions = state.interactions.filter(i => !toRemove.has(i.id));
+      // Only clear instances that have no remaining interactions
+      const remainingInstances = new Set(state.interactions.map(i => i.instanceId).filter(Boolean));
+      const toClear = instanceIds.filter(id => !remainingInstances.has(id));
+      if (toClear.length) sendWs({ type: 'inspector:clearInstances', instanceIds: toClear });
+      if (state.selection && toRemove.has(state.selection.id)) {
+        state.selection = null;
+        detailContent.classList.add('hidden');
+        emptyState.classList.remove('hidden');
+      }
+      renderTimeline();
+      updateStats();
     });
   }
 

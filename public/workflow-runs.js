@@ -20,26 +20,30 @@
       tabId,
       cwd: defaultCwd(),
       phase: 'pick',       // 'pick' | 'input' | 'active' | 'create'
+      tabKind: 'run',      // 'home' | 'edit' | 'run'
       workflowName: null,
       workflowData: null,
       compiledSource: null,
       inputValues: {},
+      showEditor: false,
       runId: null,
       steps: [],
       stepOutputs: {},
       pendingQuestion: null,
       answeredQuestions: [],
       finalStatus: null,
+      finalOutput: null,
       container: document.createElement('div'),
     };
   }
 
-  // Init default tab
-  tabs.set('wfrun-1', createTabState('wfrun-1'));
+  // Init default tab (permanent "Workflows" home tab)
+  const homeTab = createTabState('wfrun-1');
+  homeTab.tabKind = 'home';
+  tabs.set('wfrun-1', homeTab);
 
   // --- DOM refs ---
   const tabStrip = document.getElementById('wfrunTabStrip');
-  const tabNewBtn = document.getElementById('wfrunTabNew');
   const container = document.getElementById('wfrunContainer');
 
   // --- Tab strip ---
@@ -55,7 +59,14 @@
       const btn = document.createElement('button');
       btn.className = 'view-tab' + (id === activeTabId ? ' active' : '');
       btn.dataset.tabId = id;
-      const label = tab.phase === 'create' ? (tab.workflowName || 'New') : (tab.workflowName || id.replace('wfrun-', 'Run '));
+      let label;
+      if (tab.tabKind === 'home') {
+        label = 'Workflows';
+      } else if (tab.tabKind === 'edit') {
+        label = tab.workflowName ? tab.workflowName + ' edit' : 'New';
+      } else {
+        label = tab.workflowName ? tab.workflowName + ' run' : id.replace('wfrun-', 'Run ');
+      }
       btn.innerHTML = escHtml(label);
       // Busy-dot on running tabs (active run or editor generating/compiling)
       const ed = window.workflowModule?.getEditor?.(id);
@@ -64,7 +75,7 @@
         dot.className = 'busy-dot';
         btn.appendChild(dot);
       }
-      if (tabs.size > 1) {
+      if (tab.tabKind !== 'home') {
         const closeBtn = document.createElement('span');
         closeBtn.className = 'view-tab-close';
         closeBtn.textContent = '\u00d7';
@@ -74,17 +85,6 @@
       btn.addEventListener('click', () => switchTab(id));
       tabStrip.insertBefore(btn, ref);
     }
-    const newBtn = document.createElement('button');
-    newBtn.className = 'view-tab-new';
-    newBtn.title = 'New run tab';
-    newBtn.textContent = '+';
-    newBtn.addEventListener('click', () => {
-      const id = 'wfrun-' + nextTabNum++;
-      tabs.set(id, createTabState(id));
-      switchTab(id);
-      renderTabStrip();
-    });
-    tabStrip.insertBefore(newBtn, ref);
   }
 
   function switchTab(tabId) {
@@ -96,11 +96,10 @@
   }
 
   function closeTab(tabId) {
+    const tabToClose = tabs.get(tabId);
+    if (tabToClose?.tabKind === 'home') return; // never close home tab
     if (tabId === activeTabId) {
-      const keys = [...tabs.keys()];
-      const idx = keys.indexOf(tabId);
-      const next = keys[idx > 0 ? idx - 1 : idx + 1];
-      if (next) activeTabId = next;
+      activeTabId = 'wfrun-1'; // fall back to home tab
     }
     const tab = tabs.get(tabId);
     if (tab?.runId) {
@@ -117,6 +116,8 @@
   function renderPhase() {
     const tab = tabs.get(activeTabId);
     if (!tab || !container) return;
+    // Edit tabs always render the editor form directly
+    if (tab.tabKind === 'edit') { renderCreatePhase(tab); return; }
     switch (tab.phase) {
       case 'pick': renderPickPhase(tab); break;
       case 'input': renderInputPhase(tab); break;
@@ -130,7 +131,7 @@
     window.workflowModule?.renderCreateForm(
       container, tab.tabId,
       tab.workflowData || {
-        name: tab.workflowName || '', description: '', inputMode: 'none', inputs: {},
+        name: tab.workflowName || '', description: '', inputs: {},
         steps: {
           'step-1': { profile: 'full', do: 'Describe what to do', produces: 'description of output' },
           'done': { do: 'Summarize what was done' },
@@ -164,24 +165,29 @@
     html += '</div>';
     container.innerHTML = html;
 
-    // Run button
+    // Run button — open a new "run" tab
     container.querySelectorAll('.wfrun-card-run').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const name = btn.dataset.name;
-        tab.workflowName = name;
+        const id = 'wfrun-' + nextTabNum++;
+        const t = createTabState(id);
+        t.tabKind = 'run';
+        t.workflowName = name;
+        tabs.set(id, t);
         module.pendingLoad = name;
         sendWs({ type: 'workflow:load', name });
+        switchTab(id);
       });
     });
-    // Clicking the card itself opens the editor
+    // Clicking the card itself opens the editor in an edit tab
     container.querySelectorAll('.wfrun-card-clickable').forEach(card => {
       card.addEventListener('click', (e) => {
         if (e.target.closest('.wfrun-card-run')) return;
         const name = card.dataset.name;
         const id = 'wfrun-' + nextTabNum++;
         const t = createTabState(id);
-        t.phase = 'create';
+        t.tabKind = 'edit';
         t.workflowName = name;
         tabs.set(id, t);
         module.pendingEdit = { tabId: id, name };
@@ -195,9 +201,11 @@
   // --- Phase: Input ---
   function renderInputPhase(tab) {
     const wf = tab.workflowData;
-    if (!wf) return;
+    if (!wf) {
+      container.innerHTML = '<div class="wfrun-input-panel" style="padding:24px;color:var(--text-dim)">Loading workflow\u2026</div>';
+      return;
+    }
 
-    const isPromptMode = wf.inputMode === 'prompt';
     const inputs = wf.inputs || {};
     const keys = Object.keys(inputs);
 
@@ -213,55 +221,55 @@
         <p class="wfrun-input-desc">${escHtml(wf.description || '')}</p>
       </div>`;
 
-    if (isPromptMode) {
-      // Prompt mode: chat-like textarea + inline Run button
-      const val = tab.inputValues.prompt || '';
-      html += `<div class="wfrun-prompt-row">
-        <textarea class="wfrun-prompt-input" id="wfrunPromptInput" rows="2"
-          placeholder="Type your prompt\u2026">${escHtml(val)}</textarea>
-        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
-      </div>`;
-      html += `<div class="wfrun-input-actions">
-        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
-        ${cwdRow}
-      </div>`;
-    } else if (keys.length > 0) {
+    // Typed input fields (text, file)
+    if (keys.length > 0) {
       html += '<div class="wfrun-input-fields">';
       for (const key of keys) {
-        const desc = inputs[key] || '';
+        const rawDesc = inputs[key] || '';
+        const isFileInput = typeof rawDesc === 'object' && rawDesc.type === 'file';
+        const desc = typeof rawDesc === 'object' ? (rawDesc.description || '') : rawDesc;
         const val = tab.inputValues[key] || '';
-        html += `<div class="wfrun-field">
-          <label>${escHtml(key)}</label>
-          <input type="text" class="wfrun-field-input" data-key="${escHtml(key)}"
-            placeholder="${escHtml(desc)}" value="${escHtml(val)}">
-        </div>`;
+        if (isFileInput) {
+          const accept = rawDesc.accept || '';
+          const multiple = rawDesc.multiple ? 'multiple' : '';
+          html += `<div class="wfrun-field">
+            <label>${escHtml(key)}</label>
+            <div class="wfrun-file-zone" data-key="${escHtml(key)}" title="${escHtml(desc)}">
+              <span>${escHtml(desc) || 'Drop file here or click to browse'}</span>
+              <input type="file" class="wfrun-file-input" data-key="${escHtml(key)}"
+                ${accept ? `accept="${escHtml(accept)}"` : ''} ${multiple} style="display:none">
+            </div>
+            <div class="wfrun-file-preview" data-key="${escHtml(key)}"></div>
+          </div>`;
+        } else {
+          html += `<div class="wfrun-field">
+            <label>${escHtml(key)}</label>
+            <input type="text" class="wfrun-field-input" data-key="${escHtml(key)}"
+              placeholder="${escHtml(desc)}" value="${escHtml(val)}">
+          </div>`;
+        }
       }
       html += '</div>';
-      html += `<div class="wfrun-input-actions">
-        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
-        ${cwdRow}
-        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
-      </div>`;
-    } else {
-      html += '<p class="wfrun-no-inputs">This workflow has no inputs.</p>';
-      html += `<div class="wfrun-input-actions">
-        <button class="wfrun-back-btn" id="wfrunBack">Back</button>
-        ${cwdRow}
-        <button class="wfrun-run-btn" id="wfrunRun">Run</button>
-      </div>`;
     }
+
+    // Prompt textarea (always shown, optional)
+    const promptVal = tab.inputValues.prompt || '';
+    html += `<div class="wfrun-prompt-row">
+      <textarea class="wfrun-prompt-input" id="wfrunPromptInput" rows="2"
+        placeholder="Prompt (optional)">${escHtml(promptVal)}</textarea>
+      <button class="wfrun-run-btn" id="wfrunRun">Run</button>
+    </div>`;
+    html += `<div class="wfrun-input-actions">
+      <button class="wfrun-back-btn" id="wfrunBack">Back</button>
+      ${cwdRow}
+    </div>`;
 
     html += '</div>';
     container.innerHTML = html;
 
-    // Back button
+    // Back button — switch to Workflows home tab
     container.querySelector('#wfrunBack')?.addEventListener('click', () => {
-      tab.phase = 'pick';
-      tab.workflowName = null;
-      tab.workflowData = null;
-      tab.compiledSource = null;
-      renderPhase();
-      renderTabStrip();
+      switchTab('wfrun-1');
     });
 
     // Inline directory picker
@@ -278,18 +286,64 @@
       }
     });
 
+    // File input zones
+    if (!tab.inputFiles) tab.inputFiles = {};
+    container.querySelectorAll('.wfrun-file-zone').forEach(zone => {
+      const key = zone.dataset.key;
+      const fileInput = zone.querySelector('.wfrun-file-input');
+      const preview = container.querySelector(`.wfrun-file-preview[data-key="${key}"]`);
+
+      zone.addEventListener('click', () => fileInput?.click());
+      zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag-over'); });
+      zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+      zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        readFilesInto(key, e.dataTransfer?.files, preview);
+      });
+      fileInput?.addEventListener('change', () => {
+        readFilesInto(key, fileInput.files, preview);
+        fileInput.value = '';
+      });
+    });
+
+    function readFilesInto(key, fileList, previewEl) {
+      if (!fileList || fileList.length === 0) return;
+      if (!tab.inputFiles[key]) tab.inputFiles[key] = [];
+      let remaining = fileList.length;
+      for (const file of fileList) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          tab.inputFiles[key].push({ name: file.name, data: reader.result });
+          remaining--;
+          if (remaining === 0 && previewEl) {
+            previewEl.innerHTML = tab.inputFiles[key]
+              .map((f, i) => `<span class="wfrun-file-chip">${escHtml(f.name)} <button data-key="${escHtml(key)}" data-idx="${i}" class="wfrun-file-remove">&times;</button></span>`)
+              .join('');
+            previewEl.querySelectorAll('.wfrun-file-remove').forEach(btn => {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                tab.inputFiles[btn.dataset.key].splice(parseInt(btn.dataset.idx), 1);
+                readFilesInto(btn.dataset.key, [], previewEl); // re-render
+                previewEl.innerHTML = (tab.inputFiles[btn.dataset.key] || [])
+                  .map((f, i) => `<span class="wfrun-file-chip">${escHtml(f.name)} <button data-key="${escHtml(btn.dataset.key)}" data-idx="${i}" class="wfrun-file-remove">&times;</button></span>`)
+                  .join('');
+              });
+            });
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
     // Run button
     container.querySelector('#wfrunRun')?.addEventListener('click', () => {
-      let collected = {};
-      if (isPromptMode) {
-        const promptVal = container.querySelector('#wfrunPromptInput')?.value?.trim() || '';
-        if (!promptVal) return; // require prompt input
-        collected = { prompt: promptVal };
-      } else {
-        container.querySelectorAll('.wfrun-field-input').forEach(inp => {
-          collected[inp.dataset.key] = inp.value || inp.placeholder || '';
-        });
-      }
+      const collected = {};
+      container.querySelectorAll('.wfrun-field-input').forEach(inp => {
+        collected[inp.dataset.key] = inp.value || inp.placeholder || '';
+      });
+      const promptVal = container.querySelector('#wfrunPromptInput')?.value?.trim() || '';
+      if (promptVal) collected.prompt = promptVal;
       tab.inputValues = collected;
       tab.phase = 'active';
       tab.steps = [];
@@ -298,29 +352,31 @@
       tab.answeredQuestions = [];
       tab.finalStatus = null;
 
-      sendWs({
+      const runMsg = {
         type: 'workflow:run',
         name: tab.workflowName,
         inputs: collected,
         cwd: tab.cwd || defaultCwd(),
         tabId: tab.tabId,
-      });
+      };
+      // Include file inputs if any
+      if (tab.inputFiles && Object.keys(tab.inputFiles).length > 0) {
+        runMsg.files = tab.inputFiles;
+      }
+      sendWs(runMsg);
 
       renderPhase();
       renderTabStrip();
     });
 
-    // Focus prompt input and handle Enter to run
-    if (isPromptMode) {
-      const promptInput = container.querySelector('#wfrunPromptInput');
-      promptInput?.focus();
-      promptInput?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          container.querySelector('#wfrunRun')?.click();
-        }
-      });
-    }
+    // Enter to run from prompt input
+    const promptInput = container.querySelector('#wfrunPromptInput');
+    promptInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        container.querySelector('#wfrunRun')?.click();
+      }
+    });
   }
 
   // --- Step detail modal ---
@@ -404,6 +460,7 @@
     for (const s of tab.steps) {
       const icon = icons[s.status] || '\u25cb';
       const elapsed = s.elapsed != null ? (s.elapsed < 1000 ? s.elapsed + 'ms' : (s.elapsed / 1000).toFixed(1) + 's') : '';
+      const costStr = s.cost ? `<span class="wfrun-step-cost">${formatCost(s.cost)}</span>` : '';
       const profileTag = s.profile ? `<span class="wfrun-step-profile" data-profile="${escHtml(s.profile)}">${escHtml(s.profile)}</span>` : '';
 
       html += `<div class="wfrun-step-row ${s.status}" data-step="${escHtml(s.id)}">
@@ -411,6 +468,7 @@
         <span class="wfrun-step-name" data-step-click="${escHtml(s.id)}">${escHtml(s.id)}</span>
         ${profileTag}
         <span class="wfrun-step-elapsed">${elapsed}</span>
+        ${costStr}
       </div>`;
     }
     html += '</div>';
@@ -452,13 +510,46 @@
     // Result banner
     if (tab.finalStatus) {
       const cls = tab.finalStatus === 'completed' ? 'success' : tab.finalStatus === 'cancelled' ? 'warning' : 'error';
+      let totalCost = 0;
+      let totalElapsed = 0;
+      if (tab.performanceCosts) {
+        for (const v of Object.values(tab.performanceCosts)) {
+          if (v.cost) totalCost += v.cost;
+          if (v.elapsed_seconds) totalElapsed += v.elapsed_seconds;
+        }
+      }
+      const costSuffix = totalCost > 0 ? ` \u00b7 ${formatCost(totalCost)} \u00b7 ${totalElapsed.toFixed(1)}s` : '';
       html += `<div class="wfrun-result-banner ${cls}">
-        Workflow ${escHtml(tab.finalStatus)}${tab.errorMessage ? ': ' + escHtml(tab.errorMessage) : ''}
+        Workflow ${escHtml(tab.finalStatus)}${tab.errorMessage ? ': ' + escHtml(tab.errorMessage) : ''}${costSuffix}
+      </div>`;
+    }
+
+    // Final output display
+    if (tab.finalOutput) {
+      let formatted;
+      try {
+        const parsed = typeof tab.finalOutput === 'string' ? JSON.parse(tab.finalOutput) : tab.finalOutput;
+        formatted = JSON.stringify(parsed, null, 2);
+      } catch { formatted = tab.finalOutput; }
+      html += `<div class="wfrun-final-output">
+        <div class="wfrun-final-output-header">Output<button class="wfrun-final-output-copy" id="wfrunCopyOutput" title="Copy to clipboard">Copy</button></div>
+        <pre class="wfrun-final-output-content">${escHtml(formatted)}</pre>
       </div>`;
     }
 
     html += '</div>';
     container.innerHTML = html;
+
+    // Event: copy output
+    container.querySelector('#wfrunCopyOutput')?.addEventListener('click', (e) => {
+      const pre = container.querySelector('.wfrun-final-output-content');
+      if (pre) {
+        navigator.clipboard.writeText(pre.textContent).then(() => {
+          e.target.textContent = 'Copied';
+          setTimeout(() => { e.target.textContent = 'Copy'; }, 1500);
+        });
+      }
+    });
 
     // Event: step header click — toggle collapse
     container.querySelectorAll('[data-step-toggle]').forEach(hdr => {
@@ -499,21 +590,9 @@
       if (tab.runId) sendWs({ type: 'workflow:run:cancel', runId: tab.runId });
     });
 
-    // Event: new run
+    // Event: new run — switch to Workflows home tab
     container.querySelector('#wfrunNewRun')?.addEventListener('click', () => {
-      tab.phase = 'pick';
-      tab.workflowName = null;
-      tab.workflowData = null;
-      tab.compiledSource = null;
-      tab.runId = null;
-      tab.steps = [];
-      tab.stepOutputs = {};
-      tab.finalStatus = null;
-      tab.errorMessage = null;
-      tab.pendingQuestion = null;
-      tab.answeredQuestions = [];
-      renderPhase();
-      renderTabStrip();
+      switchTab('wfrun-1');
     });
 
     // Event: escalation form interactivity via shared askFormBind
@@ -596,18 +675,30 @@
       }
 
       case 'workflow:loaded': {
-        // Check if this is an edit load for a create tab
+        // Check if this is an edit load
         if (module.pendingEdit && module.pendingEdit.name === msg.name) {
           const editTabId = module.pendingEdit.tabId;
+          const shouldModify = module.pendingModify;
           module.pendingEdit = null;
+          module.pendingModify = false;
           const t = tabs.get(editTabId);
           if (t) {
             t.workflowData = msg.workflow;
             t.compiledSource = msg.compiledSource || null;
-            t.phase = 'create';
+            t.showEditor = true;
+            if (t.phase !== 'active') t.phase = 'input';
             // Reset editor so it picks up the real workflow data
             window.workflowModule?.removeEditor(editTabId);
             if (editTabId === activeTabId) renderPhase();
+            // If triggered from "Modify Workflow" button, open the modify modal
+            if (shouldModify) {
+              setTimeout(() => {
+                const ed = window.workflowModule?.getEditor(editTabId);
+                if (ed && ed._ui?.getSelectedProfiles) {
+                  window.workflowModule.openModifyModal(ed, editTabId, ed._ui.getSelectedProfiles);
+                }
+              }, 100);
+            }
           }
           break;
         }
@@ -616,7 +707,7 @@
         if (t && t.workflowName === msg.name) {
           t.workflowData = msg.workflow;
           t.compiledSource = msg.compiledSource || null;
-          t.phase = 'input';
+          if (t.tabKind !== 'home') t.phase = 'input';
           renderPhase();
         }
         break;
@@ -632,6 +723,7 @@
         }
         t.phase = 'active';
         if (msg.tabId === activeTabId) renderActivePhase(t);
+        renderTabStrip();
         break;
       }
 
@@ -666,7 +758,7 @@
         if (msg.output && !t.stepOutputs[msg.stepId]) {
           t.stepOutputs[msg.stepId] = msg.output;
         }
-        updateStep(t, msg.stepId, msg.success ? 'done' : 'failed', msg.elapsed);
+        updateStep(t, msg.stepId, msg.success ? 'done' : 'failed', msg.elapsed, msg.cost);
         if (msg.tabId === activeTabId) renderActivePhase(t);
         break;
       }
@@ -675,6 +767,8 @@
         const t = findTab(msg.tabId);
         if (!t) break;
         t.finalStatus = msg.status || 'completed';
+        t.finalOutput = msg.output || null;
+        t.performanceCosts = msg.performance_costs || null;
         t.runId = null;
         if (msg.tabId === activeTabId) renderActivePhase(t);
         renderTabStrip();
@@ -765,11 +859,12 @@
     }
   }
 
-  function updateStep(tab, stepId, status, elapsed) {
+  function updateStep(tab, stepId, status, elapsed, cost) {
     const step = tab.steps.find(s => s.id === stepId);
     if (step) {
       step.status = status;
       if (elapsed !== undefined) step.elapsed = elapsed;
+      if (cost !== undefined) step.cost = cost;
       if (status === 'running' && !step.startedAt) step.startedAt = Date.now();
     }
   }
@@ -777,6 +872,14 @@
   function formatStepTime(ts) {
     if (!ts) return '';
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function formatCost(cost) {
+    if (cost == null) return '';
+    if (cost < 0.001) return '$' + cost.toFixed(6);
+    if (cost < 0.01) return '$' + cost.toFixed(4);
+    if (cost < 1) return '$' + cost.toFixed(3);
+    return '$' + cost.toFixed(2);
   }
 
   function handleSettings(msg) {
@@ -793,6 +896,7 @@
     const id = 'wfrun-' + nextTabNum++;
     const t = createTabState(id);
     t.phase = 'create';
+    t.tabKind = 'edit';
     tabs.set(id, t);
     switchTab(id);
     renderTabStrip();
@@ -804,12 +908,14 @@
 
   // --- Public API ---
   function startRun(name) {
-    const tab = tabs.get(activeTabId);
-    if (!tab) return;
-    tab.workflowName = name;
-    tab.phase = 'pick'; // will transition to input on load
+    const id = 'wfrun-' + nextTabNum++;
+    const t = createTabState(id);
+    t.tabKind = 'run';
+    t.workflowName = name;
+    tabs.set(id, t);
     module.pendingLoad = name;
     sendWs({ type: 'workflow:load', name });
+    switchTab(id);
   }
 
   function updateTabLabel(tabId, label) {
@@ -821,16 +927,16 @@
   }
 
   function getCreateTabId() {
-    // Find the active create tab, or any create tab
+    // Find the active tab with an editor (create phase or inline editor)
     const active = tabs.get(activeTabId);
-    if (active?.phase === 'create') return activeTabId;
+    if (active?.phase === 'create' || active?.showEditor) return activeTabId;
     for (const [id, t] of tabs) {
-      if (t.phase === 'create') return id;
+      if (t.phase === 'create' || t.showEditor) return id;
     }
     return null;
   }
 
   // --- Export ---
-  const module = { handleMessage, handleSettings, pendingLoad: null, pendingEdit: null, startRun, updateTabLabel, getCreateTabId, renderTabStrip };
+  const module = { handleMessage, handleSettings, pendingLoad: null, pendingEdit: null, pendingModify: false, startRun, updateTabLabel, getCreateTabId, renderTabStrip };
   window.workflowRunModule = module;
 })();

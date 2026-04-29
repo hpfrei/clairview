@@ -15,6 +15,99 @@ const PROJECT_ROOT = path.dirname(__dirname);
 // Map<tool_use_id, { questions, resolve, reject }>
 const pendingQuestions = new Map();
 
+const RETRYABLE_ERR_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+]);
+
+function isRetryableFetchError(err) {
+  if (!err) return false;
+  const code = err.code || err.cause?.code;
+  if (code && RETRYABLE_ERR_CODES.has(code)) return true;
+  const msg = `${err.message || ''} ${err.cause?.message || ''}`.toLowerCase();
+  return /fetch failed|terminated|socket hang up|network|econn|und_err/.test(msg);
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Fetch with transparent retry. For streaming requests, also reads the first
+ * body chunk so we know the stream is actually flowing before the caller
+ * commits headers to the client — a stream error on the first read is still
+ * retry-safe, but a stream error after the first chunk is forwarded is not.
+ *
+ * Returns { upstream, firstChunk, reader }.
+ *   - Non-streaming / error / empty body: { upstream, firstChunk: null, reader: null }
+ *   - Streaming success: { upstream, firstChunk: Uint8Array, reader: ReadableStreamDefaultReader }
+ *     (caller must consume firstChunk first, then read the rest from reader)
+ */
+async function fetchUpstreamWithRetry(url, opts, {
+  maxRetries = 2,
+  baseDelay = 300,
+  bufferFirstChunk = false,
+} = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const upstream = await fetch(url, opts);
+
+      // Retry on transient 5xx
+      if (upstream.status >= 500 && upstream.status < 600 && attempt < maxRetries) {
+        lastErr = new Error(`Upstream HTTP ${upstream.status}`);
+        try { await upstream.body?.cancel(); } catch {}
+        console.log(`[proxy] Upstream ${upstream.status}, retrying (${attempt + 1}/${maxRetries})`);
+        await sleep(baseDelay * 2 ** attempt);
+        continue;
+      }
+
+      // Non-streaming / error response: hand the body back untouched
+      if (!bufferFirstChunk || !upstream.ok || !upstream.body) {
+        return { upstream, firstChunk: null, reader: null };
+      }
+
+      // Streaming success: peek the first chunk so we know the stream is flowing
+      const reader = upstream.body.getReader();
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          try { reader.releaseLock(); } catch {}
+          return { upstream, firstChunk: null, reader: null };
+        }
+        return { upstream, firstChunk: value, reader };
+      } catch (readErr) {
+        try { reader.releaseLock(); } catch {}
+        try { await upstream.body.cancel(); } catch {}
+        if (!isRetryableFetchError(readErr) || attempt === maxRetries) throw readErr;
+        lastErr = readErr;
+        console.log(`[proxy] First-chunk read failed, retrying (${attempt + 1}/${maxRetries}): ${readErr.message}`);
+        await sleep(baseDelay * 2 ** attempt);
+        continue;
+      }
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableFetchError(err) || attempt === maxRetries) throw err;
+      console.log(`[proxy] Upstream fetch failed, retrying (${attempt + 1}/${maxRetries}): ${err.message}`);
+      await sleep(baseDelay * 2 ** attempt);
+    }
+  }
+  throw lastErr;
+}
+
+/** Async generator that yields a pre-read first chunk, then drains the reader. */
+async function* resumeWebStream(firstChunk, reader) {
+  yield firstChunk;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+}
+
 function sendProxyError(res, err) {
   res.writeHead(502, { 'content-type': 'application/json' });
   res.end(JSON.stringify({
@@ -85,7 +178,85 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instan
   });
 }
 
+function sendDummyResponse(ctx, { text, model, usage }) {
+  const dummyId = `msg_dummy_${generateId()}`;
+  const finalModel = model || ctx.body.model;
+  const finalUsage = usage || { input_tokens: 0, output_tokens: 0 };
+
+  ctx.interaction.response.status = 200;
+  ctx.interaction.timing.ttfb = Date.now() - ctx.interaction.timing.startedAt;
+  ctx.interaction.status = 'complete';
+  ctx.interaction.usage = finalUsage;
+
+  if (ctx.isStreaming) {
+    ctx.res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      'connection': 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    const sseEvents = [
+      `event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: dummyId, type: 'message', role: 'assistant', content: [], model: finalModel, stop_reason: null, stop_sequence: null, usage: finalUsage } })}\n\n`,
+      `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })}\n\n`,
+      `event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+    ];
+    for (const evt of sseEvents) {
+      ctx.res.write(evt);
+      const parsed = parseSSEString(evt);
+      if (parsed) {
+        ctx.interaction.response.sseEvents.push(parsed);
+        trackSSEEvent(parsed, ctx.interaction, new Map(), ctx.broadcaster, ctx.interaction.instanceId);
+      }
+    }
+    ctx.res.end();
+  } else {
+    const responseBody = {
+      id: dummyId, type: 'message', role: 'assistant',
+      content: [{ type: 'text', text }],
+      model: finalModel, stop_reason: 'end_turn', stop_sequence: null,
+      usage: finalUsage,
+    };
+    ctx.interaction.response.body = responseBody;
+    ctx.res.writeHead(200, { 'content-type': 'application/json' });
+    ctx.res.end(JSON.stringify(responseBody));
+  }
+}
+
 function createProxyRouter(store, broadcaster, targetUrl) {
+  // Rule cache: re-reads manifest on every request (cheap), re-requires JS only when files change
+  const _ruleCache = new Map(); // id -> { mtime, fn }
+
+  function getEnabledRules() {
+    const manifest = caps.listProxyRules(PROJECT_ROOT);
+    const rules = [];
+    for (const entry of manifest) {
+      if (!entry.enabled) continue;
+      const filePath = path.join(PROJECT_ROOT, 'capabilities', 'proxy-rules', `${entry.id}.js`);
+      try {
+        let cached = _ruleCache.get(entry.id);
+        let mtime;
+        try { mtime = require('fs').statSync(filePath).mtimeMs; } catch { continue; }
+        if (!cached || cached.mtime !== mtime) {
+          delete require.cache[require.resolve(filePath)];
+          const mod = require(filePath);
+          cached = { mtime, fn: mod };
+          _ruleCache.set(entry.id, cached);
+        }
+        rules.push({ ...entry, fn: cached.fn });
+      } catch (err) {
+        console.error(`[proxy] Failed to load rule ${entry.id}: ${err.message}`);
+      }
+    }
+    return rules;
+  }
+
+  // Warm the cache at startup
+  const initialRules = getEnabledRules();
+  for (const r of initialRules) console.log(`[proxy] Loaded rule: ${r.name} (${r.id})`);
+
   const router = express.Router();
 
   router.use(express.json({ limit: '50mb' }));
@@ -167,19 +338,6 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       body.tools = body.tools.map(t => t.name === 'AskUserQuestion' ? enhancedAskTool : t);
     }
 
-    // Remove tools that should never be sent to API endpoints
-    const REMOVED_TOOLS = new Set([
-      'mcp__claude_ai_Gmail__authenticate',
-      'mcp__claude_ai_Google_Calendar__authenticate',
-      'CronCreate', 'CronDelete', 'CronList',
-      'EnterWorktree', 'ExitWorktree',
-      'NotebookEdit',
-      'RemoteTrigger',
-    ]);
-    if (Array.isArray(body.tools)) {
-      body.tools = body.tools.filter(t => !REMOVED_TOOLS.has(t.name));
-    }
-
     // Resolve profile and model from per-request URL context
     const profileName = req.profileName || null;
     const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
@@ -212,6 +370,62 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       status: intercepted ? 'intercepted' : 'pending',
     };
 
+    // --- Run proxy rules ---
+    for (const rule of getEnabledRules()) {
+      try {
+        const ctx = {
+          body,
+          isStreaming,
+          profileName,
+          profileData,
+          instanceId: req.instanceId || null,
+          req,
+          res,
+          interaction,
+          store,
+          broadcaster,
+          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent },
+        };
+        const shortCircuited = await rule.fn(ctx);
+        if (shortCircuited === true) {
+          interaction.request = { ...body };
+          interaction.timing.duration = Date.now() - interaction.timing.startedAt;
+          if (interaction.status === 'pending') interaction.status = 'complete';
+          interaction.ruleApplied = rule.id;
+          store.add(interaction);
+          broadcaster.broadcast({ type: 'interaction:start', interaction: sanitizeForDashboard(interaction) });
+          store.save(interaction.id);
+          broadcaster.broadcast({ type: 'interaction:complete', interaction: sanitizeForDashboard(interaction) });
+          return;
+        }
+      } catch (err) {
+        console.error(`[proxy] Rule "${rule.name}" (${rule.id}) threw:`, err.message);
+      }
+    }
+
+    // --- Profile-level tool filtering (applies to all paths) ---
+    if (profileData && Array.isArray(body.tools)) {
+      const disabledSet = profileData.disabledTools?.length > 0
+        ? new Set(profileData.disabledTools)
+        : null;
+      const allowedSet = profileData.allowedTools?.length > 0
+        ? new Set(profileData.allowedTools)
+        : null;
+      if (disabledSet || allowedSet) {
+        const before = body.tools.length;
+        body.tools = body.tools.filter(t => {
+          if (!t.name) return true;
+          if (disabledSet && disabledSet.has(t.name)) return false;
+          if (allowedSet && !allowedSet.has(t.name)) return false;
+          return true;
+        });
+        const removed = before - body.tools.length;
+        if (removed > 0) console.log(`[proxy] Profile "${profileName}" filtered ${removed} tools (${body.tools.length} remaining)`);
+      }
+    }
+
+    // Snapshot request after all filtering, then broadcast to dashboard
+    interaction.request = { ...body };
     store.add(interaction);
     broadcaster.broadcast({
       type: 'interaction:start',
@@ -234,26 +448,6 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     if (provider && modelDef) {
       // --- Translation path: route through non-Anthropic provider ---
       try {
-        // Filter tools based on profile's disabledTools / allowedTools
-        if (profileData && Array.isArray(body.tools)) {
-          const disabledSet = profileData.disabledTools?.length > 0
-            ? new Set(profileData.disabledTools)
-            : null;
-          const allowedSet = profileData.allowedTools?.length > 0
-            ? new Set(profileData.allowedTools)
-            : null;
-          if (disabledSet || allowedSet) {
-            body.tools = body.tools.filter(t => {
-              if (!t.name) return true;
-              if (disabledSet && disabledSet.has(t.name)) return false;
-              if (allowedSet && !allowedSet.has(t.name)) return false;
-              return true;
-            });
-          }
-        }
-
-        // Re-snapshot request after profile-based tool filtering
-        interaction.request = { ...body };
 
         const translated = provider.translateRequest(body, modelDef);
         console.log(`[proxy] Translating to ${modelDef.name} (${modelDef.provider}) → ${translated.url}`);
@@ -429,11 +623,15 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     } else {
     // --- Standard Anthropic passthrough ---
     try {
-      const upstream = await fetch(`${targetUrl}/v1/messages`, {
-        method: 'POST',
-        headers: filterRequestHeaders(req.headers),
-        body: JSON.stringify(body),
-      });
+      const { upstream, firstChunk, reader } = await fetchUpstreamWithRetry(
+        `${targetUrl}/v1/messages`,
+        {
+          method: 'POST',
+          headers: filterRequestHeaders(req.headers),
+          body: JSON.stringify(body),
+        },
+        { bufferFirstChunk: isStreaming }
+      );
 
       interaction.response.status = upstream.status;
       interaction.response.headers = filterResponseHeaders(upstream.headers);
@@ -458,7 +656,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, interaction.instanceId);
         });
 
-        const nodeStream = Readable.fromWeb(upstream.body);
+        const nodeStream = reader
+          ? Readable.from(resumeWebStream(firstChunk, reader))
+          : Readable.fromWeb(upstream.body);
 
         pipeline(nodeStream, passthrough, res, (err) => {
           if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
@@ -549,6 +749,42 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   // POST /v1/messages/count_tokens
   router.post(['/v1/messages/count_tokens', '/p/:profileName/v1/messages/count_tokens', '/p/:profileName/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
     const body = req.body;
+
+    const profileName = req.profileName || null;
+    const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
+
+    // Apply proxy rules (tool filtering, etc.)
+    for (const rule of getEnabledRules()) {
+      try {
+        const ctx = {
+          body, isStreaming: false, profileName, profileData,
+          instanceId: req.instanceId || null, req, res,
+          interaction: null, store, broadcaster,
+          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent },
+        };
+        if (await rule.fn(ctx) === true) {
+          res.json({ input_tokens: 0 });
+          return;
+        }
+      } catch (err) {
+        console.error(`[proxy] Rule "${rule.name}" (${rule.id}) threw on count_tokens:`, err.message);
+      }
+    }
+
+    // Profile-level tool filtering
+    if (profileData && Array.isArray(body.tools)) {
+      const disabledSet = profileData.disabledTools?.length > 0 ? new Set(profileData.disabledTools) : null;
+      const allowedSet = profileData.allowedTools?.length > 0 ? new Set(profileData.allowedTools) : null;
+      if (disabledSet || allowedSet) {
+        body.tools = body.tools.filter(t => {
+          if (!t.name) return true;
+          if (disabledSet && disabledSet.has(t.name)) return false;
+          if (allowedSet && !allowedSet.has(t.name)) return false;
+          return true;
+        });
+      }
+    }
+
     const interaction = {
       id: generateId(),
       timestamp: Date.now(),

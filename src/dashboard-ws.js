@@ -1,6 +1,6 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, resolveOutputDir, listFiles, processUploadedFiles } = require('./utils');
+const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, removeInstances, resolveOutputDir, listFiles, processUploadedFiles } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
@@ -17,10 +17,11 @@ function profilesWithUsage() {
 }
 
 class DashboardBroadcaster {
-  constructor(wss, store, sessionManager) {
+  constructor(wss, store, sessionManager, opts = {}) {
     this.wss = wss;
     this.store = store;
     this.sessionManager = sessionManager;
+    this.authToken = opts.authToken || null;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
     this.workflowHandler = null; // Set externally by src/workflow-handler.js
     this.apiListeners = new Set();
@@ -49,6 +50,7 @@ class DashboardBroadcaster {
           tabId: 'tab-1',
           cwd,
           outputsDir: OUTPUTS_DIR,
+          authToken: this.authToken,
           capabilities: this.sessionManager.capabilities,
           profiles: profilesWithUsage(),
           knownTools: caps.KNOWN_TOOLS,
@@ -80,18 +82,26 @@ class DashboardBroadcaster {
       if (this.mcpHandler) this.mcpHandler.onConnect(ws);
       // Workflow handler init
       if (this.workflowHandler) this.workflowHandler.onConnect(ws);
+      // Rule handler init
+      if (this.ruleHandler) this.ruleHandler.onConnect(ws);
 
       ws.on('message', (data) => {
         try {
           const msg = JSON.parse(data);
           const tabId = msg.tabId || 'tab-1';
           if (msg.type === 'chat:send' && this.sessionManager) {
-            this.sessionManager.send(tabId, msg.prompt || '');
+            this.sessionManager.send(tabId, msg.prompt || '', msg.files || null);
           } else if (msg.type === 'chat:stop' && this.sessionManager) {
             this.sessionManager.kill(tabId);
             clearPendingQuestionsForTab(tabId);
           } else if (msg.type === 'claude:killInstance') {
             if (msg.instanceId) killInstance(msg.instanceId);
+          } else if (msg.type === 'inspector:clearInstances') {
+            if (Array.isArray(msg.instanceIds) && msg.instanceIds.length > 0) {
+              this.store.removeByInstanceIds(msg.instanceIds);
+              removeInstances(msg.instanceIds);
+              this.broadcast({ type: 'inspector:instancesCleared', instanceIds: msg.instanceIds });
+            }
           } else if (msg.type === 'chat:setCwd' && this.sessionManager) {
             this.sessionManager.setCwd(msg.cwd || '', tabId);
           } else if (msg.type === 'chat:newTab' && this.sessionManager) {
@@ -262,6 +272,20 @@ class DashboardBroadcaster {
             } else {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete model: ${msg.name}` }));
             }
+          } else if (msg.type === 'model:toggle') {
+            const model = caps.loadModel(PROJECT_ROOT, msg.name);
+            if (model) {
+              model.disabled = !!msg.disabled;
+              caps.saveModel(PROJECT_ROOT, model);
+              this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
+            }
+          } else if (msg.type === 'model:scan') {
+            ws.send(JSON.stringify({ type: 'model:scan:start' }));
+            caps.scanProviderModels(PROJECT_ROOT).then(results => {
+              ws.send(JSON.stringify({ type: 'model:scan:result', results }));
+            }).catch(err => {
+              ws.send(JSON.stringify({ type: 'model:scan:error', error: err.message }));
+            });
           } else if (msg.type === 'anthropic:pricing:save') {
             if (msg.pricing && typeof msg.pricing === 'object') {
               caps.updateAnthropicPricing(PROJECT_ROOT, msg.pricing);
@@ -296,6 +320,8 @@ class DashboardBroadcaster {
             const dir = resolveOutputDir(msg.cwd || '');
             const files = listFiles(dir);
             ws.send(JSON.stringify({ type: 'files:list', tabId: msg.tabId || undefined, cwd: dir, files }));
+          } else if (msg.type.startsWith('rule:')) {
+            if (this.ruleHandler) this.ruleHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('mcp:')) {
             if (this.mcpHandler) this.mcpHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('workflow:')) {

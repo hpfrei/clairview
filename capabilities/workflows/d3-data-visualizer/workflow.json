@@ -8,6 +8,18 @@
       "required": false
     }
   },
+  "outputs": {
+    "visualization": {
+      "type": "file",
+      "description": "Self-contained HTML file with embedded D3.js visualization, CSS, and JavaScript",
+      "path": "/tmp/d3-visualization.html"
+    },
+    "design": {
+      "type": "json",
+      "description": "Visualization design specification: chart type, data structure, visual encodings, and interactivity plan",
+      "from_step": "gather-and-design"
+    }
+  },
   "steps": {
     "gather-and-design": {
       "profile": "full",

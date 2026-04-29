@@ -529,6 +529,8 @@ vistaclair exposes a REST API on the dashboard port (\`:3457\`) for programmatic
 
 The auth token is printed to the console when the server starts, or can be set via the \`AUTH_TOKEN\` environment variable.
 
+> **Body size limit:** 50 MB (base64-encoded files count toward this).
+
 \`\`\`svg
 <svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
   <defs><marker id="a5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
@@ -571,7 +573,7 @@ The auth token is printed to the console when the server starts, or can be set v
 
 ## POST /api/run
 
-Start a chat or workflow. Returns a **Server-Sent Events** stream.
+Start a chat or workflow. By default returns a **Server-Sent Events** stream. Set \`"stream": false\` to block until completion and get a single JSON response instead.
 
 ### Chat mode
 
@@ -579,9 +581,12 @@ Start a chat or workflow. Returns a **Server-Sent Events** stream.
 |-------|------|----------|-------------|
 | \`type\` | string | yes | \`"chat"\` |
 | \`prompt\` | string | yes | The user message to send to Claude |
+| \`stream\` | boolean | no | \`false\` to return a single JSON response instead of SSE. Default: \`true\`. |
 | \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`). Defaults to \`outputs/\`. |
 | \`profile\` | string | no | Profile name (\`"full"\`, \`"safe"\`, \`"readonly"\`, or custom). Does not change the global active profile. |
 | \`sessionId\` | string | no | Resume an existing session for multi-turn conversation. Returned in the \`done\` event. |
+| \`files\` | array | no | File attachments as base64 data URLs: \`[{name, data}]\`. Files are placed in the working directory and the prompt is augmented with instructions to read them. |
+| \`sourceInstanceId\` | string | no | Instance ID for routing AskUserQuestion back to the originating chat tab. |
 
 ### Workflow mode
 
@@ -589,11 +594,14 @@ Start a chat or workflow. Returns a **Server-Sent Events** stream.
 |-------|------|----------|-------------|
 | \`type\` | string | yes | \`"workflow"\` |
 | \`workflow\` | string | yes | Name of the workflow to run (e.g. \`"code-review"\`) |
+| \`stream\` | boolean | no | \`false\` to return a single JSON response instead of SSE. Default: \`true\`. |
 | \`inputs\` | object | no | Key-value input variables. For prompt-mode workflows, pass \`{ "prompt": "your message" }\`. |
 | \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`) |
 | \`profile\` | string | no | Profile override for all steps |
+| \`files\` | object | no | File attachments keyed by input name: \`{inputKey: [{name, data}]}\`. Each file is a base64 data URL. The input variable resolves to the placed filename. |
+| \`sourceInstanceId\` | string | no | Instance ID for routing AskUserQuestion back to the originating tab. |
 
-### SSE events
+### SSE events (stream mode, default)
 
 All responses stream as Server-Sent Events (\`Content-Type: text/event-stream\`).
 
@@ -603,7 +611,27 @@ All responses stream as Server-Sent Events (\`Content-Type: text/event-stream\`)
 | \`ask\` | \`{ toolUseId, questions }\` | AskUserQuestion -- the session needs user input to continue. Answer via \`POST /api/run/answer\`. |
 | \`step\` | \`{ stepId, status, text? }\` | Workflow only: step started (\`status: "running"\`), progress (\`text\` included), or completed (\`status: "done"\` / \`"failed"\`) |
 | \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId? }\` (chat) or \`{ result, runId }\` (workflow) | Final result. Chat includes \`sessionId\` for multi-turn. Workflow includes \`runId\`. |
+| \`done\` | \`{ result, sessionId? }\` (chat) or \`{ result, runId, output? }\` (workflow) | Final result. Chat: \`result\` is the full text, \`sessionId\` enables multi-turn. Workflow: \`result\` is the status, \`output\` is the final step text, \`runId\` identifies the run. |
+
+### JSON response (stream: false)
+
+When \`stream\` is \`false\`, the request blocks until the run completes (30-minute timeout) and returns a single JSON response.
+
+**Chat response:**
+\`\`\`json
+{ "result": "...full text...", "text": "...full text...", "sessionId": "..." }
+\`\`\`
+
+**Workflow response:**
+\`\`\`json
+{ "result": "done", "text": "...concatenated text...", "runId": "...", "output": "...", "steps": [...] }
+\`\`\`
+
+If the run pauses on an \`AskUserQuestion\`, the response returns immediately with \`status: "waiting"\` and the question details so you can answer via \`POST /api/run/answer\` and re-submit:
+
+\`\`\`json
+{ "status": "waiting", "toolUseId": "toolu_abc", "questions": [...], "text": "...so far..." }
+\`\`\`
 
 ---
 
@@ -615,6 +643,7 @@ Answer a pending \`AskUserQuestion\` that arrived via the \`ask\` SSE event. The
 |-------|------|----------|-------------|
 | \`toolUseId\` | string | yes | The \`toolUseId\` from the \`ask\` event |
 | \`answer\` | any | yes | The answer value (string or structured response) |
+| \`files\` | array | no | File attachments for file-type questions: \`[{questionId, name, data}]\`. Files are saved to \`outputs/_uploads/<toolUseId>/\` and paths are patched into the answer. |
 
 **Response:** \`{ ok: true }\` on success. \`404\` if no pending question matches the \`toolUseId\`.
 
@@ -645,84 +674,521 @@ Create a new directory within \`outputs/\`.
 
 ---
 
+## GET /api/file
+
+Serve a file from the \`outputs/\` directory.
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| \`path\` | string (query) | yes | Absolute path to the file. Must be inside the \`outputs/\` directory. |
+
+**Response:** The file content with the appropriate \`Content-Type\` header (html, json, js, css, txt, md, csv, xml, png, jpg, gif, svg, webp, pdf, or \`application/octet-stream\`). Returns \`403\` if the path is outside \`outputs/\`, \`404\` if the file doesn't exist.
+
+---
+
+## File attachment format
+
+Files are sent as base64 data URLs in the \`data\` field:
+
+\`\`\`
+data:<mime-type>;base64,<base64-encoded-content>
+\`\`\`
+
+For example: \`data:image/png;base64,iVBORw0KGgo...\`
+
+**Chat files** (\`files: [{name, data}]\`): placed in the working directory as \`upload-<timestamp>-<index>-<safename>\`. The prompt is augmented with instructions for Claude to read them.
+
+**Workflow files** (\`files: {inputKey: [{name, data}]}\`): placed in the working directory and the input variable (\`{{inputKey}}\`) resolves to the placed filename in step prompts.
+
+**Answer files** (\`files: [{questionId, name, data}]\`): saved to \`outputs/_uploads/<toolUseId>/\` and relative paths are patched into the answer array.
+
+---
+
 ## Examples
 
-### Chat -- single turn
+Each example shows both Bash and Node.js, covering text input, file input, and capturing results.
 
-\`\`\`bash
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"List all TODO comments in the codebase","profile":"readonly"}'
+### Non-streaming (stream: false)
+
+The simplest way to call the API. Blocks until completion and returns a single JSON response -- no SSE parsing needed. 30-minute timeout.
+
+\`\`\`html
+<div class="code-tabs">
+  <div class="code-tab-bar">
+    <button class="code-tab-btn active" data-tab="bash">Bash</button>
+    <button class="code-tab-btn" data-tab="node">Node.js</button>
+  </div>
+  <div class="code-tab-panel active" data-tab="bash">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+TOKEN="YOUR_TOKEN"
+HOST="http://localhost:3457"
+
+# Chat -- returns JSON with full result
+curl -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"chat","prompt":"Write a haiku about code","stream":false}'
+# {"result":"...","text":"...","sessionId":"..."}
+
+# Chat with file input
+FILE_DATA="data:image/png;base64,$(base64 -w0 photo.png)"
+curl -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"chat\",
+    \"prompt\": \"Describe this image\",
+    \"stream\": false,
+    \"files\": [{\"name\": \"photo.png\", \"data\": \"$FILE_DATA\"}]
+  }" | jq '.text'
+
+# Workflow -- returns JSON with result and output
+CSV_DATA="data:text/csv;base64,$(base64 -w0 data.csv)"
+curl -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"workflow\",
+    \"workflow\": \"analyze-data\",
+    \"stream\": false,
+    \"inputs\": {\"focus\": \"trends\"},
+    \"files\": {\"dataset\": [{\"name\": \"data.csv\", \"data\": \"$CSV_DATA\"}]}
+  }" | jq '.'
+# {"result":"done","text":"...","runId":"...","output":"...","steps":[...]}</code></pre></div>
+  </div>
+  <div class="code-tab-panel" data-tab="node">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
+const fs = require('fs');
+
+const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
+const PORT = 3457;
+
+function postJSON(path, body) {
+  return new Promise((resolve, reject) =&gt; {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      hostname: 'localhost', port: PORT, path, method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': \`Bearer \${TOKEN}\`,
+      },
+    }, res =&gt; {
+      let buf = '';
+      res.on('data', c =&gt; buf += c);
+      res.on('end', () =&gt; {
+        try { resolve(JSON.parse(buf)); } catch { resolve(buf); }
+      });
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+async function main() {
+  // Chat -- simple JSON response
+  const chatResult = await postJSON('/api/run', {
+    type: 'chat',
+    prompt: 'Write a haiku about code',
+    stream: false,
+  });
+  console.log('Chat:', chatResult.text);
+  console.log('Session:', chatResult.sessionId);
+
+  // Chat with file input
+  const fileB64 = fs.readFileSync('photo.png', 'base64');
+  const fileResult = await postJSON('/api/run', {
+    type: 'chat',
+    prompt: 'Describe this image',
+    stream: false,
+    files: [{ name: 'photo.png', data: \`data:image/png;base64,\${fileB64}\` }],
+  });
+  console.log('Description:', fileResult.text);
+
+  // Workflow with file input
+  const csvB64 = fs.readFileSync('data.csv', 'base64');
+  const wfResult = await postJSON('/api/run', {
+    type: 'workflow',
+    workflow: 'analyze-data',
+    stream: false,
+    inputs: { focus: 'trends' },
+    files: { dataset: [{ name: 'data.csv', data: \`data:text/csv;base64,\${csvB64}\` }] },
+  });
+  console.log('Status:', wfResult.result);
+  console.log('Output:', wfResult.output);
+  console.log('Steps:', wfResult.steps);
+}
+
+main().catch(console.error);</code></pre></div>
+  </div>
+</div>
 \`\`\`
 
-### Chat -- multi-turn (resume session)
+### Streaming (SSE) -- Chat
 
-\`\`\`bash
-# First message -- capture the sessionId from the done event
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"Explain the auth middleware"}'
+Stream response text in real-time, capture the \`sessionId\` for multi-turn.
 
-# Continue the conversation
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"Now add rate limiting to it","sessionId":"SESSION_ID"}'
+\`\`\`html
+<div class="code-tabs">
+  <div class="code-tab-bar">
+    <button class="code-tab-btn active" data-tab="bash">Bash</button>
+    <button class="code-tab-btn" data-tab="node">Node.js</button>
+  </div>
+  <div class="code-tab-panel active" data-tab="bash">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+TOKEN="YOUR_TOKEN"
+HOST="http://localhost:3457"
+
+\`\`\`html
+<div class="code-tabs">
+  <div class="code-tab-bar">
+    <button class="code-tab-btn active" data-tab="bash">Bash</button>
+    <button class="code-tab-btn" data-tab="node">Node.js</button>
+  </div>
+  <div class="code-tab-panel active" data-tab="bash">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+TOKEN="YOUR_TOKEN"
+HOST="http://localhost:3457"
+
+# Encode a file as base64 data URL
+FILE_DATA="data:image/png;base64,$(base64 -w0 photo.png)"
+
+# Start a chat with text + file input (SSE stream)
+CURRENT_EVENT=""
+curl -N -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"chat\",
+    \"prompt\": \"Describe this image and save a summary to summary.txt\",
+    \"profile\": \"full\",
+    \"cwd\": \"my-project\",
+    \"files\": [{\"name\": \"photo.png\", \"data\": \"$FILE_DATA\"}]
+  }" | while IFS= read -r line; do
+  if [[ "$line" == event:* ]]; then
+    CURRENT_EVENT="\${line#event: }"
+  elif [[ "$line" == data:* ]]; then
+    JSON="\${line#data: }"
+    case "$CURRENT_EVENT" in
+      text)  echo "$JSON" | jq -rj '.text // empty' ;;
+      done)  echo "" ; echo "$JSON" | jq -r '"sessionId: \(.sessionId)"' ;;
+      error) echo "$JSON" | jq -r '.error' &gt;&amp;2 ;;
+    esac
+  fi
+done
+
+# Multi-turn: reuse sessionId from the done event
+curl -N -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"chat","prompt":"Now translate it to French","sessionId":"SESSION_ID"}'
+
+# Download a file Claude created
+curl -s "$HOST/api/file?path=$(pwd)/outputs/my-project/summary.txt" \
+  -H "Authorization: Bearer $TOKEN" -o summary.txt</code></pre></div>
+  </div>
+  <div class="code-tab-panel" data-tab="node">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
+const fs = require('fs');
+
+const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
+const PORT = 3457;
+
+function post(path, body) {
+  return new Promise((resolve, reject) =&gt; {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      hostname: 'localhost', port: PORT, path, method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': \`Bearer \${TOKEN}\`,
+      },
+    }, resolve);
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+// Parse SSE stream, call handlers for each event type
+function streamSSE(res, handlers) {
+  let buf = '', currentEvent = '';
+  res.on('data', chunk =&gt; {
+    buf += chunk.toString();
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) currentEvent = line.slice(7);
+        else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (handlers[currentEvent]) handlers[currentEvent](data);
+          } catch {}
+        }
+      }
+    }
+  });
+  return new Promise(resolve =&gt; res.on('end', resolve));
+}
+
+async function main() {
+  // Encode file as base64 data URL
+  const fileB64 = fs.readFileSync('photo.png', 'base64');
+  const fileData = \`data:image/png;base64,\${fileB64}\`;
+
+  // Chat with text + file input
+  const res = await post('/api/run', {
+    type: 'chat',
+    prompt: 'Describe this image and save a summary to summary.txt',
+    profile: 'full',
+    cwd: 'my-project',
+    files: [{ name: 'photo.png', data: fileData }],
+  });
+
+  let sessionId = null;
+  await streamSSE(res, {
+    text:  d =&gt; process.stdout.write(d.text || ''),
+    error: d =&gt; console.error('Error:', d.error),
+    done:  d =&gt; { sessionId = d.sessionId; console.log('\nSession:', sessionId); },
+  });
+
+  // Multi-turn: continue the conversation
+  if (sessionId) {
+    const res2 = await post('/api/run', {
+      type: 'chat',
+      prompt: 'Now translate it to French',
+      sessionId,
+    });
+    await streamSSE(res2, {
+      text: d =&gt; process.stdout.write(d.text || ''),
+      done: d =&gt; console.log('\nDone'),
+    });
+  }
+}
+
+main().catch(console.error);</code></pre></div>
+  </div>
+</div>
 \`\`\`
 
-### Workflow -- with inputs
+### Streaming (SSE) -- Workflow
 
-\`\`\`bash
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"workflow","workflow":"explain-topic","inputs":{"topic":"WebSockets"}}'
-\`\`\`
+Run a workflow with text and file inputs, stream step progress, and capture the final output.
 
-### Workflow -- prompt mode
+\`\`\`html
+<div class="code-tabs">
+  <div class="code-tab-bar">
+    <button class="code-tab-btn active" data-tab="bash">Bash</button>
+    <button class="code-tab-btn" data-tab="node">Node.js</button>
+  </div>
+  <div class="code-tab-panel active" data-tab="bash">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+TOKEN="YOUR_TOKEN"
+HOST="http://localhost:3457"
 
-For workflows with \`inputMode: "prompt"\`, pass the user message as \`inputs.prompt\`:
+# Encode file inputs (keyed by workflow input name)
+CSV_DATA="data:text/csv;base64,$(base64 -w0 sales.csv)"
 
-\`\`\`bash
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"workflow","workflow":"research-assistant","inputs":{"prompt":"Compare React and Vue for our use case"}}'
+# Run workflow with text input + file input
+CURRENT_EVENT=""
+curl -N -s -X POST "$HOST/api/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"workflow\",
+    \"workflow\": \"analyze-data\",
+    \"inputs\": { \"focus\": \"quarterly trends\" },
+    \"cwd\": \"reports\",
+    \"files\": { \"dataset\": [{\"name\": \"sales.csv\", \"data\": \"$CSV_DATA\"}] }
+  }" | while IFS= read -r line; do
+  if [[ "$line" == event:* ]]; then
+    CURRENT_EVENT="\${line#event: }"
+  elif [[ "$line" == data:* ]]; then
+    JSON="\${line#data: }"
+    case "$CURRENT_EVENT" in
+      text)  echo "$JSON" | jq -rj '.text // empty' ;;
+      step)  echo "$JSON" | jq -r '"[\(.stepId)] \(.status // .text // "")"' ;;
+      done)  echo "" ; echo "$JSON" | jq '"Status: \(.result)\nRun ID: \(.runId)\nOutput: \(.output // "none")"' -r ;;
+      error) echo "$JSON" | jq -r '.error' &gt;&amp;2 ;;
+    esac
+  fi
+done
+
+# Download files the workflow generated
+curl -s "$HOST/api/dirs?path=reports" -H "Authorization: Bearer $TOKEN" | jq '.dirs'
+curl -s "$HOST/api/file?path=$(pwd)/outputs/reports/analysis.html" \
+  -H "Authorization: Bearer $TOKEN" -o analysis.html</code></pre></div>
+  </div>
+  <div class="code-tab-panel" data-tab="node">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
+const fs = require('fs');
+
+const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
+const PORT = 3457;
+
+function post(path, body) {
+  return new Promise((resolve, reject) =&gt; {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      hostname: 'localhost', port: PORT, path, method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': \`Bearer \${TOKEN}\`,
+      },
+    }, resolve);
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+function streamSSE(res, handlers) {
+  let buf = '', currentEvent = '';
+  res.on('data', chunk =&gt; {
+    buf += chunk.toString();
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) currentEvent = line.slice(7);
+        else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (handlers[currentEvent]) handlers[currentEvent](data);
+          } catch {}
+        }
+      }
+    }
+  });
+  return new Promise(resolve =&gt; res.on('end', resolve));
+}
+
+async function main() {
+  // Encode file input (keyed by workflow input name)
+  const csvB64 = fs.readFileSync('sales.csv', 'base64');
+  const csvData = \`data:text/csv;base64,\${csvB64}\`;
+
+  // Run workflow with text + file inputs
+  const res = await post('/api/run', {
+    type: 'workflow',
+    workflow: 'analyze-data',
+    inputs: { focus: 'quarterly trends' },
+    cwd: 'reports',
+    files: { dataset: [{ name: 'sales.csv', data: csvData }] },
+  });
+
+  await streamSSE(res, {
+    text:  d =&gt; process.stdout.write(d.text || ''),
+    step:  d =&gt; console.log(\`[\${d.stepId}] \${d.status || d.text || ''}\`),
+    error: d =&gt; console.error('Error:', d.error),
+    done:  d =&gt; {
+      console.log(\`\\nStatus: \${d.result}\`);
+      console.log(\`Run ID: \${d.runId}\`);
+      if (d.output) console.log(\`Output: \${d.output}\`);
+    },
+  });
+}
+
+main().catch(console.error);</code></pre></div>
+  </div>
+</div>
 \`\`\`
 
 ### Answering an AskUserQuestion
 
-When you receive an \`ask\` SSE event, answer it in a separate request:
+When Claude needs input mid-run, the stream emits an \`ask\` event. Answer it via \`POST /api/run/answer\` -- the run resumes automatically. Answers can include file attachments.
 
-\`\`\`bash
-# Received: event: ask
-# data: {"toolUseId":"toolu_abc123","questions":[{"question":"Which database?"}]}
+\`\`\`html
+<div class="code-tabs">
+  <div class="code-tab-bar">
+    <button class="code-tab-btn active" data-tab="bash">Bash</button>
+    <button class="code-tab-btn" data-tab="node">Node.js</button>
+  </div>
+  <div class="code-tab-panel active" data-tab="bash">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+TOKEN="YOUR_TOKEN"
+HOST="http://localhost:3457"
 
-curl -X POST http://localhost:3457/api/run/answer \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
+# When you receive an ask event in the SSE stream:
+#   event: ask
+#   data: {"toolUseId":"toolu_abc123","questions":[{"question":"Which database?","options":["PostgreSQL","MySQL"]}]}
+
+# Answer with text
+curl -s -X POST "$HOST/api/run/answer" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"toolUseId":"toolu_abc123","answer":"PostgreSQL"}'
-\`\`\`
+# Returns: {"ok":true}
 
-### Directory listing
+# Answer with a file attachment (for file-type questions)
+FILE_DATA="data:text/csv;base64,$(base64 -w0 config.csv)"
 
-\`\`\`bash
-# List root of outputs/
-curl http://localhost:3457/api/dirs -H "Authorization: Bearer YOUR_TOKEN"
+curl -s -X POST "$HOST/api/run/answer" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"toolUseId\": \"toolu_abc123\",
+    \"answer\": [\"\"],
+    \"files\": [{\"questionId\": \"q1\", \"name\": \"config.csv\", \"data\": \"$FILE_DATA\"}]
+  }"</code></pre></div>
+  </div>
+  <div class="code-tab-panel" data-tab="node">
+    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
+const fs = require('fs');
 
-# List a subdirectory
-curl "http://localhost:3457/api/dirs?path=my-project" -H "Authorization: Bearer YOUR_TOKEN"
-\`\`\`
+const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
+const PORT = 3457;
 
-### Create a directory
+function postJSON(path, body) {
+  return new Promise((resolve, reject) =&gt; {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      hostname: 'localhost', port: PORT, path, method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': \`Bearer \${TOKEN}\`,
+      },
+    }, res =&gt; {
+      let buf = '';
+      res.on('data', c =&gt; buf += c);
+      res.on('end', () =&gt; {
+        try { resolve(JSON.parse(buf)); } catch { resolve(buf); }
+      });
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
 
-\`\`\`bash
-curl -X POST http://localhost:3457/api/dirs \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"path":"","name":"my-new-project"}'
+// Inside your SSE handler, when you receive an ask event:
+async function handleAsk(data) {
+  const { toolUseId, questions } = data;
+  for (const q of questions) {
+    console.log(\`Question: \${q.question}\`);
+    if (q.options) q.options.forEach((o, i) =&gt; console.log(\`  \${i + 1}. \${o}\`));
+  }
+
+  // Answer with text
+  await postJSON('/api/run/answer', {
+    toolUseId,
+    answer: 'PostgreSQL',
+  });
+
+  // Or answer with a file attachment
+  const fileB64 = fs.readFileSync('config.csv', 'base64');
+  await postJSON('/api/run/answer', {
+    toolUseId,
+    answer: [''],
+    files: [{
+      questionId: 'q1',
+      name: 'config.csv',
+      data: \`data:text/csv;base64,\${fileB64}\`,
+    }],
+  });
+  // Returns: { ok: true }
+}</code></pre></div>
+  </div>
+</div>
 \`\`\`
 `;
 
@@ -744,10 +1210,41 @@ curl -X POST http://localhost:3457/api/dirs \\
     }
   }
 
+  // --- Token display in API tab ---
+  function updateTokenDisplay() {
+    const apiEl = document.getElementById('home-api');
+    if (!apiEl) return;
+    const token = window.dashboard?.state?.authToken;
+    if (!token) return;
+    let box = document.getElementById('api-token-display');
+    if (box) {
+      box.querySelector('.api-token-value').textContent = token;
+      return;
+    }
+    box = document.createElement('div');
+    box.id = 'api-token-display';
+    box.className = 'api-token-box';
+    box.innerHTML = `
+      <span class="api-token-label">Auth Token</span>
+      <code class="api-token-value">${window.dashboard.escHtml(token)}</code>
+      <button class="api-token-copy" title="Copy token">Copy</button>
+    `;
+    box.querySelector('.api-token-copy').addEventListener('click', function() {
+      navigator.clipboard.writeText(window.dashboard.state.authToken).then(() => {
+        this.textContent = 'Copied!';
+        setTimeout(() => { this.textContent = 'Copy'; }, 1500);
+      });
+    });
+    apiEl.insertBefore(box, apiEl.firstChild);
+  }
+
   // Render after a short delay to ensure marked + MathJax are loaded
   if (document.readyState === 'complete') {
     renderSections();
+    updateTokenDisplay();
   } else {
-    window.addEventListener('load', renderSections);
+    window.addEventListener('load', () => { renderSections(); updateTokenDisplay(); });
   }
+
+  window.homeModule = { updateTokenDisplay };
 })();

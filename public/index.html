@@ -34,6 +34,7 @@
         <button class="header-tab" data-view="capabilities">Tools &amp; MCP</button>
         <button class="header-tab" data-view="workflow-runs">Workflows</button>
         <button class="header-tab" data-view="models">Models</button>
+        <button class="header-tab" data-view="rules">Rules</button>
       </nav>
     </div>
     <div class="header-actions">
@@ -84,6 +85,11 @@
           <span>Timeline</span>
         </div>
         <div id="timeline-list"></div>
+        <div id="timeline-footer">
+          <span id="timeline-total-time"></span>
+          <span id="timeline-total-cost"></span>
+          <button id="timeline-clear-btn">Clear</button>
+        </div>
       </aside>
       <div id="timeline-resizer"></div>
       <section id="detail">
@@ -142,9 +148,12 @@
           <span id="chatStatus" class="chat-status idle">idle</span>
           <button id="chatStopBtn" class="chat-stop hidden">Stop</button>
         </div>
+        <div id="chatAttachedFiles" class="chat-attached-files hidden"></div>
         <div class="chat-input-row">
+          <button id="chatAttachBtn" class="chat-attach" title="Attach files">&#128206;</button>
           <textarea id="chatInput" placeholder="Send a prompt to Claude..." rows="3"></textarea>
           <button id="chatSendBtn" class="chat-send">Send</button>
+          <input type="file" id="chatFileInput" multiple style="display:none">
         </div>
       </div>
     </div>
@@ -1256,6 +1265,7 @@ jq -r '.tool_input.command' |
                 </div>
                 <div class="pm-field-row">
                   <label><input type="checkbox" id="mmReasoning"> Reasoning model (chain-of-thought)</label>
+                  <label><input type="checkbox" id="mmDisabled"> Disabled (hidden from profile selection)</label>
                 </div>
                 <div class="pm-field-row">
                   <label>Context window: <input type="number" id="mmContextWindow" placeholder="1000000" min="0"></label>
@@ -1526,8 +1536,7 @@ any of these formats in its response.</pre>
   <!-- ===== WORKFLOW RUNS VIEW ===== -->
   <div id="view-workflow-runs" class="hidden" style="display:none">
     <div class="view-nav" id="wfrunTabStrip">
-      <button class="view-tab active" data-tab-id="wfrun-1">Run 1</button>
-      <button class="view-tab-new" id="wfrunTabNew" title="New run tab">+</button>
+      <button class="view-tab active" data-tab-id="wfrun-1">Workflows</button>
       <button class="cap-action-btn view-nav-action" id="wfNewBtn" title="Create a new workflow">+ New</button>
     </div>
     <div class="wf-error-bar hidden" id="wfErrorBar"></div>
@@ -1545,6 +1554,26 @@ any of these formats in its response.</pre>
     <div class="view-body" id="modelsContent">
       <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
       <div id="capModelList"></div>
+    </div>
+  </div>
+
+  <!-- ===== RULES VIEW ===== -->
+  <div id="view-rules" class="hidden" style="display:none">
+    <div class="view-nav" id="rulesNav">
+      <button class="cap-action-btn view-nav-action" id="ruleNewBtn" title="Create a new proxy rule">+ New Rule</button>
+    </div>
+    <div class="view-body" id="rulesBody">
+      <div class="ref-intro">
+        <strong>Proxy Rules</strong> are AI-authored middleware that intercept every request flowing through the proxy.
+        Rules run in order before model routing. They can modify request bodies, filter tools, swap models, replace system prompts, or short-circuit responses entirely.
+        <br><br>
+        Rules are created and edited by describing what you want in natural language &mdash; Claude writes the implementation.
+        Toggle rules on/off, or drag to reorder. The server restarts automatically after changes.
+      </div>
+      <div id="ruleGeneratingStatus" class="hidden" style="padding:12px 14px;font-size:13px;color:var(--text-dim);">
+        <span class="busy-dot"></span> Generating rule&hellip;
+      </div>
+      <div id="ruleList"></div>
     </div>
   </div>
 
@@ -1605,5 +1634,6 @@ any of these formats in its response.</pre>
   <script src="workflows.js"></script>
   <script src="workflow-runs.js"></script>
   <script src="home.js"></script>
+  <script src="rules.js"></script>
 </body>
 </html>

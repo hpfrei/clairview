@@ -4,6 +4,13 @@
   "inputs": {
     "model_name": "Name or identifier of the model to add (e.g. 'gpt-4o', 'claude-3.5-sonnet', 'gemini-2.0-flash')"
   },
+  "outputs": {
+    "model_entry": {
+      "type": "json",
+      "description": "The model entry that was added to models.json, including name, label, provider, modelId, pricing, and capabilities",
+      "from_step": "verify"
+    }
+  },
   "steps": {
     "research-and-validate": {
       "profile": "full",

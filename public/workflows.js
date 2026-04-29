@@ -8,11 +8,6 @@
   // --- Internal state per create-tab (keyed by tabId) ---
   const editors = new Map();
 
-  const INPUT_MODE_HELP = {
-    none: 'Runs autonomously. Steps can still use AskUserQuestion, fetch from the web, read files, check git, etc.',
-    prompt: 'Shows a prompt input when running. The user\u2019s message is available as {{prompt}} in step instructions.',
-  };
-
   function createEditorState(tabId) {
     return {
       tabId,
@@ -24,6 +19,10 @@
       compiledContent: null,
       jsonDirty: false,
       jsDirty: false,
+      modifying: false,
+      modifyPhase: null,      // 'analyzing' | 'reviewing' | 'applying'
+      modifyRequest: null,
+      modifyProposal: null,
     };
   }
 
@@ -64,7 +63,6 @@
 
     const name = ed._savedName || workflowData?.name || '';
     const desc = ed._savedDesc || workflowData?.description || '';
-    const inputMode = workflowData?.inputMode || 'none';
     const profiles = state.profiles || [];
     const hasName = !!ed.editingName;
     const needsCompile = hasName && !ed.compiledContent;
@@ -85,12 +83,6 @@
 
         <div class="wfc-options-row">
           <div class="wfc-option-group">
-            <span class="wfc-label">Input</span>
-            <label class="wfc-radio"><input type="radio" name="wfcInputMode-${tabId}" value="none" ${inputMode !== 'prompt' ? 'checked' : ''}> None</label>
-            <label class="wfc-radio"><input type="radio" name="wfcInputMode-${tabId}" value="prompt" ${inputMode === 'prompt' ? 'checked' : ''}> Prompt</label>
-            <span class="wfc-input-hint" id="wfc-input-hint-${tabId}">${INPUT_MODE_HELP[inputMode] || INPUT_MODE_HELP.none}</span>
-          </div>
-          <div class="wfc-option-group">
             <span class="wfc-label">Profiles</span>
             <div class="wfc-profile-list" id="wfc-profiles-${tabId}">
               ${profiles.map(p => `<label class="wfc-checkbox"><input type="checkbox" value="${escHtml(p.name)}" checked> ${escHtml(p.label || p.name)}</label>`).join('')}
@@ -103,6 +95,7 @@
           <button class="wfc-tab ${ed.compiledContent ? '' : 'disabled'}" data-tab="compiled" id="wfc-tab-compiled-${tabId}">Compiled JS</button>
           <button class="wfc-tab" data-tab="help" id="wfc-tab-help-${tabId}">Help</button>
           <div class="wfc-toolbar-spacer"></div>
+          <button class="wfc-btn wfc-btn-secondary ${hasName ? '' : 'hidden'}" id="wfc-modify-${tabId}">Modify</button>
           <button class="wfc-btn wfc-btn-primary" id="wfc-generate-${tabId}">Generate JSON</button>
           <button class="wfc-btn wfc-btn-accent" id="wfc-compile-${tabId}">Compile</button>
         </div>
@@ -116,15 +109,21 @@
               <pre class="wf-help-pre">{
   "name": "my-workflow",
   "description": "What this workflow does",
-  "inputMode": "none" or "prompt",
   "inputs": {
-    "topic": "The topic to process"
+    "topic": "The topic to process",
+    "image": { "type": "file", "description": "...", "accept": "image/*" }
+  },
+  "outputs": {
+    "summary": { "type": "string", "description": "Result text" },
+    "chart": { "type": "file", "description": "Generated chart image" }
   },
   "steps": {
     "step-id": { ... }
   }
 }</pre>
-              <p class="wf-help-note"><b>inputMode</b>: <code>none</code> (default) runs autonomously. <code>prompt</code> shows a text input when running &mdash; the value is available as <code>{{prompt}}</code> in step instructions.</p>
+              <p class="wf-help-note"><b>Prompt</b>: An optional prompt is always available as <code>{{prompt}}</code> in step instructions.</p>
+              <p class="wf-help-note"><b>File inputs</b>: Use <code>{ "type": "file", "description": "...", "accept": "image/*" }</code>. At runtime, <code>{{key}}</code> resolves to the placed filename. Steps should instruct the agent to read the file using the Read tool.</p>
+              <p class="wf-help-note"><b>Outputs</b>: Declare expected return values. Files written to the working directory are automatically collected and returned as base64 data URLs.</p>
 
               <h4>Step fields</h4>
               <pre class="wf-help-pre"><b>do</b>           The prompt sent to claude -p.
@@ -195,6 +194,7 @@
     const logEl = container.querySelector(`#wfc-log-${tabId}`);
     const generateBtn = container.querySelector(`#wfc-generate-${tabId}`);
     const compileBtn = container.querySelector(`#wfc-compile-${tabId}`);
+    const modifyBtn = container.querySelector(`#wfc-modify-${tabId}`);
     const deleteBtn = container.querySelector(`#wfc-delete-${tabId}`);
 
     // --- Helpers ---
@@ -211,11 +211,15 @@
     }
 
     function updateButtonStates() {
-      const busy = ed.generating || ed.compiling;
+      const busy = ed.generating || ed.compiling || ed.modifying;
       const hasName = !!nameEl?.value?.trim();
       const hasDesc = !!descEl?.value?.trim();
       generateBtn.disabled = busy || !hasName || !hasDesc;
       compileBtn.disabled = busy || !hasSourceJson();
+      if (modifyBtn) {
+        modifyBtn.disabled = busy || !ed.editingName || !hasSourceJson();
+        modifyBtn.classList.toggle('hidden', !ed.editingName);
+      }
       generateBtn.innerHTML = ed.generating ? '<span class="busy-dot"></span> Generating\u2026' : 'Generate JSON';
       compileBtn.innerHTML = ed.compiling ? '<span class="busy-dot"></span> Compiling\u2026' : 'Compile';
       updateNameSaveBtn();
@@ -238,22 +242,6 @@
     descEl?.addEventListener('input', updateButtonStates);
     textareaEl?.addEventListener('input', updateButtonStates);
     updateButtonStates();
-
-    // Input mode radios
-    container.querySelectorAll(`input[name="wfcInputMode-${tabId}"]`).forEach(radio => {
-      radio.addEventListener('change', () => {
-        const mode = radio.value;
-        const hint = container.querySelector(`#wfc-input-hint-${tabId}`);
-        if (hint) hint.textContent = INPUT_MODE_HELP[mode] || INPUT_MODE_HELP.none;
-        try {
-          const json = JSON.parse(textareaEl?.value || '{}');
-          json.inputMode = mode;
-          const updated = JSON.stringify(json, null, 2);
-          if (textareaEl) textareaEl.value = updated;
-          ed.sourceContent = updated;
-        } catch {}
-      });
-    });
 
     // Tab switching
     function switchEditorTab(tab) {
@@ -378,6 +366,13 @@
       setTimeout(() => sendWs({ type: 'workflow:compile', name: wfName }), 300);
     });
 
+    // --- Modify workflow ---
+    modifyBtn?.addEventListener('click', () => {
+      if (ed.generating || ed.compiling || ed.modifying) return;
+      if (!ed.editingName) return;
+      openModifyModal(ed, tabId, getSelectedProfiles);
+    });
+
     // --- Delete workflow ---
     deleteBtn?.addEventListener('click', async () => {
       const wfName = ed.editingName || nameEl?.value?.trim();
@@ -408,8 +403,8 @@
     });
 
     // Store update handlers on the editor so handleMessage can call them
-    ed._ui = { textareaEl, nameEl, descEl, logEl, helpEl, compileBtn, generateBtn, deleteBtn,
-               setLog, appendLog, clearLog, updateButtonStates, switchEditorTab };
+    ed._ui = { textareaEl, nameEl, descEl, logEl, helpEl, compileBtn, generateBtn, modifyBtn, deleteBtn,
+               setLog, appendLog, clearLog, updateButtonStates, switchEditorTab, getSelectedProfiles };
   }
 
   // --- Message handling ---
@@ -484,7 +479,255 @@
         ui.updateButtonStates();
         ui.setLog(msg.error || 'Unknown error', 'log-error');
         break;
+
+      // --- Modify workflow messages ---
+      case 'workflow:modify:proposal':
+        ed.modifying = false;
+        ed.modifyPhase = 'reviewing';
+        ed.modifyProposal = msg.proposal;
+        ed.modifyRequest = msg.request;
+        updateModifyModal(ed);
+        ui.updateButtonStates();
+        break;
+
+      case 'workflow:modify:applying':
+        ed.modifyPhase = 'applying';
+        updateModifyModal(ed);
+        break;
+
+      case 'workflow:modify:complete':
+        ed.modifying = false;
+        ed.modifyPhase = null;
+        ed.modifyProposal = null;
+        ed.modifyRequest = null;
+        ed.sourceContent = JSON.stringify(msg.workflow, null, 2);
+        ed.compiledContent = msg.compiledSource || null;
+        if (ui.textareaEl) ui.textareaEl.value = ed.sourceContent;
+        if (ui.nameEl) ui.nameEl.value = msg.workflow.name || ui.nameEl.value;
+        if (ui.descEl) ui.descEl.value = msg.workflow.description || ui.descEl.value;
+        ui.updateButtonStates();
+        ui.setLog('Workflow modified and recompiled.', 'log-success');
+        closeModifyModal();
+        // Switch to compiled tab to show the new result
+        if (ed.compiledContent) ui.switchEditorTab('compiled');
+        break;
+
+      case 'workflow:modify:error':
+        ed.modifying = false;
+        if (ed.modifyPhase === 'analyzing') {
+          ed.modifyPhase = null;
+          closeModifyModal();
+          ui.setLog(msg.error || 'Modification failed', 'log-error');
+        } else {
+          // Keep modal open to show error during apply phase
+          ed.modifyPhase = 'error';
+          ed._modifyError = msg.error;
+          updateModifyModal(ed);
+        }
+        ui.updateButtonStates();
+        break;
     }
+  }
+
+  // --- Modify Modal ---
+
+  let activeModifyBackdrop = null;
+
+  function closeModifyModal() {
+    if (activeModifyBackdrop) {
+      activeModifyBackdrop.remove();
+      activeModifyBackdrop = null;
+    }
+  }
+
+  function openModifyModal(ed, tabId, getSelectedProfiles) {
+    closeModifyModal(); // ensure no duplicates
+    ed.modifyPhase = 'request';
+    ed.modifyProposal = null;
+    ed.modifyRequest = null;
+    ed._modifyError = null;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'alert-modal-backdrop';
+    backdrop.innerHTML = renderModifyModalContent(ed, 'request');
+
+    document.body.appendChild(backdrop);
+    activeModifyBackdrop = backdrop;
+
+    // Close on backdrop click or Escape
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop && !ed.modifying) { closeModifyModal(); ed.modifyPhase = null; }
+    });
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !ed.modifying) { closeModifyModal(); ed.modifyPhase = null; document.removeEventListener('keydown', onKey); }
+    };
+    document.addEventListener('keydown', onKey);
+
+    wireModifyModalEvents(ed, tabId, getSelectedProfiles);
+  }
+
+  function renderModifyModalContent(ed, phase) {
+    const name = ed.editingName || '';
+
+    if (phase === 'request') {
+      return `<div class="cap-modal wfc-modify-modal">
+        <div class="cap-modal-header">
+          <span class="cap-modal-title">Modify: ${escHtml(name)}</span>
+          <button class="cap-modal-close" id="wfc-modify-close">&times;</button>
+        </div>
+        <div class="wfc-modify-body">
+          <label class="wfc-label">Describe what you'd like to change</label>
+          <textarea class="wfc-modify-request" id="wfc-modify-textarea" rows="5" placeholder="e.g., Add a validation step after research that checks for errors before the final summary...">${escHtml(ed.modifyRequest || '')}</textarea>
+        </div>
+        <div class="wfc-modify-footer">
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-modify-cancel">Cancel</button>
+          <button class="wfc-btn wfc-btn-primary" id="wfc-modify-analyze">Analyze Changes</button>
+        </div>
+      </div>`;
+    }
+
+    if (phase === 'analyzing') {
+      return `<div class="cap-modal wfc-modify-modal">
+        <div class="cap-modal-header">
+          <span class="cap-modal-title">Modify: ${escHtml(name)}</span>
+        </div>
+        <div class="wfc-modify-body wfc-modify-busy">
+          <span class="busy-dot"></span> Analyzing workflow and proposed changes\u2026
+        </div>
+      </div>`;
+    }
+
+    if (phase === 'reviewing' && ed.modifyProposal) {
+      const p = ed.modifyProposal;
+      const changeTypeLabels = {
+        'modify-step': 'Modify Step', 'add-step': 'Add Step', 'remove-step': 'Remove Step',
+        'modify-input': 'Modify Input', 'add-input': 'Add Input', 'remove-input': 'Remove Input',
+        'modify-meta': 'Modify Meta',
+      };
+      const changesHtml = (p.changes || []).map(c => {
+        const label = changeTypeLabels[c.type] || c.type;
+        return `<div class="wfc-modify-change-row">
+          <span class="wfc-modify-change-badge" data-type="${escHtml(c.type)}">${escHtml(label)}</span>
+          <span class="wfc-modify-change-target">${escHtml(c.target || '')}</span>
+          <span class="wfc-modify-change-desc">${escHtml(c.description || '')}</span>
+        </div>`;
+      }).join('');
+
+      const risksHtml = p.risks?.length ? `<div class="wfc-modify-risks">
+        <div class="wfc-modify-risks-title">Risks</div>
+        ${p.risks.map(r => `<div class="wfc-modify-risk-item">${escHtml(r)}</div>`).join('')}
+      </div>` : '';
+
+      const feasClass = p.feasibility === 'high' ? 'feas-high' : p.feasibility === 'low' ? 'feas-low' : 'feas-medium';
+
+      return `<div class="cap-modal wfc-modify-modal wfc-modify-modal-wide">
+        <div class="cap-modal-header">
+          <span class="cap-modal-title">Modify: ${escHtml(name)}</span>
+          <span class="wfc-modify-feasibility ${feasClass}">Feasibility: ${escHtml(p.feasibility || 'unknown')}</span>
+          <button class="cap-modal-close" id="wfc-modify-close">&times;</button>
+        </div>
+        <div class="wfc-modify-body">
+          <div class="wfc-modify-summary">${escHtml(p.summary || '')}</div>
+          <div class="wfc-modify-changes-title">Proposed Changes</div>
+          <div class="wfc-modify-changes">${changesHtml}</div>
+          ${risksHtml}
+        </div>
+        <div class="wfc-modify-footer">
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-modify-back">Edit Request</button>
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-modify-cancel">Cancel</button>
+          <button class="wfc-btn wfc-btn-primary" id="wfc-modify-apply">Apply Changes</button>
+        </div>
+      </div>`;
+    }
+
+    if (phase === 'applying') {
+      return `<div class="cap-modal wfc-modify-modal">
+        <div class="cap-modal-header">
+          <span class="cap-modal-title">Modify: ${escHtml(name)}</span>
+        </div>
+        <div class="wfc-modify-body wfc-modify-busy">
+          <span class="busy-dot"></span> Regenerating workflow and compiling\u2026
+          <div class="wfc-modify-progress" id="wfc-modify-progress"></div>
+        </div>
+      </div>`;
+    }
+
+    if (phase === 'error') {
+      return `<div class="cap-modal wfc-modify-modal">
+        <div class="cap-modal-header">
+          <span class="cap-modal-title">Modify: ${escHtml(name)}</span>
+          <button class="cap-modal-close" id="wfc-modify-close">&times;</button>
+        </div>
+        <div class="wfc-modify-body">
+          <div class="wfc-modify-error">${escHtml(ed._modifyError || 'Unknown error')}</div>
+        </div>
+        <div class="wfc-modify-footer">
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-modify-back">Try Again</button>
+          <button class="wfc-btn wfc-btn-secondary" id="wfc-modify-cancel">Close</button>
+        </div>
+      </div>`;
+    }
+
+    return '';
+  }
+
+  function updateModifyModal(ed) {
+    if (!activeModifyBackdrop) return;
+    const phase = ed.modifyPhase || 'request';
+    activeModifyBackdrop.innerHTML = renderModifyModalContent(ed, phase);
+    wireModifyModalEvents(ed, ed.tabId, ed._ui?.getSelectedProfiles);
+  }
+
+  function wireModifyModalEvents(ed, tabId, getSelectedProfiles) {
+    if (!activeModifyBackdrop) return;
+    const bd = activeModifyBackdrop;
+
+    bd.querySelector('#wfc-modify-close')?.addEventListener('click', () => {
+      if (!ed.modifying) { closeModifyModal(); ed.modifyPhase = null; }
+    });
+
+    bd.querySelector('#wfc-modify-cancel')?.addEventListener('click', () => {
+      if (!ed.modifying) { closeModifyModal(); ed.modifyPhase = null; }
+    });
+
+    bd.querySelector('#wfc-modify-analyze')?.addEventListener('click', () => {
+      const textarea = bd.querySelector('#wfc-modify-textarea');
+      const request = textarea?.value?.trim();
+      if (!request) return;
+      ed.modifyRequest = request;
+      ed.modifying = true;
+      ed.modifyPhase = 'analyzing';
+      updateModifyModal(ed);
+      ed._ui?.updateButtonStates?.();
+      sendWs({
+        type: 'workflow:modify:analyze',
+        name: ed.editingName,
+        request,
+        selectedProfiles: getSelectedProfiles ? getSelectedProfiles() : [],
+      });
+    });
+
+    bd.querySelector('#wfc-modify-apply')?.addEventListener('click', () => {
+      if (!ed.modifyProposal || !ed.modifyRequest) return;
+      ed.modifying = true;
+      ed.modifyPhase = 'applying';
+      updateModifyModal(ed);
+      ed._ui?.updateButtonStates?.();
+      sendWs({
+        type: 'workflow:modify:apply',
+        name: ed.editingName,
+        request: ed.modifyRequest,
+        proposal: ed.modifyProposal,
+        selectedProfiles: ed._ui?.getSelectedProfiles ? ed._ui.getSelectedProfiles() : [],
+      });
+    });
+
+    bd.querySelector('#wfc-modify-back')?.addEventListener('click', () => {
+      ed.modifyPhase = 'request';
+      ed.modifying = false;
+      updateModifyModal(ed);
+      ed._ui?.updateButtonStates?.();
+    });
   }
 
   function findActiveCreateTabId() {
@@ -500,5 +743,6 @@
     getEditor,
     removeEditor,
     hasEditor(tabId) { return editors.has(tabId); },
+    openModifyModal,
   };
 })();

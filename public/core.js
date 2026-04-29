@@ -70,12 +70,37 @@ function renderMarkdown(text, targetEl) {
     if (lang === 'html' || lang === 'svg') {
       return `<div class="rendered-block rendered-${lang}">${code}</div>`;
     }
-    // Default code block rendering
-    return `<pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre>`;
+    // Default code block rendering with copy button
+    return `<div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre></div>`;
   };
 
   marked.setOptions({ renderer, breaks: true, gfm: true });
   targetEl.innerHTML = marked.parse(text);
+
+  // Wire up copy buttons on code blocks
+  targetEl.querySelectorAll('.code-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.code-block-wrap').querySelector('code').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    });
+  });
+
+  // Wire up code tab groups
+  targetEl.querySelectorAll('.code-tabs').forEach(group => {
+    const tabs = group.querySelectorAll('.code-tab-btn');
+    const panels = group.querySelectorAll('.code-tab-panel');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        panels.forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        group.querySelector(`.code-tab-panel[data-tab="${tab.dataset.tab}"]`)?.classList.add('active');
+      });
+    });
+  });
 
   // Typeset math if MathJax is available
   if (window.MathJax?.typesetPromise) {
@@ -249,6 +274,7 @@ let cachedSessions = [];
 
 // Centralized settings state sync — called once, modules just re-render
 function syncSettings(msg) {
+  if (msg.authToken) state.authToken = msg.authToken;
   if (msg.capabilities) {
     state.capabilities = msg.capabilities;
     state.activeProfileName = msg.capabilities.name;
@@ -315,6 +341,7 @@ function showAlert(message) {
 // --- Restart server ---
 function showRestartingOverlay() {
   state.serverRestarting = true;
+  state.restartStartedAt = Date.now();
   document.querySelector('.restart-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'restart-overlay';
@@ -877,6 +904,21 @@ function connect() {
 
   ws.onclose = (evt) => {
     if (state.serverRestarting) {
+      if (Date.now() - (state.restartStartedAt || 0) > 20000) {
+        state.serverRestarting = false;
+        const overlay = document.querySelector('.restart-overlay');
+        if (overlay) {
+          overlay.querySelector('.restart-spinner')?.remove();
+          const text = overlay.querySelector('.restart-overlay-text');
+          if (text) text.textContent = 'Restart timed out.';
+          const btn = document.createElement('button');
+          btn.textContent = 'Reload Page';
+          btn.className = 'restart-reload-btn';
+          btn.onclick = () => location.reload();
+          overlay.querySelector('.restart-overlay-content')?.appendChild(btn);
+        }
+        return;
+      }
       statusEl.textContent = 'restarting';
       statusEl.className = 'status disconnected';
       setTimeout(connect, 1500);
@@ -942,6 +984,7 @@ function handleMessage(msg) {
       break;
     case 'chat:settings':
       syncSettings(msg);
+      window.homeModule?.updateTokenDisplay?.();
       window.chatModule?.handleMessage(msg);
       window.capabilitiesModule?.handleSettings(msg);
       window.workflowRunModule?.handleSettings?.(msg);
@@ -983,7 +1026,11 @@ function handleMessage(msg) {
       break;
     case 'workflow:generated':
     case 'workflow:compile:progress':
-    case 'workflow:compiled': {
+    case 'workflow:compiled':
+    case 'workflow:modify:proposal':
+    case 'workflow:modify:applying':
+    case 'workflow:modify:complete':
+    case 'workflow:modify:error': {
       // Route to the create tab's editor
       const createTabId = window.workflowRunModule?.getCreateTabId?.();
       if (createTabId) {
@@ -1025,6 +1072,14 @@ function handleMessage(msg) {
       } else {
         window.chatModule?.handleMessage(msg);
       }
+      break;
+
+    // Proxy rules
+    case 'rule:list':
+    case 'rule:generating':
+    case 'rule:generated':
+    case 'rule:error':
+      window.rulesModule?.handleMessage(msg);
       break;
 
     // Claude process count
@@ -1149,7 +1204,7 @@ function switchView(view) {
   const activeBtn = document.querySelector(`.header-tab[data-view="${view}"]`);
   if (activeBtn) activeBtn.classList.add('active');
 
-  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-profiles', 'view-capabilities', 'view-workflow-runs', 'view-models'];
+  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-profiles', 'view-capabilities', 'view-workflow-runs', 'view-models', 'view-rules'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;

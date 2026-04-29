@@ -126,6 +126,43 @@ async function handleMessage(ws, msg, bc) {
         }
         break;
 
+      case 'workflow:modify:analyze':
+        try {
+          const envCtxAnalyze = buildEnvContext(cwd, msg.selectedProfiles);
+          const proposal = await workflows.analyzeWorkflowModification(
+            msg.name, msg.request,
+            { proxyPort: opts.proxyPort || 3456, cwd, envContext: envCtxAnalyze }
+          );
+          send({ type: 'workflow:modify:proposal', name: msg.name, proposal, request: msg.request });
+        } catch (err) {
+          send({ type: 'workflow:modify:error', name: msg.name, error: `Analysis failed: ${err.message}` });
+        }
+        break;
+
+      case 'workflow:modify:apply':
+        try {
+          const envCtxApply = buildEnvContext(cwd, msg.selectedProfiles);
+          const newWorkflow = await workflows.applyWorkflowModification(
+            msg.name, msg.request, msg.proposal,
+            { proxyPort: opts.proxyPort || 3456, cwd, envContext: envCtxApply }
+          );
+          workflows.saveWorkflow(cwd, msg.name, newWorkflow);
+          send({ type: 'workflow:modify:applying', name: msg.name, phase: 'compiling' });
+          const compileResult = await workflows.compileWorkflow(msg.name, {
+            proxyPort: opts.proxyPort || 3456,
+            cwd,
+            broadcaster,
+            envContext: envCtxApply,
+          });
+          broadcaster.broadcast({ type: 'workflow:modify:complete', name: msg.name, workflow: newWorkflow, compiledSource: compileResult.compiledSource });
+          broadcaster.broadcast({ type: 'workflow:list', workflows: workflows.listWorkflows(cwd) });
+          mcpIndex.broadcastToolList();
+          mcpIndex.markNeedsRestart();
+        } catch (err) {
+          send({ type: 'workflow:modify:error', name: msg.name, error: `Modification failed: ${err.message}` });
+        }
+        break;
+
       case 'workflow:run':
         try {
           // Resolve CWD into outputs sandbox (creates dir if needed)
@@ -134,11 +171,13 @@ async function handleMessage(ws, msg, bc) {
           workflows.runWorkflow(msg.name, msg.inputs || {}, {
             sessionManager,
             broadcaster,
+            store: opts.store || null,
             cwd: runCwd,
             tabId: msg.tabId || null,
             proxyPort: opts.proxyPort || 3456,
             dashboardPort: opts.dashboardPort || 3457,
             authToken: opts.authToken || '',
+            files: msg.files || null,
           }).catch(err => {
             broadcaster.broadcast({ type: 'workflow:error', runId: msg.runId, tabId: msg.tabId || undefined, error: err.message });
           });

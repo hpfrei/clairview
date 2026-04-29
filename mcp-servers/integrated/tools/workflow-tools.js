@@ -83,15 +83,38 @@ function createWorkflowHandler(workflowName) {
               try { data = JSON.parse(data); } catch { continue; }
               if (ev === "error") errors.push(data.error || "unknown");
               else if (ev === "done") {
-                // Return the last step's output — clean result for Claude to continue with
+                const content = [];
+
+                // Text output
                 if (data.output) {
-                  resolve({ content: [{ type: "text", text: data.output }] });
+                  content.push({ type: "text", text: data.output });
                 } else if (data.result === "completed") {
-                  resolve({ content: [{ type: "text", text: "Workflow completed successfully." }] });
+                  content.push({ type: "text", text: "Workflow completed successfully." });
                 } else {
                   const errText = errors.length > 0 ? errors.join("\n") : "Unknown error";
-                  resolve({ content: [{ type: "text", text: `Workflow ${data.result || "failed"}: ${errText}` }] });
+                  content.push({ type: "text", text: `Workflow ${data.result || "failed"}: ${errText}` });
                 }
+
+                // Output files — include images as MCP image content blocks
+                if (data.files && Array.isArray(data.files)) {
+                  const imageTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+                  const nonImageFiles = [];
+                  for (const f of data.files) {
+                    if (imageTypes.includes(f.mimeType)) {
+                      const match = (f.data || "").match(/^data:[^;]*;base64,(.+)$/);
+                      if (match) {
+                        content.push({ type: "image", data: match[1], mimeType: f.mimeType });
+                      }
+                    } else {
+                      nonImageFiles.push(f.name);
+                    }
+                  }
+                  if (nonImageFiles.length > 0) {
+                    content.push({ type: "text", text: `\nOutput files: ${nonImageFiles.join(", ")}` });
+                  }
+                }
+
+                resolve({ content });
               }
             }
           });
@@ -129,14 +152,26 @@ export default function registerWorkflowTools(server) {
 
       const toolName = toToolName(compiled.name || entry.name);
 
-      // Get description: prefer compiled.description, fall back to workflow.json
+      // Get description and outputs: prefer compiled module, fall back to workflow.json
       let description = compiled.description || "";
-      if (!description) {
+      let outputs = compiled.outputs || null;
+      if (!description || !outputs) {
         const wfPath = path.join(WORKFLOWS_DIR, entry.name, "workflow.json");
         try {
           const wf = JSON.parse(fs.readFileSync(wfPath, "utf8"));
-          description = wf.description || "";
+          if (!description) description = wf.description || "";
+          if (!outputs) outputs = wf.outputs || null;
         } catch {}
+      }
+
+      // Append output spec to description so callers know the return schema
+      if (outputs && Object.keys(outputs).length > 0) {
+        const outputLines = Object.entries(outputs).map(([k, v]) => {
+          const t = typeof v === "string" ? "string" : (v.type || "string");
+          const d = typeof v === "string" ? v : (v.description || "");
+          return `  ${k} (${t}): ${d}`;
+        });
+        description += `\n\nOutputs:\n${outputLines.join("\n")}`;
       }
 
       const inputSchema = buildInputSchema(compiled.inputs);

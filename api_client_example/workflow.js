@@ -6,7 +6,16 @@
  *   TOKEN=<auth-token> node workflow.js <workflow-name> ['{"key":"val"}']
  *   TOKEN=<auth-token> PORT=3457 node workflow.js my-workflow '{"target":"src/"}'
  *
+ * For workflows with file-type inputs, include files in the request body:
+ *   body.files = { inputKey: [{ name: 'data.csv', data: 'data:text/csv;base64,...' }] }
+ * Files are placed in the workflow's working directory and the input value is
+ * replaced with the placed filename, so {{inputKey}} in step prompts resolves
+ * to the actual file path.
+ *
  * Streams step progress and text in real-time, handles AskUserQuestion prompts.
+ *
+ * Output files: If the workflow produces files, the `done` event includes a `files`
+ * array with base64 data URLs: [{ name, data, mimeType, size }].
  */
 
 const http = require('http');
@@ -153,6 +162,12 @@ function runWorkflow(name, wfInputs) {
 
         case 'done':
           console.log('');
+          if (data.files && data.files.length > 0) {
+            console.log(`Output files (${data.files.length}):`);
+            for (const f of data.files) {
+              console.log(`  - ${f.name} (${f.mimeType}, ${f.size} bytes)`);
+            }
+          }
           done(data);
           break;
       }

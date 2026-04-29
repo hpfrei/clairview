@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, createStreamJsonParser, resolveOutputDir, OUTPUTS_DIR, listFiles } = require('./utils');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, resolveOutputDir, OUTPUTS_DIR, listFiles, placeFilesInCwd, augmentPromptWithFiles } = require('./utils');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
@@ -131,7 +131,7 @@ class ClaudeSession {
     return tmpFile;
   }
 
-  send(prompt) {
+  send(prompt, files) {
     if (!this.ready) {
       this.broadcaster.broadcast({
         type: 'chat:error',
@@ -143,6 +143,13 @@ class ClaudeSession {
     if (this.running) {
       // Kill existing process before starting a new one
       this.kill();
+    }
+
+    // Place attached files in CWD and augment prompt
+    let finalPrompt = prompt;
+    if (files && files.length > 0) {
+      const placedNames = placeFilesInCwd(this.cwd, files);
+      finalPrompt = augmentPromptWithFiles(prompt, placedNames);
     }
 
     this.broadcaster.broadcast({ type: 'chat:status', status: 'running' });
@@ -168,7 +175,7 @@ class ClaudeSession {
       sourceContext: { tabId: this.tabId },
     });
 
-    this.proc.stdin.write(prompt);
+    this.proc.stdin.write(finalPrompt);
     this.proc.stdin.end();
 
     const parser = createStreamJsonParser(

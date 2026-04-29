@@ -7,11 +7,18 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, createStreamJsonParser, ensureDir, listFiles } = require('./utils');
+const { buildClaudeArgs, spawnClaude, createStreamJsonParser, ensureDir, listFiles, placeFilesInCwd, augmentPromptWithFiles, collectOutputFiles } = require('./utils');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
 const WORKFLOWS_DIR = 'capabilities/workflows';
+
+/** Compute the effective set of native tools a profile permits. */
+function computeProfileEffectiveTools(profile) {
+  const disabled = new Set(profile.disabledTools || []);
+  const allowed = profile.allowedTools?.length ? profile.allowedTools : caps.KNOWN_TOOLS;
+  return new Set(allowed.filter(t => !disabled.has(t)));
+}
 
 // ============================================================
 // CRUD
@@ -55,7 +62,8 @@ function listWorkflows(cwd) {
       workflows.push({
         name: entry.name,
         description: src.description || '',
-        inputMode: src.inputMode || 'none',
+        inputs: src.inputs || {},
+        outputs: src.outputs || {},
         status,
         stepCount: src.steps ? Object.keys(src.steps).length : 0,
       });
@@ -180,7 +188,7 @@ function generateRunId() {
 /**
  * Run a workflow. Each agent step spawns a full claude -p session.
  */
-async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tabId, proxyPort, dashboardPort, authToken }) {
+async function runWorkflow(name, inputs, { sessionManager, broadcaster, store, cwd, tabId, proxyPort, dashboardPort, authToken, files }) {
   const workflow = loadWorkflow(PROJECT_ROOT, name);
   if (!workflow) throw new Error(`Workflow not found: ${name}`);
 
@@ -206,8 +214,38 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
   const inputDefs = useCompiled && compiled.inputs ? compiled.inputs : (workflow.inputs || {});
   for (const [key, def] of Object.entries(inputDefs)) {
     const desc = typeof def === 'string' ? def : (def?.description || '');
-    if (!ctx.inputs[key] || ctx.inputs[key] === desc) {
+    const val = ctx.inputs[key];
+    if (!val || val === desc || typeof val === 'object') {
       ctx.inputs[key] = inputs[key] || '';
+    }
+  }
+
+  // Place file inputs in CWD and set input values to filenames
+  if (files && typeof files === 'object') {
+    const matchedFileKeys = new Set();
+    // First pass: place files whose key matches a declared input
+    for (const [key, fileDataArray] of Object.entries(files)) {
+      if (Array.isArray(fileDataArray) && fileDataArray.length > 0) {
+        const placedNames = placeFilesInCwd(cwd, fileDataArray);
+        ctx.inputs[key] = placedNames.join(', ');
+        if (inputDefs[key]) matchedFileKeys.add(key);
+      }
+    }
+    // Second pass: assign unmatched file groups to empty file-type inputs
+    const unmatchedFiles = Object.entries(files).filter(
+      ([key, arr]) => Array.isArray(arr) && arr.length > 0 && !matchedFileKeys.has(key)
+    );
+    if (unmatchedFiles.length > 0) {
+      const emptyFileInputs = Object.entries(inputDefs).filter(
+        ([key, def]) => typeof def === 'object' && def.type === 'file' && !ctx.inputs[key]
+      );
+      for (let i = 0; i < Math.min(unmatchedFiles.length, emptyFileInputs.length); i++) {
+        // Files already placed above under their original key; reuse the placed paths
+        const placedValue = ctx.inputs[unmatchedFiles[i][0]];
+        if (placedValue) {
+          ctx.inputs[emptyFileInputs[i][0]] = placedValue;
+        }
+      }
     }
   }
 
@@ -356,6 +394,66 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
         continue;
       }
 
+      // --- Code step (JSON-only path, no compiled resolveSync) ---
+      if (!compiledStep && jsonStepDef?.type === 'code' && jsonStepDef.fallback) {
+        updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
+        broadcaster.broadcast({
+          type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId: currentStepId,
+          text: `Code step — no compiled module, using fallback agent`,
+        });
+        const fb = jsonStepDef.fallback;
+        const fallbackDef = { do: fb.do, produces: fb.produces, profile: fb.profile, context: jsonStepDef.context };
+        const prompt = buildPrompt(fallbackDef, ctx, workflow);
+        const execDef = {
+          profile: fallbackDef.profile,
+          timeout: getStepField(null, jsonStepDef, 'timeout'),
+          disallowedTools: getStepField(null, jsonStepDef, 'disallowedTools'),
+          allowedTools: getStepField(null, jsonStepDef, 'allowedTools'),
+        };
+        const stepStartTime = Date.now();
+        try {
+          const rawOutput = await executeStep(currentStepId, prompt, execDef, {
+            sessionManager, broadcaster, cwd, proxyPort, runId, tabId, dashboardPort, authToken, workflowName: name,
+          });
+          const elapsed = Date.now() - stepStartTime;
+          const cost = computeStepCost(store, runId, currentStepId);
+          ctx.steps[currentStepId] = { output: rawOutput };
+          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, rawOutput, cost);
+        } catch (err) {
+          const elapsed = Date.now() - stepStartTime;
+          const cost = computeStepCost(store, runId, currentStepId);
+          ctx.steps[currentStepId] = { output: null, error: err.message };
+          updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, elapsed, undefined, cost);
+          if (run.cancel) break;
+          if (onError && workflow.steps[onError]) { currentStepId = onError; continue; }
+          run.status = 'failed';
+          break;
+        }
+        currentStepId = getStepField(null, jsonStepDef, 'next') || getNextStepId(stepEntries, currentStepId);
+        continue;
+      }
+
+      // --- Sync resolve: compiled step can short-circuit agent execution ---
+      if (compiledStep?.resolveSync) {
+        const syncResult = safeCall(
+          () => compiledStep.resolveSync(ctx),
+          null,
+          `resolveSync failed for step "${currentStepId}"`
+        );
+        if (syncResult != null) {
+          updateStepStatus(run, currentStepId, 'running', broadcaster, runId);
+          ctx.steps[currentStepId] = { output: syncResult };
+          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, 0, String(syncResult));
+          broadcaster.broadcast({
+            type: 'workflow:step:progress', runId, tabId: tabId || undefined, stepId: currentStepId,
+            text: `Resolved synchronously`,
+          });
+          currentStepId = getStepField(compiledStep, jsonStepDef, 'next')
+            || getNextStepId(stepEntries, currentStepId);
+          continue;
+        }
+      }
+
       // --- Agent step — spawn claude -p ---
       const hasAgent = compiledStep?.type === 'agent' || compiledStep?.buildPrompt || jsonStepDef?.do;
       if (hasAgent) {
@@ -379,17 +477,19 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
             proxyPort, runId, tabId, dashboardPort, authToken, workflowName: name,
           });
           const elapsed = Date.now() - stepStartTime;
+          const cost = computeStepCost(store, runId, currentStepId);
           const parsed = safeCall(
             () => compiledStep?.parseOutput ? compiledStep.parseOutput(rawOutput) : rawOutput,
             rawOutput,
             `parseOutput failed for step "${currentStepId}"`
           );
           ctx.steps[currentStepId] = { output: parsed };
-          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, rawOutput);
+          updateStepStatus(run, currentStepId, 'done', broadcaster, runId, elapsed, rawOutput, cost);
         } catch (err) {
           const elapsed = Date.now() - stepStartTime;
+          const cost = computeStepCost(store, runId, currentStepId);
           ctx.steps[currentStepId] = { output: null, error: err.message };
-          updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, elapsed);
+          updateStepStatus(run, currentStepId, 'failed', broadcaster, runId, elapsed, undefined, cost);
 
           if (run.cancel) break;
 
@@ -457,20 +557,41 @@ async function runWorkflow(name, inputs, { sessionManager, broadcaster, cwd, tab
     run.status = 'completed';
   }
 
-  // Find the last completed step's output for the MCP result
+  // Build final output — use compiled result() if available, else last step's output
   let finalOutput = null;
-  for (let i = run.steps.length - 1; i >= 0; i--) {
-    const s = run.steps[i];
-    if (s.status === 'done' && ctx.steps[s.id]?.output) {
-      const out = ctx.steps[s.id].output;
-      finalOutput = typeof out === 'string' ? out : JSON.stringify(out);
-      break;
+  if (compiled?.result) {
+    try {
+      const res = compiled.result(ctx);
+      finalOutput = res != null ? (typeof res === 'string' ? res : JSON.stringify(res)) : null;
+    } catch (e) {
+      console.error(`result() failed for workflow "${name}":`, e.message);
+    }
+  }
+  if (finalOutput == null) {
+    for (let i = run.steps.length - 1; i >= 0; i--) {
+      const s = run.steps[i];
+      if (s.status === 'done' && ctx.steps[s.id]?.output) {
+        const out = ctx.steps[s.id].output;
+        finalOutput = typeof out === 'string' ? out : JSON.stringify(out);
+        break;
+      }
     }
   }
 
-  broadcaster.broadcast({ type: 'workflow:run:complete', runId, tabId: tabId || undefined, status: run.status, output: finalOutput });
+  // Build performance_costs summary
+  const performance_costs = {};
+  for (const s of run.steps) {
+    performance_costs[s.id] = {
+      elapsed_seconds: s.elapsed != null ? +(s.elapsed / 1000).toFixed(2) : null,
+      cost: s.cost != null ? +s.cost.toFixed(6) : null,
+    };
+  }
 
-  // Broadcast output files from the working directory
+  // Collect output files as base64 data URLs (excluding input uploads)
+  const outputFileData = collectOutputFiles(cwd);
+  broadcaster.broadcast({ type: 'workflow:run:complete', runId, tabId: tabId || undefined, status: run.status, output: finalOutput, files: outputFileData.length > 0 ? outputFileData : undefined, performance_costs });
+
+  // Broadcast output file metadata for the dashboard file panel
   const outputFiles = listFiles(cwd);
   if (outputFiles.length) {
     broadcaster.broadcast({ type: 'files:list', tabId: tabId || undefined, cwd, files: outputFiles });
@@ -489,11 +610,27 @@ function getNextStepId(stepEntries, currentId) {
   return null;
 }
 
-function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed, output) {
+function computeStepCost(store, runId, stepId) {
+  if (!store) return 0;
+  const instanceId = `wf-${runId}-${stepId}`;
+  let cost = 0;
+  for (const interaction of store.getAll()) {
+    if (interaction.instanceId !== instanceId || !interaction.usage || !interaction.pricing) continue;
+    const u = interaction.usage, p = interaction.pricing;
+    cost += (u.input_tokens || 0) * (p.inputCostPerMTok || 0) / 1e6;
+    cost += (u.output_tokens || 0) * (p.outputCostPerMTok || 0) / 1e6;
+    cost += (u.cache_read_input_tokens || 0) * (p.cacheReadCostPerMTok || p.inputCostPerMTok || 0) / 1e6;
+    cost += (u.cache_creation_input_tokens || 0) * (p.cacheCreateCostPerMTok || p.inputCostPerMTok || 0) / 1e6;
+  }
+  return cost;
+}
+
+function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed, output, cost) {
   const step = run.steps.find(s => s.id === stepId);
   if (step) {
     step.status = status;
     if (elapsed !== undefined) step.elapsed = elapsed;
+    if (cost !== undefined) step.cost = cost;
   }
   const msg = {
     type: status === 'running' ? 'workflow:step:start' : 'workflow:step:complete',
@@ -503,6 +640,7 @@ function updateStepStatus(run, stepId, status, broadcaster, runId, elapsed, outp
     status,
     success: status === 'done',
     elapsed,
+    cost,
   };
   if (output !== undefined) msg.output = typeof output === 'string' ? output : JSON.stringify(output);
   broadcaster.broadcast(msg);
@@ -577,14 +715,42 @@ function evaluateCondition(condition, ctx) {
 function executeStep(stepId, prompt, stepDef, { sessionManager, broadcaster, cwd, proxyPort, runId, tabId, dashboardPort, authToken, workflowName }) {
   return new Promise((resolve, reject) => {
     const profile = (stepDef.profile && caps.loadProfile(PROJECT_ROOT, stepDef.profile)) || caps.loadActiveProfile(PROJECT_ROOT);
-    const args = buildClaudeArgs(profile);
 
-    // Step-level tool overrides (structural recursion prevention)
+    // Determine if step declares a native-tool allowlist (not just MCP tools)
+    const stepAllowed = stepDef.allowedTools || [];
+    const hasNativeAllowlist = stepAllowed.some(t => !t.startsWith('mcp__'));
+
+    let args;
+    if (hasNativeAllowlist) {
+      // Step declares exact tools — skip profile's broad set + MCP wildcard
+      args = buildClaudeArgs(profile, { skipTools: true });
+      const profileTools = computeProfileEffectiveTools(profile);
+      const validated = stepAllowed.filter(tool => {
+        if (tool.startsWith('mcp__')) return true;
+        if (profileTools.has(tool)) return true;
+        console.warn(`[workflow] Step "${stepId}" allowedTools includes "${tool}" but profile "${profile.name || stepDef.profile}" does not permit it — skipping`);
+        return false;
+      });
+      if (validated.length) args.push('--allowedTools', ...validated);
+    } else {
+      // Legacy: no native tools in allowedTools → full profile set + wildcard
+      args = buildClaudeArgs(profile);
+      if (stepAllowed.length) args.push('--allowedTools', ...stepAllowed);
+    }
+
+    // Step-level disallowed tools (self-tool blocking, etc.)
     if (stepDef.disallowedTools?.length) {
       args.push('--disallowedTools', ...stepDef.disallowedTools);
     }
-    if (stepDef.allowedTools?.length) {
-      args.push('--allowedTools', ...stepDef.allowedTools);
+
+    // Auto-block all workflow MCP tools not explicitly allowed by the step.
+    const allowedSet = new Set(stepAllowed);
+    const disallowedSet = new Set(stepDef.disallowedTools || []);
+    for (const wf of listWorkflows(cwd)) {
+      const toolId = `mcp__integrated__${wf.name.replace(/-workflow$/, '').replace(/-/g, '_')}`;
+      if (!allowedSet.has(toolId) && !disallowedSet.has(toolId)) {
+        args.push('--disallowedTools', toolId);
+      }
     }
 
     // Ensure hook reporters in spawn CWD
@@ -747,26 +913,7 @@ function generateWorkflow(description, feedback, { proxyPort, cwd, envContext, e
       try { fs.unlinkSync(existingPath); } catch {}
     }
 
-    let envSection = '';
-    if (envContext) {
-      const parts = [];
-      if (envContext.profiles?.length) {
-        parts.push('Available profiles (use in step "profile" field):\n' +
-          envContext.profiles.map(p => {
-            const caps = p.capabilities?.length ? p.capabilities.join(', ') : '(none)';
-            return `  - "${p.name}": ${p.description || '(no description)'}${p.model ? ` [model: ${p.model}]` : ''}\n    Tools: ${caps}`;
-          }).join('\n'));
-      }
-      if (envContext.tools?.length) {
-        parts.push('Available MCP tools (Claude can call these during step execution):\n' +
-          envContext.tools.map(t => `  - ${t.name}: ${t.description || '(no description)'}${t.params?.length ? ' — params: ' + t.params.map(p => p.name).join(', ') : ''}`).join('\n'));
-      }
-      if (envContext.workflows?.length) {
-        parts.push('Other existing workflows (available as MCP tools by name — hyphens become underscores, -workflow suffix stripped):\n' +
-          envContext.workflows.map(w => `  - ${w.name} → tool: ${w.name.replace(/-workflow$/, '').replace(/-/g, '_')}: ${w.description || '(no description)'}`).join('\n'));
-      }
-      if (parts.length) envSection = '\n\nEnvironment context:\n' + parts.join('\n\n');
-    }
+    const envSection = buildEnvSection(envContext);
 
     // Compute target path — agent writes the file directly (same pattern as compileWorkflow)
     const targetDir = existingName
@@ -798,7 +945,12 @@ Use the Write tool to create the file. Write ONLY the JSON — no markdown fence
   "description": "Concise action phrase — becomes the MCP tool description (e.g., 'Analyze a codebase and generate a dependency report')",
   "inputs": {
     "key": "description — shorthand for a required string parameter",
-    "key": { "type": "string|number|boolean", "description": "what this parameter does", "required": true }
+    "key": { "type": "string|number|boolean", "description": "what this parameter does", "required": true },
+    "key": { "type": "file", "description": "what file to upload", "accept": "image/*", "multiple": false }
+  },
+  "outputs": {
+    "key": "description — shorthand for a text output field",
+    "key": { "type": "file", "description": "what file is produced", "mimeType": "text/html" }
   },
   "steps": {
     "step-name": {
@@ -853,7 +1005,15 @@ Naming and inputs:
 - The "inputs" object defines the tool's typed parameters — each key becomes a named parameter the caller passes when invoking the tool
 - Use clear, descriptive parameter names like function arguments (e.g., "file_path", "language", "max_results") — avoid generic names like "input" or "data"
 - String value is shorthand for a required string param. Use object form { type, description, required } for non-string types or optional params.
+- For file inputs, use { "type": "file", "description": "...", "accept": "mime/type", "multiple": false }. The "accept" field filters the file picker (e.g., "image/*", ".csv,.xlsx", "application/pdf"). When the workflow runs, attached files are placed in the working directory and {{key}} resolves to the filename — so the step's "do" text should instruct the agent to "Use the Read tool to read the file at {{key}}".
+- File outputs: When a step writes files to the working directory (using the Write tool, Bash, etc.), those files are automatically collected after completion and returned to the caller as base64 data URLs alongside the text output. Each output file is returned as { name, data: "data:<mimeType>;base64,...", mimeType, size }. Input files (prefixed with "upload-") are excluded. Steps that produce output files (charts, reports, generated code, etc.) should describe the files in their "produces" field. There is a 10 MB per-file and 50 MB total limit — larger files remain accessible via GET /api/file.
 - Only define inputs the workflow truly needs from the caller. If a step gathers info interactively (via AskUserQuestion), that is NOT an input.
+
+Outputs:
+- The "outputs" object declares what the workflow returns — this is the return schema visible to API callers and MCP tool consumers.
+- String value is shorthand for a text output field. Use object form { type: "file", description, mimeType } for file outputs.
+- The last completed step's text output becomes the workflow's text return value. File outputs are collected automatically from the working directory.
+- Always define "outputs" — it tells callers what to expect. Even if the workflow only returns text, declare it: { "summary": "A brief analysis of the codebase" }.
 - Steps reference inputs via {{key}} placeholders in their "do" text. Every defined input must be used by at least one step.
 
 Profiles:
@@ -925,6 +1085,266 @@ When tempted to use conditions or branching, first ask: could the agent within a
 }
 
 // ============================================================
+// MODIFICATION — analyze + apply workflow changes via natural language
+// ============================================================
+
+function buildEnvSection(envContext) {
+  if (!envContext) return '';
+  const parts = [];
+  if (envContext.profiles?.length) {
+    parts.push('Available profiles (use in step "profile" field):\n' +
+      envContext.profiles.map(p => {
+        const capsList = p.capabilities?.length ? p.capabilities.join(', ') : '(none)';
+        return `  - "${p.name}": ${p.description || '(no description)'}${p.model ? ` [model: ${p.model}]` : ''}\n    Tools: ${capsList}`;
+      }).join('\n'));
+  }
+  if (envContext.tools?.length) {
+    parts.push('Available MCP tools (Claude can call these during step execution):\n' +
+      envContext.tools.map(t => `  - ${t.name}: ${t.description || '(no description)'}${t.params?.length ? ' — params: ' + t.params.map(p => p.name).join(', ') : ''}`).join('\n'));
+  }
+  if (envContext.workflows?.length) {
+    parts.push('Other existing workflows (available as MCP tools by name — hyphens become underscores, -workflow suffix stripped):\n' +
+      envContext.workflows.map(w => `  - ${w.name} → tool: ${w.name.replace(/-workflow$/, '').replace(/-/g, '_')}: ${w.description || '(no description)'}`).join('\n'));
+  }
+  return parts.length ? '\n\nEnvironment context:\n' + parts.join('\n\n') : '';
+}
+
+/**
+ * Phase 1: Analyze a proposed modification and return a structured proposal.
+ * Spawns claude -p to read current workflow.json + compiled.js and produce a change proposal.
+ */
+function analyzeWorkflowModification(name, request, { proxyPort, cwd, envContext }) {
+  return new Promise((resolve, reject) => {
+    const workflow = loadWorkflow(cwd, name);
+    if (!workflow) { reject(new Error(`Workflow not found: ${name}`)); return; }
+
+    const sourceJson = JSON.stringify(workflow, null, 2);
+    const compiledJs = loadCompiledSource(cwd, name);
+    const envSection = buildEnvSection(envContext);
+
+    const proposalPath = path.join(workflowsDir(cwd), name, 'modification-proposal.json');
+    try { fs.unlinkSync(proposalPath); } catch {}
+
+    const prompt = `You are a workflow analyst. A user wants to modify an existing workflow. Your job is to analyze the current workflow, understand the requested change, and produce a structured modification proposal.
+
+## Current Workflow JSON
+
+\`\`\`json
+${sourceJson}
+\`\`\`
+${compiledJs ? `
+## Current Compiled JavaScript (shows how steps actually execute)
+
+\`\`\`javascript
+${compiledJs}
+\`\`\`
+` : '(This workflow has not been compiled yet — analysis is based on the JSON definition only.)'}
+${envSection}
+
+## User's Modification Request
+
+"${request}"
+
+## Your Task
+
+Analyze the current workflow and the requested change. Produce a JSON proposal describing exactly what would change. Consider:
+- Which steps need to be modified, added, or removed
+- Whether inputs need to change
+- Whether the modification is feasible given the available profiles and tools
+- Any risks or side effects
+
+Write your proposal as valid JSON to this file:
+${proposalPath}
+
+Use the Write tool to create the file. Write ONLY the JSON — no markdown fences, no explanation. The JSON format:
+{
+  "summary": "2-5 sentence human-readable description of what will change and why",
+  "changes": [
+    {
+      "type": "modify-step|add-step|remove-step|modify-input|add-input|remove-input|modify-meta",
+      "target": "step-id or input-key or meta-field name",
+      "description": "What specifically changes"
+    }
+  ],
+  "risks": ["List any risks or potential issues — empty array if none"],
+  "feasibility": "high|medium|low"
+}
+
+Be specific and actionable in the change descriptions. Each change entry should be detailed enough that another AI could implement it without seeing the original request.`;
+
+    const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
+    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full', instanceId: `wf-analyze-${name}-${Date.now()}` });
+
+    const analyzeTimeout = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
+    }, 180000); // 3 minutes
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+
+    let stderrBuf = '';
+    proc.stdout.on('data', () => {}); // drain stdout
+    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
+
+    proc.on('close', (code) => {
+      clearTimeout(analyzeTimeout);
+
+      if (!fs.existsSync(proposalPath)) {
+        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        reject(new Error(`Analysis produced no output file (exit ${code})${detail}`));
+        return;
+      }
+
+      try {
+        const proposal = JSON.parse(fs.readFileSync(proposalPath, 'utf-8'));
+        try { fs.unlinkSync(proposalPath); } catch {}
+        resolve(proposal);
+      } catch (e) {
+        reject(new Error(`Failed to parse analysis proposal: ${e.message}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(analyzeTimeout);
+      reject(new Error(`Analysis failed: ${err.message}`));
+    });
+  });
+}
+
+/**
+ * Phase 2: Apply an approved modification — regenerate workflow.json.
+ * Spawns claude -p with the existing JSON, user request, and approved proposal to produce a new workflow.json.
+ */
+function applyWorkflowModification(name, request, proposal, { proxyPort, cwd, envContext }) {
+  return new Promise((resolve, reject) => {
+    const workflow = loadWorkflow(cwd, name);
+    if (!workflow) { reject(new Error(`Workflow not found: ${name}`)); return; }
+
+    const sourceJson = JSON.stringify(workflow, null, 2);
+    const envSection = buildEnvSection(envContext);
+    const targetDir = path.join(workflowsDir(cwd), name);
+    ensureDir(targetDir);
+    const targetPath = path.join(targetDir, 'workflow.json');
+
+    // Delete existing workflow.json so claude doesn't read it and skip generating
+    try { fs.unlinkSync(targetPath); } catch {}
+
+    const changesText = (proposal.changes || []).map(c => `- [${c.type}] ${c.target}: ${c.description}`).join('\n');
+
+    const prompt = `You are a workflow designer modifying an existing workflow. You must produce a complete, updated workflow.json that incorporates the approved changes while preserving everything that should not change.
+
+## Existing Workflow JSON
+
+\`\`\`json
+${sourceJson}
+\`\`\`
+
+## Approved Modification
+
+Summary: ${proposal.summary}
+
+Changes:
+${changesText}
+
+## User's Original Request
+
+"${request}"
+${envSection}
+
+## Instructions
+
+Produce a COMPLETE new workflow.json that incorporates the approved changes above.
+
+Critical rules for modification:
+- PRESERVE all parts of the workflow that are NOT mentioned in the changes
+- MAINTAIN existing step IDs unless the change explicitly renames them
+- PRESERVE the workflow name "${workflow.name}" unless the changes explicitly modify it
+- KEEP existing profile assignments unless the modification requires different capabilities
+- KEEP existing "context" arrays intact unless steps are being added/removed/reordered
+- UPDATE "context" references if steps are renamed, added, or removed
+
+Write the workflow definition as valid JSON to this file:
+${targetPath}
+
+Use the Write tool to create the file. Write ONLY the JSON — no markdown fences, no explanation. The JSON format:
+{
+  "name": "kebab-case-name",
+  "description": "Concise action phrase",
+  "inputs": { ... },
+  "outputs": {
+    "outputKey": { "type": "string|file|object", "description": "What this output contains" }
+  },
+  "steps": { ... }
+}
+
+## Core principle
+
+Each step spawns a FULL Claude Code agent session (claude -p). A single step can read files, write files, run shell commands, search the web, spawn sub-agents, use multi-turn reasoning, call MCP tools, and interact with the user via AskUserQuestion. Treat steps like separate work sessions — not like function calls or lines of code.
+
+Most workflows should have 2-4 steps. Only create a new step when the work genuinely requires a separate session.
+
+## Rules
+
+Step mechanics:
+- The first step in the "steps" object is the entry point
+- Steps execute in declared order unless overridden by "next"
+- Use "context" to pass output from previous steps
+- Each step's "do" field should be a thorough brief
+- Use "produces" to describe what the step outputs
+
+Naming and inputs:
+- String value is shorthand for a required string param. Use object form { type, description, required } for non-string types or optional params.
+- For file inputs, use { "type": "file", "description": "...", "accept": "mime/type", "multiple": false }. Attached files are placed in the working directory and {{key}} resolves to the filename.
+- File outputs: files written to the working directory are automatically returned to the caller as base64 data URLs ({ name, data, mimeType, size }). Steps producing files should document this in "produces".
+- Steps reference inputs via {{key}} placeholders in their "do" text
+
+Profiles:
+- Match each step's profile to its requirements using the capabilities listed above
+- Steps that write or edit files MUST use a profile with Write/Edit tools
+- Steps that only read/analyze code can use a read-only profile
+- Only use profiles from the "Available profiles" list above`;
+
+    const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
+    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full', instanceId: `wf-modify-${name}-${Date.now()}` });
+
+    const modifyTimeout = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
+    }, 300000); // 5 minutes
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+
+    let stderrBuf = '';
+    proc.stdout.on('data', () => {}); // drain stdout
+    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
+
+    proc.on('close', (code) => {
+      clearTimeout(modifyTimeout);
+
+      if (!fs.existsSync(targetPath)) {
+        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        reject(new Error(`Modification produced no output file (exit ${code})${detail}`));
+        return;
+      }
+
+      try {
+        const newWorkflow = JSON.parse(fs.readFileSync(targetPath, 'utf-8'));
+        resolve(newWorkflow);
+      } catch (e) {
+        reject(new Error(`Failed to parse modified workflow file: ${e.message}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(modifyTimeout);
+      reject(new Error(`Modification failed: ${err.message}`));
+    });
+  });
+}
+
+// ============================================================
 // COMPILATION — claude -p transforms source JSON to executable JS
 // ============================================================
 
@@ -965,21 +1385,24 @@ function compileWorkflow(name, { proxyPort, cwd, broadcaster, envContext }) {
 
     const prompt = `You are a workflow compiler — an expert prompt engineer who transforms workflow definitions into executable JavaScript. The code you write is a vehicle for the prompts it produces. Your primary job is crafting buildPrompt functions that will be executed by autonomous AI agents in isolation.
 
+IMPORTANT RULES:
+- Everything you need is in THIS prompt. Do NOT read, search, or explore any source files, runtime code, or other workflows. Do NOT use Glob, Grep, or Read to look at the codebase. The specification below is complete and authoritative.
+- Go straight to writing the compiled.js file. Do not deliberate extensively — apply the rules below and write the code. You have significant creative freedom in how you structure the module, craft prompts, and implement helpers. Apply state-of-the-art prompt engineering and write elegant, minimal code.
+- Use the Write tool to write the compiled JavaScript module to: ${compiledPath}
+
 ## Source Workflow
 
 \`\`\`json
 ${sourceContent}
 \`\`\`
 ${envSection}
-Write the compiled JavaScript module to: ${compiledPath}
-
 ## Execution Model — How Your Output Is Used at Runtime
 
 Understanding this is essential. Each compiled step's buildPrompt(ctx) return value is piped as the SOLE input to an independent "claude -p" session:
 
 1. **Complete isolation**: The agent has ZERO knowledge of the workflow — its name ("${workflow.name}"), its purpose, its steps, or that it's part of a workflow at all. The prompt text you generate is the agent's entire world.
 
-2. **Full tool access**: The agent has access to ALL MCP tools listed in the environment context above, including this workflow's own tool ("${toolName}"). If the prompt reads like a request that matches a tool's description, the agent WILL call that tool instead of doing the work.
+2. **Restricted tool access**: The agent only has access to tools listed in the step's \`allowedTools\` array. You control exactly which native tools and MCP tools each step can use. If a tool isn't in allowedTools, the agent cannot call it. However, the agent can still see tool descriptions and may ATTEMPT to call tools it doesn't have — causing errors. So the prompt must be directive enough to prevent this.
 
 3. **Prompt-as-request**: The agent interprets the prompt as a user request. "Generate an analogy quiz about photosynthesis" will cause the agent to find and call "${toolName}" — triggering infinite recursion. The agent has no way to know it's already inside that workflow.
 
@@ -987,35 +1410,51 @@ Understanding this is essential. Each compiled step's buildPrompt(ctx) return va
 
 ## Tool Landscape — What Each Step Agent Has Access To
 
-Each step's agent has TWO categories of tools. You must understand both to write effective prompts.
+Each step MUST declare an \`allowedTools\` array listing EVERY tool (native and MCP) it needs. The runtime grants ONLY these tools — nothing else. This is the primary mechanism for least-privilege tool access.
 
-### Native Claude Code tools (determined by the step's profile)
-Each step declares a "profile" that controls which native tools are available. Cross-reference the profile list above to know exactly what a step's agent can do. Key tools you need to know about:
+### Native Claude Code tools
+These are determined by the step's profile. Cross-reference the profile list above. Only include tools that the step's profile actually provides.
 
-- **AskUserQuestion** — The ONLY way to get interactive user input during a step. It presents a question to the user and returns their answer. When a step needs user input, the buildPrompt MUST explicitly say: "Use the AskUserQuestion tool to ask the user [question]." Without this explicit instruction, the agent may try to answer itself or call an MCP tool instead. Available in: safe, readonly, full (NOT minimal).
-- **Read, Glob, Grep** — File system search and reading. Available in all profiles.
-- **Write, Edit, Bash** — File writing and shell execution. Only available in "full" profile.
-- **WebSearch, WebFetch** — Web access. Available in "safe" and "full" profiles.
+- **Read** — Read files. Available in: all profiles.
+- **Glob** — Find files by pattern. Available in: all profiles.
+- **Grep** — Search file contents. Available in: all profiles.
+- **Write** — Create new files. Available in: full only.
+- **Edit** — Modify existing files. Available in: full only.
+- **Bash** — Run shell commands. Available in: full only.
+- **WebSearch** — Search the web. Available in: safe, full.
+- **WebFetch** — Fetch web pages. Available in: safe, full.
+- **AskUserQuestion** — Interactive user input. The ONLY way to get user input during a step. When needed, the buildPrompt MUST explicitly say: "Use the AskUserQuestion tool to ask the user [question]." Available in: safe, readonly, full (NOT minimal).
+- **Agent** — Spawn sub-agents. Available in: safe, full. Rarely needed.
+- **NotebookEdit** — Edit Jupyter notebooks. Available in: full only. Rarely needed.
 
-### MCP tools (available to all steps)
-All steps can call MCP tools listed in the environment context above via the mcp__integrated__* namespace. This includes workflow tools and custom tools. The agent sees each MCP tool with its name and description, and WILL call one if the prompt resembles a matching request.
+Tools you should almost never include: Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskOutput, TaskStop, EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree, CronCreate, CronDelete, CronList, RemoteTrigger.
+
+### MCP tools
+MCP tools from the environment context above use the mcp__integrated__* namespace. To grant a step access to an MCP tool, include its full name in allowedTools (e.g., "mcp__integrated__explain_topic"). Do NOT use wildcards.
+
+### Common allowedTools patterns
+- Research/analysis (safe): \`["Read", "Glob", "Grep", "WebSearch", "WebFetch"]\`
+- Interactive gathering (safe): \`["AskUserQuestion"]\`
+- Interactive + research (safe): \`["Read", "Glob", "Grep", "WebSearch", "WebFetch", "AskUserQuestion"]\`
+- File creation (full): \`["Read", "Write", "Edit", "Bash", "Glob", "Grep"]\`
+- Read-only analysis (readonly/minimal): \`["Read", "Glob", "Grep"]\`
+- Pure generation, no tools needed (minimal): \`["Read"]\` (include Read as minimum for context)
 
 ### How to use this in your prompts
 - **Name tools explicitly.** Don't say "ask the user" — say "Use the AskUserQuestion tool to ask the user...". Don't say "read the file" — say "Use the Read tool to read...". Explicit tool names prevent the agent from guessing or delegating to MCP tools.
 - **Check the profile first.** Before instructing the agent to use a tool, verify the step's profile has it. Don't tell a "minimal" profile step to use AskUserQuestion — it doesn't have it.
-- **Use disallowedTools for MCP tools the step should NOT call.** The profile controls native tools; disallowedTools controls MCP tools.
+- **Match allowedTools to the prompt.** If your buildPrompt instructs the agent to use a tool, that tool MUST be in allowedTools. If a tool isn't needed by the prompt, don't include it.
 
-## Your Process — Analyze Before You Compile
+## Your Process — Think Internally, Then Write
 
-Before writing any code, analyze each step in the source workflow. For each step, reason through:
+Do NOT read files, search the codebase, or explore the runtime. Everything you need is above. Think through each step mentally, then write the compiled.js in one shot.
 
-1. **Workflow context preamble**: Every step's buildPrompt output MUST start with the mandatory preamble (see Principle 4 below). The only exception is if the step explicitly says it should re-invoke the workflow. Check each step's "do" text for this — if absent, the preamble is required.
-
-2. **Prompt directiveness**: Will the buildPrompt output (after the preamble) read as a concrete work instruction or as a goal description? Goals cause tool-searching. Work instructions cause direct execution. Transform every goal into a work instruction.
-
-3. **Other tool delegation risk**: Could the task be fulfilled by another available MCP tool listed above? Decide: should the step intentionally use that tool (legitimate delegation — mention it in the prompt), or should it do the work directly (the prompt must be specific enough that the agent doesn't go looking for tools)?
-
-4. **Context completeness**: Does the prompt embed all data the agent needs from prior steps and inputs? Missing context forces the agent to guess or search.
+For each step, ensure:
+1. **Preamble**: Every buildPrompt output starts with the mandatory workflow context preamble (Principle 4 below). Exception: if the step explicitly re-invokes the workflow.
+2. **Directiveness**: Prompts must read as concrete work instructions, not goal descriptions. Goals cause tool-searching; work instructions cause direct execution.
+3. **No delegation risk**: If an MCP tool could fulfill the task, the prompt must be specific enough that the agent does the work directly instead of delegating — unless delegation is intentional.
+4. **Context completeness**: Every piece of data from prior steps and inputs must be embedded in the prompt via ctx.steps[id].output and ctx.inputs[key].
+5. **Minimal tools**: Only include tools the step actually needs in allowedTools. Read files → Read. Search → Glob, Grep. Write → Write, Edit. Web → WebSearch, WebFetch. User input → AskUserQuestion. Shell → Bash. MCP → full name.
 
 ## Prompt Engineering — The Core of Your Job
 
@@ -1077,6 +1516,112 @@ Similarly: "Use the Read tool to read package.json" — not just "read package.j
 
 Always cross-reference the step's profile to confirm the tool is available before instructing the agent to use it.
 
+## JSON Step Types and Declarative Fields
+
+The source JSON may use extended step types and fields beyond the basic agent step. You must recognize these and generate appropriate compiled code. The runtime already supports all of these — you just need to generate the right JS. No investigation required.
+
+### type: "code" — Synchronous Code Steps
+
+A step with \`"type": "code"\` should resolve synchronously without an LLM call when possible. The JSON declares:
+
+- \`code_hint\` (string): Natural language description of the JS logic. Generate a \`resolveSync(ctx)\` function that implements this. Return the result on success, or \`null\` to trigger the fallback agent.
+- \`fallback\` (object): Contains \`{ profile, do, produces }\` — the agent step to execute when \`resolveSync\` returns null. Generate a \`buildPrompt(ctx)\` from \`fallback.do\` following all prompt engineering principles. The step's \`profile\` comes from \`fallback.profile\`.
+- \`description\` (string): What the step does (for documentation only).
+
+The compiled step must have:
+- \`resolveSync(ctx)\` — implements the \`code_hint\` logic
+- \`buildPrompt(ctx)\` — implements the \`fallback.do\` prompt (with preamble, used when resolveSync returns null)
+- \`parseOutput(raw)\` — if the fallback has a \`produces\` field
+- \`type: "agent"\` — since it may fall back to agent execution
+- \`allowedTools\` — only needed for the fallback agent path; derive from what \`fallback.do\` needs
+
+Example source JSON:
+\`\`\`json
+{
+  "type": "code",
+  "description": "Resolve image path from input or ask user",
+  "code_hint": "If ctx.inputs.image_path is non-empty and starts with '/', return it. Otherwise return null.",
+  "fallback": {
+    "profile": "full",
+    "do": "No image was provided. Use the AskUserQuestion tool to ask the user for the file path...",
+    "produces": "The absolute file path"
+  }
+}
+\`\`\`
+
+Example compiled output:
+\`\`\`js
+{
+  id: "resolve-image",
+  profile: "full",
+  type: "agent",
+  resolveSync(ctx) {
+    const p = (ctx.inputs.image_path || "").trim();
+    if (p && p.startsWith("/")) return p;
+    return null;
+  },
+  buildPrompt(ctx) {
+    return preamble("resolve-image") + "No image was provided...";
+  },
+  parseOutput(raw) {
+    const lines = raw.trim().split("\\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (line.startsWith("/") && !line.includes(" ")) return line;
+    }
+    return lines[lines.length - 1]?.trim() || raw.trim();
+  },
+  allowedTools: ["Read", "AskUserQuestion"],
+  disallowedTools: [SELF_TOOL],
+  next: "next-step-id",
+}
+\`\`\`
+
+### postprocess — Declarative Output Transformation
+
+A step may include a \`"postprocess"\` field (string) describing a transformation to apply to the parsed output. This transformation goes inside \`parseOutput(raw)\` — after extracting the structured data from the raw LLM output, apply the described transformation before returning.
+
+Rules:
+- The postprocess logic runs synchronously in JS inside parseOutput.
+- It has access only to the parsed output data (NOT to \`ctx\`). The transformation must be self-contained within the step's output.
+- Convert the natural language description into deterministic JS code. Be thorough with edge cases (missing attributes, varying attribute order, etc.).
+- The postprocess runs AFTER JSON extraction, so parseOutput should: (1) extract JSON from raw, (2) apply transformation, (3) return result.
+
+Example source JSON:
+\`\`\`json
+{
+  "do": "Generate a tutorial with delta-only SVG elements per step...",
+  "postprocess": "Accumulate svg_elements across tutorial steps. For each step N, prepend all svg_elements from steps 1..N-1, re-styled to: stroke='#CCCCCC' stroke-width='0.5' opacity='0.4' fill='none'. Remove stroke-linecap on grayed elements."
+}
+\`\`\`
+
+Example compiled parseOutput:
+\`\`\`js
+parseOutput(raw) {
+  const data = extractJSON(raw);
+  if (data?.tutorial && Array.isArray(data.tutorial)) {
+    const accumulated = [];
+    for (const step of data.tutorial) {
+      const newElements = step.svg_elements || [];
+      // Prepend grayed-out prior elements, then current step's new elements
+      step.svg_elements = [...accumulated, ...newElements];
+      // Add current step's new elements to accumulator, re-styled as prior elements
+      for (const el of newElements) {
+        const grayed = el
+          .replace(/stroke="[^"]*"/g, 'stroke="#CCCCCC"')
+          .replace(/stroke-width="[^"]*"/g, 'stroke-width="0.5"')
+          .replace(/fill="[^"]*"/g, 'fill="none"')
+          .replace(/stroke-linecap="[^"]*"/g, '')
+          .replace(/opacity="[^"]*"/g, '')
+          .replace(/\\/>/, ' opacity="0.4"/>');
+        accumulated.push(grayed);
+      }
+    }
+  }
+  return data;
+}
+\`\`\`
+
 ## Module Structure
 
 module.exports = {
@@ -1092,14 +1637,22 @@ module.exports = {
     // Map each input from the source JSON:
     // String "desc" → { type: "string", required: true, description: "desc" }
     // Object { type, description, required } → preserve exactly
+    // File inputs: { type: "file", description, accept?, multiple? } → preserve exactly
+  },
+  outputs: {
+    // Map each output from the source JSON "outputs" field:
+    // String "desc" → { type: "string", description: "desc" }
+    // Object with type/description/from_step/from_input/path → preserve exactly
+    // If no "outputs" in source, set to null
   },
   steps: [
     {
       id: "step-name",
       profile: "profile-name" || null,
       type: "agent" || "condition",
-      buildPrompt(ctx) { return "directive prompt string"; },  // agent steps
-      parseOutput(raw) { return raw; },                        // extract structured data
+      resolveSync(ctx) { return value || null; },              // code steps — sync resolution, null triggers buildPrompt fallback
+      buildPrompt(ctx) { return "directive prompt string"; },  // agent steps (and code step fallback)
+      parseOutput(raw) { return raw; },                        // extract structured data; if step has "postprocess", apply transformation after extraction
       evaluate(ctx) { return true/false; },                    // condition steps
       next: "step-id" || null,
       then: "step-id" || null,   // condition true branch
@@ -1107,31 +1660,52 @@ module.exports = {
       maxRetries: N || undefined,
       parallel: ["step-id", ...] || null,  // fan-out step IDs
       join: "step-id" || null,             // fan-in target
-      timeout: 60000 || null,              // ms
+      timeout: null,              // ms — omit or set high for long-running steps
       onError: "step-id" || null,
-      // Tool access control (IMPORTANT — enforced by runtime via CLI flags):
-      disallowedTools: ["mcp__integrated__tool_name", ...] || null,  // tools the agent CANNOT call
+      // Tool access control (enforced by runtime via CLI flags):
+      disallowedTools: ["mcp__integrated__tool_name", ...] || null,  // safety blocklist (always include self-tool)
+      allowedTools: ["Read", "Glob", "Grep", "WebSearch", ...] || null, // ALL tools (native + MCP) the step needs — exclusive whitelist
     }
-  ]
+  ],
+  // Called after all steps complete. Assembles the workflow's final output.
+  // This is what gets returned to the API caller and displayed in the GUI.
+  result(ctx) {
+    // Build an object matching the "outputs" spec from the source JSON.
+    // For "type": "file" outputs with "path": read the file with require('fs').readFileSync(resolvedPath, 'utf8')
+    //   and JSON.parse() it if the content is JSON. The path may reference an input via {{input_key}}.
+    // For "from_step" outputs: return ctx.steps[stepId].output (JSON.parse if it's a JSON string).
+    // For "from_input" outputs: return ctx.inputs[inputKey].
+    // Return null if no "outputs" are declared in the source JSON.
+  }
 };
 
-## Step Tool Access Control — Structural Recursion Prevention
+## Step Tool Access Control
 
-Each step can declare a \`disallowedTools\` array. At runtime, these are passed as \`--disallowedTools\` CLI flags to the spawned agent — the agent physically cannot call these tools, regardless of what the prompt says.
+Each step declares two tool arrays enforced by the runtime via CLI flags:
 
-This is CRITICAL for preventing self-invocation. The rules:
+### allowedTools — exclusive tool whitelist (REQUIRED)
+Every step MUST declare an \`allowedTools\` array listing ALL tools (native + MCP) the step needs. At runtime, ONLY these tools are granted to the agent. This is the primary mechanism for least-privilege tool access.
 
-1. **Default: block the parent workflow tool on every step.** This workflow is registered as \`mcp__integrated__${toolName}\`. Every step MUST include \`disallowedTools: ["mcp__integrated__${toolName}"]\` unless the step is explicitly designed to re-invoke this workflow.
+Rules:
+1. **Analyze the step's task** to determine which tools are needed. A step that reads files and searches the web needs \`["Read", "Glob", "Grep", "WebSearch"]\`. A step that writes code needs \`["Read", "Write", "Edit", "Bash", "Glob", "Grep"]\`.
+2. **Cross-reference the profile.** Only include native tools that the step's profile permits. A "safe" profile step cannot include "Bash".
+3. **Include MCP tools by full name** when the step needs them: \`"mcp__integrated__some_tool"\`.
+4. **To delegate to another workflow**, add its tool name to allowedTools: \`"mcp__integrated__analyze_code"\`.
+5. **Keep it minimal.** Don't grant Agent, Skill, TaskCreate, etc. unless the step genuinely needs them. Most steps need only 3-6 tools.
 
-2. **Block other workflow tools where appropriate.** If a step should not delegate to other workflows listed in the environment context, add them to disallowedTools.
+### disallowedTools — safety blocklist (REQUIRED)
+Every step MUST include the parent workflow tool to prevent self-recursion:
+\`disallowedTools: ["mcp__integrated__${toolName}"]\`
 
-3. **This is your primary defense.** The runtime preamble and directive prompts are secondary. The disallowedTools field is the one thing that structurally guarantees the agent cannot recurse.
+The runtime also auto-blocks all other workflow MCP tools unless they appear in allowedTools.
 
-Example for a quiz-generator workflow:
+Example:
 \`\`\`js
 {
-  id: "generate-quiz",
-  disallowedTools: ["mcp__integrated__analogy_quiz_generator"],  // can't call self
+  id: "research-model",
+  profile: "safe",
+  allowedTools: ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+  disallowedTools: ["mcp__integrated__${toolName}"],
   // ...
 }
 \`\`\`
@@ -1140,6 +1714,8 @@ Example for a quiz-generator workflow:
 
 - Map inputs faithfully. Every input must appear in at least one buildPrompt as ctx.inputs.<key>.
 - Access inputs via ctx.inputs.<key> — never hardcode values.
+- For file-type inputs (type: "file"), ctx.inputs.<key> resolves to the placed filename at runtime. The buildPrompt MUST instruct the agent: "Use the Read tool to read the file at " + ctx.inputs.<key>. The file is already in the agent's working directory. The Read tool supports images (PNG, JPG), PDFs, CSVs, and all text files.
+- For steps that produce output files (charts, reports, generated artifacts): files written to the working directory are automatically collected after completion and returned to the caller as base64 data URLs ({ name, data: "data:<mimeType>;base64,...", mimeType, size }). The buildPrompt should instruct the agent to write output files to the current working directory (not /tmp or other locations). Input files (prefixed "upload-") are excluded from output. The "produces" field should mention file outputs so callers know what to expect.
 - If "do" text contains {{key}}, inject ctx.inputs.key at that position.
 - Convert "do" into buildPrompt(ctx) — but remember, you're not just transcribing the "do" text. You're rewriting it as a high-quality directive prompt following the principles above.
 - Convert "condition" into evaluate(ctx) — deterministic JS predicate, no AI call.
@@ -1153,10 +1729,18 @@ Example for a quiz-generator workflow:
   - "readonly": only Read, Glob, Grep, AskUserQuestion — read-only
   - "minimal": only Read, Glob, Grep — read-only
 - Output rendering supports Markdown, MathJax ($...$ / $$...$$), fenced code blocks (\`\`\`html, \`\`\`svg, \`\`\`language), tables, and lists.
-- You may structure the JS code however you like — helper functions, constants, shared strings, etc. The only requirement is the exported module shape above.`;
+- If the source JSON has an "outputs" field, generate a result(ctx) function that assembles the final workflow output. For each declared output:
+  - "type": "file" with "path": resolve {{input_key}} placeholders to ctx.inputs values, read the file with require('fs').readFileSync(path, 'utf8'), and JSON.parse() if the content is JSON.
+  - "from_step": return ctx.steps[stepId]?.output, JSON.parse() if it's a JSON string.
+  - "from_input": return ctx.inputs[inputKey].
+  - String shorthand: treat as from_step matching the last step that produces it.
+  Wrap file reads in try/catch (files may not exist if the run failed). Return an object keyed by output name. If no "outputs" field exists, result(ctx) should return null.
+- You may structure the JS code however you like — helper functions, constants, shared strings, etc. The only requirement is the exported module shape above.
+- If a step has "type": "code", generate resolveSync(ctx) from code_hint and buildPrompt(ctx) from fallback.do. The compiled step type is "agent" (it may fall back to agent execution). The allowedTools should match what the fallback.do prompt needs.
+- If a step has "postprocess", embed the transformation logic inside parseOutput(raw) after JSON extraction. The transformation operates only on the parsed data, not on ctx. Convert the natural language postprocess description into deterministic JS.`;
 
     const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
-    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full', instanceId: `wf-compile-${name}-${Date.now()}` });
+    const proc = spawnClaude(args, { cwd, proxyPort, profileName: 'full', instanceId: `wf-compile-${name}-${Date.now()}`, extraEnv: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' } });
 
     const compileTimeout = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}
@@ -1270,5 +1854,7 @@ module.exports = {
   compileWorkflow,
   hashContent,
   getProfileUsage,
+  analyzeWorkflowModification,
+  applyWorkflowModification,
   activeRuns,
 };

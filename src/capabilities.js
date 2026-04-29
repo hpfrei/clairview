@@ -198,6 +198,16 @@ function duplicateProfile(baseDir, sourceName, newName) {
 // Provider keys that support native web search (used by UI + adapter)
 const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
 
+// Maps providerKey → adapter name (used for model scanning and auto-adding)
+const PROVIDER_ADAPTER_MAP = {
+  anthropic: 'anthropic',
+  openai: 'openai',
+  google: 'gemini',
+  deepseek: 'openai',
+  moonshot: 'openai',
+  ollama: 'openai',
+};
+
 function validateProfile(p) {
   const modelDef = typeof p.modelDef === 'string' && p.modelDef.trim() ? p.modelDef.trim() : null;
   let disabledTools = Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t) || t.startsWith('mcp__')) : [];
@@ -693,6 +703,7 @@ function resolveModel(model, providers, secrets) {
     systemPrompt,
     toolOverrides: model.toolOverrides || {},
     reasoning: !!model.reasoning,
+    disabled: !!model.disabled,
     contextWindow: typeof model.contextWindow === 'number' ? model.contextWindow : null,
     maxOutputTokens: typeof model.maxOutputTokens === 'number' ? model.maxOutputTokens : null,
     useMaxCompletionTokens: !!model.useMaxCompletionTokens,
@@ -763,6 +774,7 @@ function validateModel(m) {
       ? m.systemPromptMode : 'replace',
     toolOverrides: (m.toolOverrides && typeof m.toolOverrides === 'object') ? m.toolOverrides : {},
     reasoning: !!m.reasoning,
+    disabled: !!m.disabled,
     contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
     maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : null,
     useMaxCompletionTokens: !!m.useMaxCompletionTokens,
@@ -827,6 +839,90 @@ function deleteProvider(baseDir, key) {
     writeSecrets(baseDir, secrets);
   }
   return true;
+}
+
+// --- Proxy Rules CRUD ---
+
+function proxyRulesDir(baseDir) {
+  return path.join(baseDir, 'capabilities', 'proxy-rules');
+}
+
+function proxyRulesManifestPath(baseDir) {
+  return path.join(baseDir, 'capabilities', 'proxy-rules.json');
+}
+
+function listProxyRules(baseDir) {
+  try {
+    const p = proxyRulesManifestPath(baseDir);
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {}
+  return [];
+}
+
+function saveProxyRulesManifest(baseDir, rules) {
+  fs.writeFileSync(proxyRulesManifestPath(baseDir), JSON.stringify(rules, null, 2) + '\n');
+}
+
+function addProxyRule(baseDir, id, name, slug, source) {
+  const dir = proxyRulesDir(baseDir);
+  ensureDir(dir);
+  fs.writeFileSync(path.join(dir, `${id}.js`), source);
+  const rules = listProxyRules(baseDir);
+  rules.push({ id, name, slug, enabled: true });
+  saveProxyRulesManifest(baseDir, rules);
+  return true;
+}
+
+function toggleProxyRule(baseDir, id, enabled) {
+  const rules = listProxyRules(baseDir);
+  const rule = rules.find(r => r.id === id);
+  if (!rule) return false;
+  rule.enabled = enabled;
+  saveProxyRulesManifest(baseDir, rules);
+  return true;
+}
+
+function deleteProxyRule(baseDir, id) {
+  const rules = listProxyRules(baseDir);
+  const idx = rules.findIndex(r => r.id === id);
+  if (idx < 0) return false;
+  rules.splice(idx, 1);
+  saveProxyRulesManifest(baseDir, rules);
+  const file = path.join(proxyRulesDir(baseDir), `${id}.js`);
+  try { fs.unlinkSync(file); } catch {}
+  return true;
+}
+
+function updateProxyRule(baseDir, id, name, slug, source) {
+  const rules = listProxyRules(baseDir);
+  const rule = rules.find(r => r.id === id);
+  if (!rule) return false;
+  if (name) rule.name = name;
+  if (slug) rule.slug = slug;
+  saveProxyRulesManifest(baseDir, rules);
+  if (source) {
+    const dir = proxyRulesDir(baseDir);
+    ensureDir(dir);
+    fs.writeFileSync(path.join(dir, `${id}.js`), source);
+  }
+  return true;
+}
+
+function reorderProxyRules(baseDir, orderedIds) {
+  const rules = listProxyRules(baseDir);
+  const byId = new Map(rules.map(r => [r.id, r]));
+  const reordered = orderedIds.map(id => byId.get(id)).filter(Boolean);
+  for (const r of rules) {
+    if (!orderedIds.includes(r.id)) reordered.push(r);
+  }
+  saveProxyRulesManifest(baseDir, reordered);
+  return true;
+}
+
+function readProxyRuleSource(baseDir, id) {
+  try {
+    return fs.readFileSync(path.join(proxyRulesDir(baseDir), `${id}.js`), 'utf-8');
+  } catch { return null; }
 }
 
 // --- Helpers ---
@@ -899,9 +995,212 @@ function updateAnthropicPricing(baseDir, updates) {
   fs.writeFileSync(pricingPath, JSON.stringify(pricing, null, 2) + '\n');
 }
 
+// --- Provider model scanning ---
+
+// Non-chat OpenAI models
+const OPENAI_MODEL_EXCLUDE = /^(ft:|babbage|davinci|whisper|dall-e|text-embedding|text-moderation|canary-|tts-)|embedding|realtime|audio|transcri|sora|gpt-image|chatgpt-image|omni-mod|-tts|-search-|-codex|-deep-research|-instruct|^gpt-3\.5|^gpt-4(?!\.\d)|^gpt-4o/i;
+// Dated variants (gpt-5.4-2026-03-05) and aliases (-chat-latest)
+const OPENAI_DATED_RE = /-(20\d{2}-\d{2}-\d{2})$|-chat-latest$/;
+// Non-text Gemini models, aliases, and pinned versions
+const GEMINI_MODEL_EXCLUDE = /tts|image|nano-banana|robotics|computer-use|deep-research|lyria|^gemma|-latest$|-customtools|-\d{3}$/i;
+
+function _sanitizeModelName(modelId, existingNames) {
+  let name = modelId.toLowerCase()
+    .replace(/^models\//, '')
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-/, '')
+    .slice(0, 50);
+  if (name.length < 2) name = 'model-' + name;
+  if (!/^[a-z0-9]/.test(name)) name = 'm' + name;
+  let candidate = name;
+  let suffix = 2;
+  while (existingNames.has(candidate)) {
+    candidate = name.slice(0, 46) + '-' + suffix++;
+  }
+  return candidate;
+}
+
+async function _fetchOpenAICompatModels(apiBaseUrl, apiKey) {
+  const url = apiBaseUrl.replace(/\/+$/, '') + '/models';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const status = res.status;
+      if (status === 401) throw new Error('Invalid API key');
+      if (status === 429) throw new Error('Rate limited — try again later');
+      throw new Error(`HTTP ${status}: ${res.statusText}`);
+    }
+    const data = await res.json();
+    const items = Array.isArray(data.data) ? data.data : [];
+    const filtered = items.filter(m => m.id && !OPENAI_MODEL_EXCLUDE.test(m.id));
+    // Dedup dated variants: keep base name, drop dated suffixes
+    const baseIds = new Set(filtered.map(m => m.id.replace(OPENAI_DATED_RE, '')));
+    return filtered
+      .filter(m => !OPENAI_DATED_RE.test(m.id) || !baseIds.has(m.id.replace(OPENAI_DATED_RE, '')) || m.id === m.id.replace(OPENAI_DATED_RE, ''))
+      .filter(m => !OPENAI_DATED_RE.test(m.id))
+      .map(m => ({
+        modelId: m.id,
+        displayName: m.id,
+        description: '',
+        contextWindow: null,
+        maxOutputTokens: null,
+      }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function _fetchGeminiModels(apiBaseUrl, apiKey) {
+  const base = apiBaseUrl.replace(/\/+$/, '');
+  const all = [];
+  let pageToken = null;
+  for (let page = 0; page < 5; page++) {
+    let url = `${base}/models?key=${apiKey}&pageSize=100`;
+    if (pageToken) url += `&pageToken=${pageToken}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) {
+        const status = res.status;
+        if (status === 400 || status === 403) throw new Error('Invalid API key');
+        if (status === 429) throw new Error('Rate limited — try again later');
+        throw new Error(`HTTP ${status}: ${res.statusText}`);
+      }
+      const data = await res.json();
+      const models = Array.isArray(data.models) ? data.models : [];
+      for (const m of models) {
+        if (!m.supportedGenerationMethods?.includes('generateContent')) continue;
+        const modelId = (m.name || '').replace(/^models\//, '');
+        if (!modelId || GEMINI_MODEL_EXCLUDE.test(modelId)) continue;
+        all.push({
+          modelId,
+          displayName: m.displayName || modelId,
+          description: m.description || '',
+          contextWindow: typeof m.inputTokenLimit === 'number' ? m.inputTokenLimit : null,
+          maxOutputTokens: typeof m.outputTokenLimit === 'number' ? m.outputTokenLimit : null,
+        });
+      }
+      pageToken = data.nextPageToken;
+      if (!pageToken) break;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return all;
+}
+
+async function _fetchAnthropicModels(apiKey) {
+  const all = [];
+  let afterId = null;
+  for (let page = 0; page < 5; page++) {
+    let url = 'https://api.anthropic.com/v1/models?limit=100';
+    if (afterId) url += `&after_id=${afterId}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        const status = res.status;
+        if (status === 401) throw new Error('Invalid API key');
+        if (status === 429) throw new Error('Rate limited — try again later');
+        throw new Error(`HTTP ${status}: ${res.statusText}`);
+      }
+      const data = await res.json();
+      const items = Array.isArray(data.data) ? data.data : [];
+      for (const m of items) {
+        if (!m.id) continue;
+        all.push({
+          modelId: m.id,
+          displayName: m.display_name || m.id,
+          description: '',
+          contextWindow: null,
+          maxOutputTokens: null,
+        });
+      }
+      if (!data.has_more) break;
+      afterId = items.length ? items[items.length - 1].id : null;
+      if (!afterId) break;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return all;
+}
+
+async function scanProviderModels(baseDir) {
+  const data = readModelsFile(baseDir);
+  const secrets = readSecrets(baseDir);
+  const existingModelIds = new Set(data.models.map(m => m.modelId));
+  const existingNames = new Set(data.models.map(m => m.name));
+  const results = {};
+
+  // Scan providers sequentially to avoid race conditions on saveModel
+  for (const [key, prov] of Object.entries(data.providers)) {
+    const apiKey = secrets.providerKeys?.[key]
+      || (key === 'anthropic' ? process.env.ANTHROPIC_API_KEY : '')
+      || '';
+    if (!apiKey) {
+      results[key] = { status: 'skipped', error: 'No API key configured', added: [] };
+      continue;
+    }
+    try {
+      let raw;
+      const adapter = PROVIDER_ADAPTER_MAP[key] || 'openai';
+      if (key === 'anthropic') {
+        raw = await _fetchAnthropicModels(apiKey);
+      } else if (adapter === 'gemini') {
+        raw = await _fetchGeminiModels(prov.apiBaseUrl || '', apiKey);
+      } else {
+        raw = await _fetchOpenAICompatModels(prov.apiBaseUrl || '', apiKey);
+      }
+      const added = [];
+      for (const m of raw) {
+        if (existingModelIds.has(m.modelId)) continue;
+        const name = _sanitizeModelName(m.modelId, existingNames);
+        existingNames.add(name);
+        existingModelIds.add(m.modelId);
+        const entry = {
+          name,
+          label: m.displayName !== m.modelId ? m.displayName : name,
+          description: m.description || '',
+          providerKey: key,
+          provider: adapter,
+          modelId: m.modelId,
+          systemPromptMode: key === 'anthropic' ? 'passthrough' : 'replace',
+          reasoning: false,
+          disabled: true,
+          contextWindow: m.contextWindow || null,
+          maxOutputTokens: m.maxOutputTokens || null,
+        };
+        saveModel(baseDir, entry);
+        added.push({ name, label: entry.label, modelId: m.modelId });
+      }
+      results[key] = { status: 'ok', total: raw.length, added };
+    } catch (err) {
+      results[key] = { status: 'error', error: err.message || String(err), added: [] };
+    }
+  }
+
+  return results;
+}
+
 module.exports = {
   KNOWN_TOOLS,
   WEB_SEARCH_PROVIDERS,
+  PROVIDER_ADAPTER_MAP,
   BUILTIN_PROFILES,
   PRESETS, // backward compat alias
   KNOWN_SKILLS,
@@ -943,4 +1242,12 @@ module.exports = {
   getDefaultSystemPrompt,
   getModelPricing,
   updateAnthropicPricing,
+  scanProviderModels,
+  listProxyRules,
+  addProxyRule,
+  toggleProxyRule,
+  deleteProxyRule,
+  updateProxyRule,
+  reorderProxyRules,
+  readProxyRuleSource,
 };

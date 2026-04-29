@@ -1,4 +1,10 @@
 {
+  "claude-opus-4-7": {
+    "inputCostPerMTok": 5,
+    "outputCostPerMTok": 25,
+    "cacheReadCostPerMTok": 0.5,
+    "cacheCreateCostPerMTok": 6.25
+  },
   "claude-opus-4-6": {
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,

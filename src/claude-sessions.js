@@ -65,9 +65,9 @@ class ClaudeSessionManager {
   }
 
   /** Send a prompt to a specific tab */
-  send(tabId, prompt) {
+  send(tabId, prompt, files) {
     const session = this.getOrCreate(tabId || 'tab-1');
-    session.send(prompt);
+    session.send(prompt, files);
   }
 
   /** Kill a specific tab's process */

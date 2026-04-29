@@ -4,6 +4,17 @@ const path = require('path');
 
 let counter = 0;
 
+const MIME_TYPES = {
+  '.html': 'text/html', '.htm': 'text/html',
+  '.json': 'application/json', '.js': 'text/javascript',
+  '.css': 'text/css', '.txt': 'text/plain', '.md': 'text/markdown',
+  '.csv': 'text/csv', '.xml': 'application/xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip',
+};
+
 function generateId() {
   return `req_${Date.now().toString(36)}_${(counter++).toString(36)}`;
 }
@@ -14,22 +25,24 @@ function generateId() {
  * Build CLI args from a profile/capabilities object.
  * Returns the base args array (caller adds --resume, --mcp-config, etc.).
  */
-function buildClaudeArgs(profile) {
+function buildClaudeArgs(profile, { skipTools } = {}) {
   const args = ['-p', '--verbose', '--output-format', 'stream-json'];
   if (!profile) return args;
   if (profile.permissionMode && profile.permissionMode !== 'default') {
     args.push('--permission-mode', profile.permissionMode);
   }
-  if (profile.allowedTools?.length > 0) {
-    args.push('--allowedTools', ...profile.allowedTools);
-  }
-  // Allow integrated MCP tools unless the profile explicitly disables some
-  const hasMcpDisabled = profile.disabledTools?.some(t => t.startsWith('mcp__'));
-  if (!hasMcpDisabled) {
-    args.push('--allowedTools', 'mcp__integrated__*');
-  }
-  if (profile.disabledTools?.length > 0) {
-    args.push('--disallowedTools', ...profile.disabledTools);
+  if (!skipTools) {
+    if (profile.allowedTools?.length > 0) {
+      args.push('--allowedTools', ...profile.allowedTools);
+    }
+    // Allow integrated MCP tools unless the profile explicitly disables some
+    const hasMcpDisabled = profile.disabledTools?.some(t => t.startsWith('mcp__'));
+    if (!hasMcpDisabled) {
+      args.push('--allowedTools', 'mcp__integrated__*');
+    }
+    if (profile.disabledTools?.length > 0) {
+      args.push('--disallowedTools', ...profile.disabledTools);
+    }
   }
   if (profile.model) args.push('--model', profile.model);
   if (profile.effort) args.push('--effort', profile.effort);
@@ -69,9 +82,9 @@ function getInstanceContext(instanceId) {
   return entry?.sourceContext || null;
 }
 
-function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken, instanceId, sourceContext }) {
+function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken, instanceId, sourceContext, extraEnv }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
-  const env = { ...process.env };
+  const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
     const profile = profileName ? `/p/${encodeURIComponent(profileName)}` : '';
     const instance = `/i/${encodeURIComponent(instanceId)}`;
@@ -106,6 +119,13 @@ function killInstance(instanceId) {
   if (!entry || entry.status !== 'running') return false;
   try { entry.proc.kill('SIGTERM'); } catch {}
   return true;
+}
+
+function removeInstances(instanceIds) {
+  for (const id of instanceIds) {
+    const entry = _activeProcesses.get(id);
+    if (entry && entry.status !== 'running') _activeProcesses.delete(id);
+  }
 }
 
 function _broadcastInstances(event, instanceId) {
@@ -333,6 +353,99 @@ function processUploadedFiles(toolUseId, files, answer) {
   return answer;
 }
 
+// --- File placement for prompt attachments ---
+
+/**
+ * Place uploaded files directly into a working directory for Claude to read.
+ * @param {string} cwd - Target directory (must already exist)
+ * @param {Array} files - Array of { name, data } where data is a base64 data URL
+ * @returns {string[]} Array of placed filenames (basenames only)
+ */
+function placeFilesInCwd(cwd, files) {
+  if (!files || !files.length) return [];
+  ensureDir(cwd);
+
+  const placed = [];
+  const prefix = Date.now();
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    // Sanitize filename
+    let safeName = (f.name || 'file').replace(/[/\\]/g, '_').replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (safeName.length > 200) safeName = safeName.slice(0, 200);
+
+    const uniqueName = `upload-${prefix}-${i}-${safeName}`;
+
+    // Decode base64 data URL
+    const match = (f.data || '').match(/^data:[^;]*;base64,(.+)$/);
+    if (!match) continue;
+
+    const buffer = Buffer.from(match[1], 'base64');
+    const fullPath = path.join(cwd, uniqueName);
+    fs.writeFileSync(fullPath, buffer);
+    placed.push(fullPath);
+  }
+  return placed;
+}
+
+/**
+ * Augment a prompt with instructions to read attached files.
+ * @param {string} prompt - Original user prompt
+ * @param {string[]} filenames - Array of filenames placed in CWD
+ * @returns {string} Augmented prompt (or original if no files)
+ */
+function augmentPromptWithFiles(prompt, filenames) {
+  if (!filenames || filenames.length === 0) return prompt;
+  const fileList = filenames.map(f => `- ${f}`).join('\n');
+  return `[Files have been placed in your working directory. You MUST read them using the Read tool before responding:\n${fileList}\n]\n\n${prompt}`;
+}
+
+/**
+ * Collect output files from a workflow's working directory, excluding uploaded input files.
+ * Returns base64 data URL objects matching the input file format for symmetry.
+ * @param {string} cwd - Working directory to scan
+ * @returns {Array<{ name: string, data: string, mimeType: string, size: number }>}
+ */
+function collectOutputFiles(cwd) {
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;   // 10 MB per file
+  const MAX_TOTAL_SIZE = 50 * 1024 * 1024;  // 50 MB total
+
+  if (!cwd || !fs.existsSync(cwd)) return [];
+
+  const results = [];
+  let totalSize = 0;
+
+  let entries;
+  try { entries = fs.readdirSync(cwd); } catch { return []; }
+
+  for (const name of entries) {
+    if (name.startsWith('upload-')) continue;
+
+    const fullPath = path.join(cwd, name);
+    try {
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) continue;
+      if (stat.size > MAX_FILE_SIZE) continue;
+      if (totalSize + stat.size > MAX_TOTAL_SIZE) continue;
+
+      const ext = path.extname(name).toLowerCase();
+      const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+      const buffer = fs.readFileSync(fullPath);
+      const base64 = buffer.toString('base64');
+
+      results.push({
+        name,
+        data: `data:${mimeType};base64,${base64}`,
+        mimeType,
+        size: stat.size,
+      });
+      totalSize += stat.size;
+    } catch {
+      continue;
+    }
+  }
+  return results;
+}
+
 module.exports = {
   generateId,
   filterRequestHeaders,
@@ -345,7 +458,9 @@ module.exports = {
   getInstances,
   getInstanceContext,
   killInstance,
+  removeInstances,
   createStreamJsonParser,
+  MIME_TYPES,
   OUTPUTS_DIR,
   resolveOutputDir,
   ensureDir,
@@ -353,4 +468,7 @@ module.exports = {
   writeJSON,
   listFiles,
   processUploadedFiles,
+  placeFilesInCwd,
+  augmentPromptWithFiles,
+  collectOutputFiles,
 };

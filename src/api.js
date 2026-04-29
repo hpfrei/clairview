@@ -1,43 +1,100 @@
 /**
  * REST API for chat and workflow execution.
  *
- * POST /api/run          — start a chat or workflow, returns SSE stream
+ * POST /api/run          — start a chat or workflow, returns SSE stream (or JSON with stream:false)
  * POST /api/run/answer   — answer an AskUserQuestion mid-stream
  *
- * Chat:     { type: "chat", prompt, cwd?, profile?, sessionId? }
- * Workflow: { type: "workflow", workflow, inputs?, cwd?, profile? }
+ * Chat:     { type: "chat", prompt, cwd?, profile?, sessionId?, stream?, files?: [{name, data}] }
+ * Workflow: { type: "workflow", workflow, inputs?, cwd?, profile?, stream?, files?: {inputKey: [{name, data}]} }
  *
- * SSE events emitted:
+ * SSE events emitted (stream mode, default):
  *   text     — { text }                  streamed assistant text
  *   ask      — { toolUseId, questions }  awaiting answer
  *   step     — { stepId, status, text? } workflow step progress
  *   error    — { error }                 error message
- *   done     — { result, sessionId? }    final output
+ *   done     — { result, sessionId? } or { result, runId, output?, files? }    final output
+ *
+ * JSON mode (stream: false):
+ *   Blocks until completion, returns single JSON response.
+ *   Chat:     { result, text, sessionId }
+ *   Workflow: { result, text, runId, output, steps, files? }
+ *   30-minute timeout.
  */
 
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
-const { resolveOutputDir, OUTPUTS_DIR, ensureDir, getInstanceContext, processUploadedFiles } = require('./utils');
+const { resolveOutputDir, OUTPUTS_DIR, MIME_TYPES, ensureDir, getInstanceContext, processUploadedFiles, placeFilesInCwd, augmentPromptWithFiles } = require('./utils');
 const caps = require('./capabilities');
 const workflows = require('./workflows');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
-function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort, authToken }) {
+function createApiRouter({ broadcaster, sessionManager, store, proxyPort, dashboardPort, authToken }) {
   const router = express.Router();
   router.use(express.json());
 
   // ── POST /api/run ────────────────────────────────────────────────
   router.post('/run', (req, res) => {
-    const { type, prompt, workflow, inputs, cwd, profile, sessionId, sourceInstanceId } = req.body || {};
+    const { type, prompt, workflow, inputs, cwd, profile, sessionId, sourceInstanceId, files, stream } = req.body || {};
 
     if (!type || (type === 'chat' && !prompt) || (type === 'workflow' && !workflow)) {
       return res.status(400).json({ error: 'Missing required fields. Chat needs: type, prompt. Workflow needs: type, workflow.' });
     }
 
-    // SSE setup
+    // ── Non-streaming JSON mode ──
+    if (stream === false) {
+      const TIMEOUT = 90 * 60 * 1000; // 90 minutes
+      req.setTimeout(TIMEOUT);
+      res.setTimeout(TIMEOUT);
+
+      const collected = { text: '', steps: [], errors: [], ask: null, done: null };
+      const send = (event, data) => {
+        if (event === 'text') collected.text += data.text || '';
+        else if (event === 'step') collected.steps.push(data);
+        else if (event === 'error') collected.errors.push(data.error);
+        else if (event === 'ask') collected.ask = data;
+        else if (event === 'done') collected.done = data;
+      };
+
+      // Override res.end to send the final JSON response
+      const origEnd = res.end.bind(res);
+      res.end = (...args) => {
+        res.end = origEnd; // Restore immediately to prevent recursion (res.json -> res.send -> res.end)
+        if (res.headersSent) return origEnd(...args);
+        if (collected.ask && !collected.done) {
+          // Run paused on AskUserQuestion — return the question so the caller can answer
+          res.json({
+            status: 'waiting',
+            toolUseId: collected.ask.toolUseId,
+            questions: collected.ask.questions,
+            text: collected.text || undefined,
+            steps: collected.steps.length ? collected.steps : undefined,
+          });
+        } else if (collected.done) {
+          const response = { ...collected.done, text: collected.text || undefined };
+          if (collected.steps.length) response.steps = collected.steps;
+          if (collected.errors.length) response.errors = collected.errors;
+          res.json(response);
+        } else if (collected.errors.length) {
+          res.status(500).json({ error: collected.errors.join('; '), text: collected.text || undefined });
+        } else {
+          res.json({ result: null, text: collected.text || undefined });
+        }
+      };
+
+      if (type === 'chat') {
+        runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId, files });
+      } else if (type === 'workflow') {
+        runWorkflow({ send, res, broadcaster, sessionManager, store, proxyPort, dashboardPort, authToken, workflow, inputs, cwd, profile, sourceInstanceId, files });
+      } else {
+        res.status(400).json({ error: `Unknown type: ${type}` });
+      }
+      return;
+    }
+
+    // ── SSE streaming mode (default) ──
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -49,10 +106,16 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
+    // SSE heartbeat to prevent proxy/LB timeouts during long workflows
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': heartbeat\n\n');
+    }, 30000);
+    res.on('close', () => clearInterval(heartbeat));
+
     if (type === 'chat') {
-      runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId });
+      runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId, files });
     } else if (type === 'workflow') {
-      runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow, inputs, cwd, profile, sourceInstanceId });
+      runWorkflow({ send, res, broadcaster, sessionManager, store, proxyPort, dashboardPort, authToken, workflow, inputs, cwd, profile, sourceInstanceId, files });
     } else {
       send('error', { error: `Unknown type: ${type}` });
       res.end();
@@ -134,16 +197,7 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
       return res.status(404).json({ error: 'File not found' });
     }
     const ext = path.extname(resolved).toLowerCase();
-    const mimeTypes = {
-      '.html': 'text/html', '.htm': 'text/html',
-      '.json': 'application/json', '.js': 'text/javascript',
-      '.css': 'text/css', '.txt': 'text/plain', '.md': 'text/markdown',
-      '.csv': 'text/csv', '.xml': 'application/xml',
-      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
-      '.pdf': 'application/pdf',
-    };
-    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
     fs.createReadStream(resolved).pipe(res);
   });
@@ -152,7 +206,7 @@ function createApiRouter({ broadcaster, sessionManager, proxyPort, dashboardPort
 }
 
 // ── Chat execution ───────────────────────────────────────────────────
-function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId }) {
+function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile, sessionId, sourceInstanceId, files }) {
   // If triggered from a known instance, reuse its tabId for AskUserQuestion routing
   const sourceCtx = sourceInstanceId ? getInstanceContext(sourceInstanceId) : null;
   const tabId = sourceCtx?.tabId || `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -215,11 +269,18 @@ function runChat({ send, res, broadcaster, sessionManager, prompt, cwd, profile,
   });
 
   broadcaster.addApiListener(listener);
-  session.send(prompt);
+
+  // Place attached files and augment prompt
+  let finalPrompt = prompt;
+  if (files && Array.isArray(files) && files.length > 0) {
+    const placedNames = placeFilesInCwd(session.cwd, files);
+    finalPrompt = augmentPromptWithFiles(prompt, placedNames);
+  }
+  session.send(finalPrompt);
 }
 
 // ── Workflow execution ───────────────────────────────────────────────
-function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashboardPort, authToken, workflow: name, inputs, cwd, profile, sourceInstanceId }) {
+function runWorkflow({ send, res, broadcaster, sessionManager, store, proxyPort, dashboardPort, authToken, workflow: name, inputs, cwd, profile, sourceInstanceId, files }) {
   const runCwd = resolveOutputDir(cwd || '');
   // If triggered from a known instance (e.g., chat tab via MCP tool), reuse its tabId
   // so AskUserQuestion routes back to the originating tab
@@ -242,7 +303,9 @@ function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashbo
     } else if (msg.type === 'workflow:error') {
       send('error', { error: msg.error });
     } else if (msg.type === 'workflow:run:complete') {
-      send('done', { result: msg.status, runId, output: msg.output || null });
+      try {
+        send('done', { result: msg.status, runId, output: msg.output || null, files: msg.files || undefined, performance_costs: msg.performance_costs || undefined });
+      } catch {}
       cleanup();
     } else if (msg.type === 'ask:question' && msg.tabId === tabId) {
       send('ask', { toolUseId: msg.toolUseId, questions: msg.questions });
@@ -270,12 +333,14 @@ function runWorkflow({ send, res, broadcaster, sessionManager, proxyPort, dashbo
   workflows.runWorkflow(name, inputs || {}, {
     sessionManager,
     broadcaster,
+    store,
     cwd: runCwd,
     tabId,
     profile: profile || undefined,
     proxyPort,
     dashboardPort,
     authToken,
+    files: files || null,
   }).catch(err => {
     send('error', { error: err.message });
     cleanup();

@@ -6,6 +6,11 @@
  *   TOKEN=<auth-token> node chat.js "your prompt here"
  *   TOKEN=<auth-token> PORT=3457 node chat.js "your prompt here"
  *
+ * To attach files, include them as base64 data URLs in the request body:
+ *   body.files = [{ name: 'photo.png', data: 'data:image/png;base64,...' }]
+ * Files are placed in Claude's working directory and the prompt is augmented
+ * with instructions to read them.
+ *
  * Streams the response in real-time, handles AskUserQuestion prompts,
  * and demonstrates multi-turn conversation via sessionId.
  */

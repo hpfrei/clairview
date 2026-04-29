@@ -2,6 +2,13 @@
   "name": "analogy-quiz-generator",
   "description": "Generates a quiz question by finding an analogy for a user-provided topic, mapping a situation into that analogy space, and formulating a question whose correct answer reveals a truth about the original topic. Uses interactive prompts to gather the topic and deliver the quiz.",
   "inputs": {},
+  "outputs": {
+    "quiz": {
+      "type": "json",
+      "description": "The complete quiz: analogy domain, question, options A-D, correct answer, explanation, user's answer, and whether they were correct",
+      "from_step": "deliver-quiz"
+    }
+  },
   "steps": {
     "gather-topic": {
       "profile": "safe",
