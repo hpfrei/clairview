@@ -41,11 +41,34 @@
       activeExtTab = `ext-${extTabCounter}`;
       knownInstances.set(activeExtTab, {
         instanceId: activeExtTab, profileName: null,
-        status: 'running', spawnedAt: interaction.timestamp || Date.now(),
+        status: 'running', spawnedAt: interaction.timestamp || Date.now(), cwd: null,
       });
       renderInspectorTabStrip();
     }
     interaction.instanceId = activeExtTab;
+  }
+
+  function cliInstanceLabel(instanceId) {
+    const tabId = instanceId.replace(/^cli-/, '');
+    const cliTab = window.cliModule?.tabs?.get(tabId);
+    if (cliTab?.title) return cliTab.title;
+    const info = knownInstances.get(instanceId);
+    if (!info?.cwd) return instanceId;
+    const parts = info.cwd.replace(/\/+$/, '').split('/');
+    const basename = parts[parts.length - 1] || info.cwd;
+    const sameDir = [];
+    for (const [id, inst] of knownInstances) {
+      if (!id.startsWith('cli-')) continue;
+      const tId = id.replace(/^cli-/, '');
+      if (window.cliModule?.tabs?.get(tId)?.title) continue;
+      if (!inst.cwd) continue;
+      const p = inst.cwd.replace(/\/+$/, '').split('/');
+      if ((p[p.length - 1] || inst.cwd) === basename) sameDir.push(id);
+    }
+    if (sameDir.length <= 1) return basename;
+    sameDir.sort();
+    const idx = sameDir.indexOf(instanceId);
+    return idx === 0 ? basename : `${basename}-${idx + 1}`;
   }
 
   function instanceDisplayLabel(instanceId) {
@@ -56,34 +79,51 @@
     // chat-tab-1 → "Chat 1"
     const chatMatch = instanceId.match(/^chat-tab-(\d+)$/);
     if (chatMatch) return `Chat ${chatMatch[1]}`;
-    // wf-<runId>-<stepId> → "WF: <stepId>"
-    const wfStepMatch = instanceId.match(/^wf-(run-[^-]+-[^-]+)-(.+)$/);
-    if (wfStepMatch) return `WF: ${wfStepMatch[2]}`;
-    // wf-generate-* → "WF Generate"
-    if (instanceId.startsWith('wf-generate-')) return 'WF Generate';
-    // wf-compile-<name>-* → "WF Compile: <name>"
-    const compileMatch = instanceId.match(/^wf-compile-(.+)-\d+$/);
-    if (compileMatch) return `Compile: ${compileMatch[1]}`;
+    // cli-tab-1 → cwd-based label
+    if (instanceId.startsWith('cli-')) return cliInstanceLabel(instanceId);
     return instanceId;
+  }
+
+  function hasOrphanInteractions() {
+    return state.interactions.some(i => !i.instanceId || !knownInstances.has(i.instanceId));
   }
 
   function renderInspectorTabStrip() {
     if (!inspectorTabStrip) return;
     inspectorTabStrip.innerHTML = '';
-    // "All" tab
-    const allBtn = document.createElement('button');
-    allBtn.className = 'view-tab' + (activeInstanceTab === 'all' ? ' active' : '');
-    allBtn.dataset.instanceId = 'all';
-    allBtn.textContent = 'Others';
-    inspectorTabStrip.appendChild(allBtn);
+    // "Others" tab — only when orphan interactions exist
+    const showOthers = hasOrphanInteractions();
+    if (showOthers) {
+      const allBtn = document.createElement('button');
+      allBtn.className = 'view-tab' + (activeInstanceTab === 'all' ? ' active' : '');
+      allBtn.dataset.instanceId = 'all';
+      allBtn.textContent = 'Others';
+      inspectorTabStrip.appendChild(allBtn);
+    } else if (activeInstanceTab === 'all' && knownInstances.size > 0) {
+      activeInstanceTab = knownInstances.keys().next().value;
+    }
     // Per-instance tabs
     for (const [id, info] of knownInstances) {
       const btn = document.createElement('button');
       btn.className = 'view-tab' + (activeInstanceTab === id ? ' active' : '');
-      if (info.status === 'running') btn.classList.add('instance-running');
       if (info.status === 'exited') btn.classList.add('instance-exited');
       btn.dataset.instanceId = id;
-      btn.textContent = instanceDisplayLabel(id);
+      const label = document.createElement('span');
+      label.textContent = instanceDisplayLabel(id);
+      if (id.startsWith('cli-')) {
+        label.className = 'cli-tab-label';
+        label.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (activeInstanceTab !== id) {
+            switchInstanceTab(id);
+            return;
+          }
+          const tabId = id.replace(/^cli-/, '');
+          switchView('claude');
+          window.cliModule?.switchTab?.(tabId);
+        });
+      }
+      btn.appendChild(label);
       const close = document.createElement('span');
       close.className = 'view-tab-close';
       close.textContent = '\u00d7';
@@ -105,13 +145,14 @@
         }
         for (const id of exitedIds) knownInstances.delete(id);
         if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
-        if (!knownInstances.has(activeInstanceTab)) switchInstanceTab('all');
-        else renderInspectorTabStrip();
+        if (!knownInstances.has(activeInstanceTab)) {
+          const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
+          switchInstanceTab(fallback);
+        } else renderInspectorTabStrip();
       });
       inspectorTabStrip.appendChild(clearBtn);
     }
-    updateInstanceBusy();
-    updateInspectorTabTitle();
+    updateStreamingState();
   }
 
   function switchInstanceTab(instanceId) {
@@ -134,27 +175,27 @@
     }
   }
 
-  function updateInspectorTabTitle() {
-    const tab = document.querySelector('[data-view="dashboard"]');
-    if (!tab) return;
-    let running = 0;
-    for (const info of knownInstances.values()) {
-      if (info.status === 'running') running++;
-    }
-    tab.textContent = running > 0 ? `Inspector (${running})` : 'Inspector';
-  }
-
-  function updateInstanceBusy() {
-    if (!inspectorTabStrip) return;
-    for (const [instanceId] of knownInstances) {
-      const tabBtn = inspectorTabStrip.querySelector(`[data-instance-id="${CSS.escape(instanceId)}"]`);
-      if (tabBtn) {
+  function updateStreamingState() {
+    const busyInstances = new Set();
+    if (inspectorTabStrip) {
+      for (const [instanceId] of knownInstances) {
+        const tabBtn = inspectorTabStrip.querySelector(`[data-instance-id="${CSS.escape(instanceId)}"]`);
+        if (!tabBtn) continue;
         const busy = state.interactions.some(
           i => i.instanceId === instanceId && (i.status === 'pending' || i.status === 'streaming')
         );
-        tabBtn.classList.toggle('instance-busy', busy);
+        tabBtn.classList.toggle('instance-running', busy);
+        if (busy) busyInstances.add(instanceId);
       }
     }
+    const inspectorTab = document.querySelector('[data-view="dashboard"]');
+    if (inspectorTab) {
+      const count = busyInstances.size;
+      inspectorTab.classList.toggle('instance-running', count > 0);
+      inspectorTab.textContent = 'Inspector';
+    }
+    document.title = busyInstances.size > 0 ? '● vistaclair' : 'vistaclair';
+    window.cliModule?.updateStreamingState?.(busyInstances);
   }
 
   if (inspectorTabStrip) {
@@ -172,8 +213,11 @@
           }
           knownInstances.delete(id);
           sendWs({ type: 'inspector:clearInstances', instanceIds: [id] });
-          if (activeInstanceTab === id) switchInstanceTab('all');
-          else renderInspectorTabStrip();
+          if (activeInstanceTab === id) {
+            const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value
+              : hasOrphanInteractions() ? 'all' : 'all';
+            switchInstanceTab(fallback);
+          } else renderInspectorTabStrip();
         }
         return;
       }
@@ -921,12 +965,7 @@
   }
 
   function updateInspectorBusy() {
-    const tab = document.querySelector('[data-view="dashboard"]');
-    if (!tab) return;
-    const busy = state.interactions.some(i => i.status === 'pending' || i.status === 'streaming');
-    tab.classList.toggle('busy', busy);
-    document.title = busy ? '● vistaclair' : 'vistaclair';
-    updateInstanceBusy();
+    updateStreamingState();
   }
 
   function scrollTimelineToBottom() {
@@ -1579,7 +1618,6 @@
       + '<ul class="empty-state-list">'
       + '<li><b>External Claude</b> &mdash; run with the proxy env var:<br><code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code></li>'
       + '<li><b>Chat</b> &mdash; use the <span class="empty-state-link" data-view="claude">Chat</span> tab to talk to Claude directly through the proxy</li>'
-      + '<li><b>Workflow</b> &mdash; run a multi-step workflow from the <span class="empty-state-link" data-view="workflow-runs">Workflows</span> tab</li>'
       + '<li><b>API</b> &mdash; POST to <code>/api/run</code> with a prompt to get an SSE stream</li>'
       + '</ul>';
     emptyState.querySelectorAll('.empty-state-link').forEach(el => {
@@ -1603,7 +1641,7 @@
           stampExtInteraction(i);
           if (i.instanceId && !knownInstances.has(i.instanceId)) {
             knownInstances.set(i.instanceId, {
-              instanceId: i.instanceId, profileName: i.profile, status: 'exited', spawnedAt: i.timestamp,
+              instanceId: i.instanceId, profileName: i.profile, status: 'exited', spawnedAt: i.timestamp, cwd: null,
             });
           }
         }
@@ -1630,7 +1668,7 @@
         if (msg.interaction.instanceId && !knownInstances.has(msg.interaction.instanceId)) {
           knownInstances.set(msg.interaction.instanceId, {
             instanceId: msg.interaction.instanceId, profileName: msg.interaction.profile,
-            status: 'running', spawnedAt: msg.interaction.timestamp,
+            status: 'running', spawnedAt: msg.interaction.timestamp, cwd: null,
           });
           renderInspectorTabStrip();
         }
@@ -1719,9 +1757,11 @@
       case 'claude:instances':
         if (msg.instances) {
           for (const inst of msg.instances) {
+            const existing = knownInstances.get(inst.instanceId);
             knownInstances.set(inst.instanceId, {
               instanceId: inst.instanceId, profileName: inst.profileName,
               status: inst.status, spawnedAt: inst.spawnedAt,
+              cwd: inst.cwd || existing?.cwd || null,
             });
           }
         }
@@ -1791,10 +1831,10 @@
     activeExtTab = `ext-${extTabCounter}`;
     knownInstances.set(activeExtTab, {
       instanceId: activeExtTab, profileName: null,
-      status: 'running', spawnedAt: Date.now(),
+      status: 'running', spawnedAt: Date.now(), cwd: null,
     });
     switchInstanceTab(activeExtTab);
   }
 
-  window.inspectorModule = { handleMessage, newExtTab, instanceDisplayLabel };
+  window.inspectorModule = { handleMessage, newExtTab, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
 })();

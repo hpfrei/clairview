@@ -4,10 +4,10 @@
 
 # $\Huge\textsf{vistaclair}$
 
-$\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#d29922}automate}$
+$\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route}$
 
 A development dashboard that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with real-time API inspection,
-multi-session chat, workflow automation, custom MCP tools, multi-provider model routing, and a REST API.
+multi-session chat, custom MCP tools, multi-provider model routing, and a REST API.
 
 [Getting started](#getting-started) ·
 [Features](#features) ·
@@ -26,9 +26,8 @@ multi-session chat, workflow automation, custom MCP tools, multi-provider model 
 | $\color{#58a6ff}{\textsf{Study the wire protocol}}$ | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
 | $\color{#3fb950}{\textsf{Remote access}}$ | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
 | $\color{#bc8cff}{\textsf{Multi-provider routing}}$ | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
-| $\color{#d29922}{\textsf{Automated pipelines}}$ | Chain multi-step workflows with branching, parallelism, and per-step profiles |
 | $\color{#79c0ff}{\textsf{Tool development}}$ | Create and test custom MCP tools from a form-driven editor without leaving the browser |
-| $\color{#f778ba}{\textsf{Programmatic access}}$ | Drive chats and workflows via the REST API with Server-Sent Events streaming |
+| $\color{#f778ba}{\textsf{Programmatic access}}$ | Drive chats via the REST API with Server-Sent Events streaming |
 
 ---
 
@@ -116,21 +115,6 @@ Multi-tab browser-based Claude Code sessions with full conversation context.
 - Stop running sessions at any time
 - Live process counter in the footer shows how many `claude -p` instances are active
 
-### $\color{#bc8cff}{\textsf{Workflows}}$
-
-Multi-step AI pipelines that execute as sequences of `claude -p` spawns.
-
-- **Design** -- describe a workflow in natural language, name it, define its inputs
-- **Generate** -- AI creates a structured `workflow.json` with steps, profiles, and context chains
-- **Compile** -- AI transforms the JSON into an optimized `compiled.js` module with prompt builders and output parsers
-- **Run** -- each step spawns a fresh `claude -p` process, streamed live to the Runs tab
-- **Flow control** -- conditional branching (`then`/`else`), parallel fan-out, joins, retries, timeouts, error handlers
-- **Per-step profiles** -- different model/effort/permissions per step
-- **Context chaining** -- pipe previous step outputs into downstream prompts via `context` references
-- **Parallel execution** -- multiple workflows (or multiple runs of the same workflow) can execute simultaneously
-- **Escalation** -- steps can pause via AskUserQuestion and wait for user input
-- Run history saved to `capabilities/workflows/<name>/runs/`
-
 ### $\color{#d29922}{\textsf{Profiles}}$
 
 Named capability bundles that control how `claude -p` is spawned.
@@ -191,10 +175,6 @@ Extend Claude Code with custom tools through one integrated MCP server.
 | Tool | Description |
 |---|---|
 | `chat` | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
-| `workflow_list` | List available compiled workflows |
-| `workflow_run` | Execute a workflow with inputs and optional cwd |
-| `workflow_status` | Check progress of a running workflow |
-| `workflow_cancel` | Cancel a running workflow |
 
 The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator using `chat` to delegate research to a `readonly` session).
 
@@ -233,7 +213,7 @@ Every `claude -p` process gets its profile baked into its base URL at spawn time
 ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
 ```
 
-This means the profile is **immutable for the process lifetime**. Switching profiles in the browser or starting a new workflow will never affect a running session. Concurrent chats, workflows, and API calls are fully isolated.
+This means the profile is **immutable for the process lifetime**. Switching profiles in the browser never affects a running session. Concurrent chats and API calls are fully isolated.
 
 ### Request flow
 
@@ -245,7 +225,7 @@ This means the profile is **immutable for the process lifetime**. Switching prof
 
 ### AskUserQuestion interception
 
-When `claude -p` calls the `AskUserQuestion` tool during a chat or workflow step:
+When `claude -p` calls the `AskUserQuestion` tool during a chat:
 
 1. The proxy intercepts the tool call in the API response stream
 2. When `claude -p` sends back the error `tool_result`, the proxy pauses the request
@@ -266,7 +246,7 @@ The dashboard server (`:3457`) exposes a REST API for programmatic access. All e
 
 ### $\texttt{POST /api/run}$
 
-Start a chat or workflow. Returns a **Server-Sent Events** stream.
+Start a chat. Returns a **Server-Sent Events** stream.
 
 <details>
 <summary><b>Chat mode</b></summary>
@@ -282,28 +262,14 @@ Start a chat or workflow. Returns a **Server-Sent Events** stream.
 </details>
 
 <details>
-<summary><b>Workflow mode</b></summary>
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `type` | `string` | **yes** | `"workflow"` |
-| `workflow` | `string` | **yes** | Name of the workflow to run |
-| `inputs` | `object` | no | Key-value input variables. For prompt-mode workflows, pass `{ "prompt": "your message" }`. |
-| `cwd` | `string` | no | Working directory (sandboxed into `outputs/`) |
-| `profile` | `string` | no | Profile override for all steps |
-
-</details>
-
-<details>
 <summary><b>SSE events</b></summary>
 
 | Event | Payload | Description |
 |---|---|---|
 | `text` | `{ text }` | Streamed text delta from Claude |
 | `ask` | `{ toolUseId, questions }` | AskUserQuestion -- answer via `POST /api/run/answer` |
-| `step` | `{ stepId, status, text? }` | Workflow step progress (started, progress with text, completed) |
 | `error` | `{ error }` | Error message |
-| `done` | `{ result, sessionId? }` (chat) or `{ result, runId }` (workflow) | Completion with final result |
+| `done` | `{ result, sessionId? }` | Completion with final result |
 
 </details>
 
@@ -361,32 +327,6 @@ curl -N -X POST http://localhost:3457/api/run \
 </details>
 
 <details>
-<summary><b>Workflow -- with inputs</b></summary>
-
-```bash
-curl -N -X POST http://localhost:3457/api/run \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"workflow","workflow":"explain-topic","inputs":{"topic":"WebSockets"}}'
-```
-
-</details>
-
-<details>
-<summary><b>Workflow -- prompt mode</b></summary>
-
-For workflows with `inputMode: "prompt"`, pass the user message as `inputs.prompt`:
-
-```bash
-curl -N -X POST http://localhost:3457/api/run \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"workflow","workflow":"research-assistant","inputs":{"prompt":"Compare React and Vue"}}'
-```
-
-</details>
-
-<details>
 <summary><b>Answer an AskUserQuestion</b></summary>
 
 ```bash
@@ -430,8 +370,6 @@ src/
   claude-sessions.js       Multi-tab session manager
   dashboard-ws.js          WebSocket server and broadcast hub
   capabilities.js          Profiles, models, providers, hooks, skills, agents CRUD
-  workflows.js             Workflow CRUD + runtime engine (generate, compile, execute)
-  workflow-handler.js      WebSocket handler for workflow operations
   store.js                 In-memory interaction store with disk persistence
   utils.js                 Central spawn function, process tracking, stream parsing
   providers/
@@ -446,12 +384,11 @@ lib/
   mcp-bridge.js            Stdio bridge Claude Code spawns via --mcp-config
 public/
   index.html               Dashboard SPA
-  home.js                  Home view documentation (5 tabs: overview, architecture, workflows, tools, API)
+  home.js                  Home view documentation (4 tabs: overview, architecture, tools, API)
   core.js                  WebSocket, view switching, markdown rendering, process counter
   capabilities.js          Profile/model/tool/skill/agent/hook management UI
   inspector.js             Inspector timeline and detail panel
   chat.js                  Chat tab UI and session controls
-  workflows.js             Workflow editor and generator UI
   style.css                Layout and structural styles
   theme-bright.css         Bright theme (default)
   theme-dark.css           Dark theme (Tokyo Night)
@@ -460,7 +397,6 @@ capabilities/
   anthropic-pricing.json   Anthropic model pricing (auto-refreshable)
   secrets.json             API keys (gitignored)
   profiles/                Custom profile JSON files
-  workflows/               Workflow definitions, compiled modules, run history
 mcp-servers/integrated/    Auto-generated MCP tool server + built-in tools
 interactions/              Saved API call history (per-session directories)
 outputs/                   Sandboxed working directory for Claude sessions

@@ -320,8 +320,8 @@
             <!-- NL label -->
             <text x="8" y="40" font-family="monospace" font-size="6" fill="#777770">describe in English</text>
           </svg>
-          <h3>NL-to-workflow pipelines</h3>
-          <p>Describe a workflow in plain English, get a compiled multi-step pipeline. Branching, parallelism, retries, per-step profiles. Each step is a full <code>claude -p</code> session.</p>
+          <h3>Multi-provider routing</h3>
+          <p>Route requests to different LLM providers through a single proxy. Per-profile model selection, automatic header translation, and streaming support across providers.</p>
         </div>
 
         <!-- MCP Tools -->
@@ -448,18 +448,13 @@
         <rect x="603" y="88" width="62" height="18" rx="3" fill="#fff" stroke="#7744bb" stroke-width="0.8"/>
         <text x="634" y="101" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#7744bb" font-weight="600">HTTP/SSE</text>
 
-        <!-- Below server: sessions and workflows -->
-        <rect x="330" y="210" width="110" height="44" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
-        <text x="385" y="234" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#1088aa" font-weight="600">claude -p</text>
-        <text x="385" y="246" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">sessions</text>
-
-        <rect x="460" y="210" width="110" height="44" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
-        <text x="515" y="234" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#1088aa" font-weight="600">Workflows</text>
-        <text x="515" y="246" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">pipelines</text>
+        <!-- Below server: sessions -->
+        <rect x="395" y="210" width="110" height="44" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
+        <text x="450" y="234" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#1088aa" font-weight="600">claude -p</text>
+        <text x="450" y="246" text-anchor="middle" font-family="'SF Mono',monospace" font-size="9" fill="#777770">sessions</text>
 
         <!-- Server -> sessions (spawn) -->
-        <line x1="385" y1="180" x2="385" y2="208" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
-        <line x1="515" y1="180" x2="515" y2="208" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
+        <line x1="450" y1="180" x2="450" y2="208" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
 
         <!-- Extensions note -->
         <rect x="330" y="270" width="240" height="24" rx="4" fill="#c0702010" stroke="#c07020" stroke-width="0.8" stroke-dasharray="4,3"/>
@@ -486,10 +481,19 @@
           <div class="step-code">npm start <span class="dim"># open localhost:3457</span></div>
         </div>
       </div>
-      <div class="env-callout">
-        <strong>Inspect external sessions</strong>
-        Point any Claude Code instance at the proxy:<br>
-        <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"</code>
+      <div class="proxy-cmd">
+        <strong>Connect Claude Code CLI</strong>
+        <p>Point any Claude Code instance at the vistaclair proxy:</p>
+        <div class="proxy-cmd-box" id="proxy-cmd-box">
+          <code>ANTHROPIC_BASE_URL=http://localhost:3456 claude</code>
+          <button class="proxy-cmd-copy" id="proxy-cmd-copy" title="Copy to clipboard">
+            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
+        </div>
+        <p class="proxy-cmd-hint">All traffic flows through vistaclair &mdash; inspect every request, switch models, intercept tool calls.</p>
       </div>
     </div>
   </section>
@@ -576,6 +580,14 @@
         this.classList.add('copied');
         this.querySelector('span').textContent = 'copied!';
         setTimeout(() => { this.classList.remove('copied'); this.querySelector('span').textContent = 'npm install && npm start'; }, 1500);
+      });
+    });
+
+    document.getElementById('proxy-cmd-copy').addEventListener('click', function() {
+      const box = document.getElementById('proxy-cmd-box');
+      navigator.clipboard.writeText('ANTHROPIC_BASE_URL=http://localhost:3456 claude').then(() => {
+        box.classList.add('copied');
+        setTimeout(() => { box.classList.remove('copied'); }, 1500);
       });
     });
   </script>

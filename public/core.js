@@ -976,18 +976,24 @@ function handleMessage(msg) {
     case 'ask:question':
     case 'ask:answered':
     case 'ask:timeout':
-      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
-        window.workflowRunModule?.handleMessage(msg);
-      } else {
-        window.chatModule?.handleMessage(msg);
-      }
+      window.chatModule?.handleMessage(msg);
       break;
     case 'chat:settings':
       syncSettings(msg);
       window.homeModule?.updateTokenDisplay?.();
       window.chatModule?.handleMessage(msg);
       window.capabilitiesModule?.handleSettings(msg);
-      window.workflowRunModule?.handleSettings?.(msg);
+      break;
+
+    // CLI Terminal
+    case 'cli:output':
+    case 'cli:exit':
+    case 'cli:spawned':
+    case 'cli:tabs':
+    case 'cli:newTab':
+    case 'cli:settingsData':
+    case 'cli:savedSessions':
+      window.cliModule?.handleMessage(msg);
       break;
 
     // Server restart
@@ -1005,73 +1011,11 @@ function handleMessage(msg) {
       break;
     case 'profile:list':
       window.capabilitiesModule?.handleMessage(msg);
-      window.chatModule?.updateProfiles(msg.profiles);
-      break;
-
-    // Workflows (editor)
-    case 'workflow:list':
-      window.workflowModule?.handleMessage(msg);
-      window.workflowRunModule?.handleMessage(msg);
-      break;
-    case 'workflow:loaded':
-      // Route to runs module if it requested the load (run or edit)
-      if (window.workflowRunModule?.pendingLoad === msg.name || window.workflowRunModule?.pendingEdit?.name === msg.name) {
-        window.workflowRunModule.handleMessage(msg);
-      } else {
-        window.workflowModule?.handleMessage(msg);
-      }
-      break;
-    case 'workflow:renamed':
-      window.workflowRunModule?.handleMessage(msg);
-      break;
-    case 'workflow:generated':
-    case 'workflow:compile:progress':
-    case 'workflow:compiled':
-    case 'workflow:modify:proposal':
-    case 'workflow:modify:applying':
-    case 'workflow:modify:complete':
-    case 'workflow:modify:error': {
-      // Route to the create tab's editor
-      const createTabId = window.workflowRunModule?.getCreateTabId?.();
-      if (createTabId) {
-        window.workflowModule?.handleMessage(msg, createTabId);
-      }
-      break;
-    }
-    case 'workflow:error':
-      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
-        window.workflowRunModule?.handleMessage(msg);
-      } else if (msg.tabId) {
-        window.chatModule?.handleMessage(msg);
-      } else {
-        // Route to create tab editor if one exists
-        const errCreateTabId = window.workflowRunModule?.getCreateTabId?.();
-        if (errCreateTabId) {
-          window.workflowModule?.handleMessage(msg, errCreateTabId);
-        }
-      }
-      break;
-
-    // Workflow run events — route to Runs tab or Chat tab based on tabId
-    case 'workflow:run:started':
-    case 'workflow:step:start':
-    case 'workflow:step:progress':
-    case 'workflow:step:complete':
-    case 'workflow:run:complete':
-      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
-        window.workflowRunModule?.handleMessage(msg);
-      } else {
-        window.chatModule?.handleMessage(msg);
-      }
       break;
 
     // Output files
     case 'files:list':
-      if (msg.tabId && msg.tabId.startsWith('wfrun-')) {
-        window.workflowRunModule?.handleMessage(msg);
-      } else {
-        window.chatModule?.handleMessage(msg);
-      }
+      window.chatModule?.handleMessage(msg);
       break;
 
     // Proxy rules
@@ -1079,6 +1023,8 @@ function handleMessage(msg) {
     case 'rule:generating':
     case 'rule:generated':
     case 'rule:error':
+    case 'rule:source':
+    case 'rule:saved':
       window.rulesModule?.handleMessage(msg);
       break;
 
@@ -1204,7 +1150,7 @@ function switchView(view) {
   const activeBtn = document.querySelector(`.header-tab[data-view="${view}"]`);
   if (activeBtn) activeBtn.classList.add('active');
 
-  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-profiles', 'view-capabilities', 'view-workflow-runs', 'view-models', 'view-rules'];
+  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-models', 'view-rules', 'view-directories'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;

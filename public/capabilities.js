@@ -123,10 +123,6 @@ Available templates in this skill directory:
     if (!profile) { editor.innerHTML = '<div class="models-empty">Select a profile or create a new one.</div>'; return; }
     const isBuiltin = !!profile.builtin;
     const dis = isBuiltin ? ' disabled' : '';
-    const usedBy = profile.usedBy || [];
-    const usageHtml = usedBy.length > 0
-      ? `<div class="pm-usage-info">Used in: ${escHtml(usedBy.map(u => `${u.workflow} → ${u.steps.join(', ')}`).join('; '))}</div>`
-      : '';
     const builtinBanner = isBuiltin
       ? '<div class="pm-view-banner">This is a built-in profile. Fields are read-only.</div>'
       : '';
@@ -139,7 +135,6 @@ Available templates in this skill directory:
           <div class="pm-field-row">
             <label>Name: <input type="text" id="pmName" value="${escHtml(profile.name)}" placeholder="my-profile" ${dis}></label>
           </div>
-          ${usageHtml}
         </div>
         <div class="pm-form-group">
           <h4>Model</h4>
@@ -205,7 +200,7 @@ Available templates in this skill directory:
         </div>
         ${isBuiltin ? '' : `<div class="pm-inline-actions">
           <button class="cap-save-btn" id="pmSave">Save</button>
-          <button class="cap-del-btn pm-delete-btn" id="pmDelete"${usedBy.length > 0 ? ' disabled title="Profile is used by workflows"' : ''}>Delete</button>
+          <button class="cap-del-btn pm-delete-btn" id="pmDelete">Delete</button>
         </div>`}
       </div>
       <div class="cap-modal-docs">

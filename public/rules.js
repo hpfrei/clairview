@@ -6,6 +6,91 @@
   let dragSrcId = null;
   let expandedId = null;
 
+  let monacoReady = false;
+  let monacoReadyPromise = null;
+  let currentEditor = null;
+  let currentEditorRuleId = null;
+  let isEditorDirty = false;
+
+  function getMonacoTheme() {
+    const t = localStorage.getItem('theme') || 'bright';
+    return t === 'dark' ? 'vs-dark' : 'vs';
+  }
+
+  function ensureMonaco() {
+    if (monacoReady) return Promise.resolve();
+    if (monacoReadyPromise) return monacoReadyPromise;
+
+    monacoReadyPromise = new Promise((resolve) => {
+      if (typeof window.require === 'undefined' || !window.require.config) {
+        console.warn('Monaco loader not available');
+        resolve();
+        return;
+      }
+      window.require.config({
+        paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' }
+      });
+      window.require(['vs/editor/editor.main'], function () {
+        monacoReady = true;
+        resolve();
+      });
+    });
+    return monacoReadyPromise;
+  }
+
+  function updateEditorHeight() {
+    if (!currentEditor) return;
+    const container = currentEditor.getDomNode()?.parentElement;
+    if (!container) return;
+    const lineCount = currentEditor.getModel().getLineCount();
+    const lineHeight = currentEditor.getOption(monaco.editor.EditorOption.lineHeight);
+    const height = Math.min(500, Math.max(120, lineCount * lineHeight + 20));
+    container.style.height = height + 'px';
+    currentEditor.layout();
+  }
+
+  function createEditor(container, source, ruleId) {
+    disposeEditor();
+    currentEditorRuleId = ruleId;
+    isEditorDirty = false;
+
+    currentEditor = monaco.editor.create(container, {
+      value: source,
+      language: 'javascript',
+      theme: getMonacoTheme(),
+      readOnly: false,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      lineNumbers: 'on',
+      fontSize: 12,
+      fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+      automaticLayout: true,
+      scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+      overviewRulerLanes: 0,
+      renderLineHighlight: 'none',
+      folding: true,
+      wordWrap: 'on',
+    });
+
+    currentEditor.onDidChangeModelContent(() => {
+      isEditorDirty = true;
+      const saveBtn = document.querySelector(`.rule-save-btn[data-id="${ruleId}"]`);
+      if (saveBtn) saveBtn.disabled = false;
+    });
+
+    updateEditorHeight();
+    currentEditor.onDidChangeModelContent(updateEditorHeight);
+  }
+
+  function disposeEditor() {
+    if (currentEditor) {
+      currentEditor.dispose();
+      currentEditor = null;
+      currentEditorRuleId = null;
+      isEditorDirty = false;
+    }
+  }
+
   function renderRuleList() {
     const list = document.getElementById('ruleList');
     if (!list) return;
@@ -36,12 +121,29 @@
         </div>
         <div class="rule-item-detail" style="display:${isExpanded ? 'block' : 'none'}">
           <div class="rule-item-slug">${escHtml(rule.slug)}</div>
+          <div class="rule-source-section">
+            <div class="rule-source-toolbar">
+              <span class="rule-source-label">Source</span>
+              <button class="rule-save-btn" data-id="${escHtml(rule.id)}" disabled>Save</button>
+            </div>
+            <div class="rule-editor-container" data-id="${escHtml(rule.id)}">
+              <div class="rule-editor-loading">Loading editor&hellip;</div>
+            </div>
+          </div>
           <div class="rule-edit-row">
-            <textarea class="rule-edit-input" data-id="${escHtml(rule.id)}" rows="5" placeholder="Describe a change to this rule&hellip;"></textarea>
-            <button class="rule-edit-submit" data-id="${escHtml(rule.id)}">Apply</button>
+            <textarea class="rule-edit-input" data-id="${escHtml(rule.id)}" rows="3" placeholder="Describe a change to this rule&hellip;"></textarea>
+            <button class="rule-edit-submit" data-id="${escHtml(rule.id)}">Apply with AI</button>
           </div>
         </div>`;
       list.appendChild(item);
+    }
+
+    if (expandedId) {
+      ensureMonaco().then(() => {
+        if (expandedId && monacoReady) {
+          sendWs({ type: 'rule:source', id: expandedId });
+        }
+      });
     }
   }
 
@@ -61,8 +163,8 @@
       sendWs({ type: 'rule:toggle', id: toggle.dataset.id, enabled: toggle.checked });
       return;
     }
-    // Prevent toggle label clicks from expanding
     if (e.target.closest('.rule-toggle')) return;
+
     // Delete
     const delBtn = e.target.closest('.rule-del-btn');
     if (delBtn) {
@@ -72,7 +174,18 @@
       }
       return;
     }
-    // Edit submit
+
+    // Manual save
+    const saveBtn = e.target.closest('.rule-save-btn');
+    if (saveBtn) {
+      e.stopPropagation();
+      if (!currentEditor || !isEditorDirty) return;
+      sendWs({ type: 'rule:save', id: saveBtn.dataset.id, source: currentEditor.getValue() });
+      saveBtn.disabled = true;
+      return;
+    }
+
+    // AI edit submit
     const submitBtn = e.target.closest('.rule-edit-submit');
     if (submitBtn) {
       e.stopPropagation();
@@ -83,19 +196,21 @@
       input.value = '';
       return;
     }
-    // Don't expand when clicking inside the detail panel (input, etc.)
+
     if (e.target.closest('.rule-item-detail')) return;
-    // Drag handle shouldn't expand
     if (e.target.closest('.rule-drag-handle')) return;
-    // Click on header row → expand/collapse
+
+    // Click on header row -> expand/collapse
     const item = e.target.closest('.rule-item');
     if (item) {
-      expandedId = expandedId === item.dataset.id ? null : item.dataset.id;
+      const newId = expandedId === item.dataset.id ? null : item.dataset.id;
+      if (expandedId !== newId) disposeEditor();
+      expandedId = newId;
       renderRuleList();
     }
   });
 
-  // Enter key in edit input
+  // Ctrl+Enter in edit input
   document.getElementById('ruleList')?.addEventListener('keydown', (e) => {
     if (!(e.key === 'Enter' && (e.ctrlKey || e.metaKey))) return;
     const input = e.target.closest('.rule-edit-input');
@@ -158,6 +273,7 @@
     switch (msg.type) {
       case 'rule:list':
         state.rules = msg.rules || [];
+        disposeEditor();
         renderRuleList();
         document.getElementById('ruleGeneratingStatus')?.classList.add('hidden');
         break;
@@ -170,6 +286,18 @@
       case 'rule:error':
         document.getElementById('ruleGeneratingStatus')?.classList.add('hidden');
         showAlert(msg.error);
+        break;
+      case 'rule:source': {
+        if (msg.id !== expandedId) break;
+        const container = document.querySelector(`.rule-editor-container[data-id="${msg.id}"]`);
+        if (!container || !monacoReady) break;
+        container.innerHTML = '';
+        createEditor(container, msg.source, msg.id);
+        break;
+      }
+      case 'rule:saved':
+        isEditorDirty = false;
+        showAlert('Rule saved');
         break;
     }
   }

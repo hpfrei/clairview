@@ -3,18 +3,9 @@ const WebSocket = require('ws');
 const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, removeInstances, resolveOutputDir, listFiles, processUploadedFiles } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
-const workflows = require('./workflows');
 
 // Capabilities config always lives at project root, not the outputs sandbox
 const PROJECT_ROOT = path.dirname(__dirname);
-
-function profilesWithUsage() {
-  const usage = workflows.getProfileUsage(PROJECT_ROOT);
-  return caps.listProfiles(PROJECT_ROOT).map(p => ({
-    ...p,
-    usedBy: usage[p.name] || [],
-  }));
-}
 
 class DashboardBroadcaster {
   constructor(wss, store, sessionManager, opts = {}) {
@@ -22,8 +13,8 @@ class DashboardBroadcaster {
     this.store = store;
     this.sessionManager = sessionManager;
     this.authToken = opts.authToken || null;
+    this.cliSessionManager = opts.cliSessionManager || null;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
-    this.workflowHandler = null; // Set externally by src/workflow-handler.js
     this.apiListeners = new Set();
 
     this.wss.on('connection', (ws) => {
@@ -52,7 +43,6 @@ class DashboardBroadcaster {
           outputsDir: OUTPUTS_DIR,
           authToken: this.authToken,
           capabilities: this.sessionManager.capabilities,
-          profiles: profilesWithUsage(),
           knownTools: caps.KNOWN_TOOLS,
           knownSkills: caps.KNOWN_SKILLS,
           hookEvents: caps.HOOK_EVENTS,
@@ -80,10 +70,19 @@ class DashboardBroadcaster {
 
       // MCP Server Manager init
       if (this.mcpHandler) this.mcpHandler.onConnect(ws);
-      // Workflow handler init
-      if (this.workflowHandler) this.workflowHandler.onConnect(ws);
       // Rule handler init
       if (this.ruleHandler) this.ruleHandler.onConnect(ws);
+
+      // CLI tabs init
+      if (this.cliSessionManager) {
+        ws.send(JSON.stringify({ type: 'cli:tabs', tabs: this.cliSessionManager.list() }));
+        for (const [tabId, session] of this.cliSessionManager.sessions) {
+          const scrollback = session.getScrollback();
+          if (scrollback) {
+            ws.send(JSON.stringify({ type: 'cli:output', tabId, data: scrollback }));
+          }
+        }
+      }
 
       ws.on('message', (data) => {
         try {
@@ -148,65 +147,6 @@ class DashboardBroadcaster {
                 answer = processUploadedFiles(msg.toolUseId, msg.files, answer);
               }
               pending.resolve(answer);
-            }
-          // --- Capabilities / Profiles ---
-          } else if (msg.type === 'chat:setCapabilities' && this.sessionManager) {
-            this.sessionManager.setCapabilities(msg.capabilities);
-            const cwd = this.sessionManager.cwd;
-            this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
-          } else if (msg.type === 'chat:switchProfile' && this.sessionManager) {
-            const ok = this.sessionManager.switchProfile(msg.name);
-            if (!ok) {
-              ws.send(JSON.stringify({ type: 'chat:error', text: `Unknown profile: ${msg.name}` }));
-            } else {
-              const cwd = this.sessionManager.cwd;
-              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
-            }
-          } else if (msg.type === 'profile:list') {
-            const cwd = this.sessionManager?.cwd || process.cwd();
-            ws.send(JSON.stringify({ type: 'profile:list', profiles: profilesWithUsage() }));
-          } else if (msg.type === 'profile:save') {
-            // Handle rename: if oldName provided and differs, delete old file first
-            if (msg.oldName && msg.oldName !== msg.profile?.name) {
-              const usage = workflows.getProfileUsage(PROJECT_ROOT);
-              if (usage[msg.oldName]?.length) {
-                ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot rename profile "${msg.oldName}" — it is used in workflows` }));
-                return;
-              }
-              caps.deleteProfile(PROJECT_ROOT, msg.oldName);
-              if (this.sessionManager && this.sessionManager.capabilities.name === msg.oldName) {
-                this.sessionManager.switchProfile(msg.profile.name);
-              }
-            }
-            const ok = caps.saveProfile(PROJECT_ROOT, msg.profile);
-            if (ok) {
-              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
-            } else {
-              ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot save profile: ${msg.profile?.name} (invalid or builtin name)` }));
-            }
-          } else if (msg.type === 'profile:delete') {
-            const usage = workflows.getProfileUsage(PROJECT_ROOT);
-            if (usage[msg.name]?.length) {
-              const refs = usage[msg.name].map(u => `${u.workflow} (${u.steps.join(', ')})`).join('; ');
-              ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete profile "${msg.name}" — used in: ${refs}` }));
-              return;
-            }
-            const ok = caps.deleteProfile(PROJECT_ROOT, msg.name);
-            if (ok) {
-              if (this.sessionManager && this.sessionManager.capabilities.name === msg.name) {
-                this.sessionManager.switchProfile('full');
-              }
-              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
-            } else {
-              ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot delete profile: ${msg.name}` }));
-            }
-          } else if (msg.type === 'profile:duplicate') {
-            const cwd = this.sessionManager?.cwd || process.cwd();
-            const ok = caps.duplicateProfile(PROJECT_ROOT, msg.source, msg.newName);
-            if (ok) {
-              this.broadcast({ type: 'profile:list', profiles: profilesWithUsage() });
-            } else {
-              ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot duplicate profile: invalid name or source` }));
             }
           // --- Skills ---
           } else if (msg.type === 'skill:list') {
@@ -324,8 +264,67 @@ class DashboardBroadcaster {
             if (this.ruleHandler) this.ruleHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('mcp:')) {
             if (this.mcpHandler) this.mcpHandler.handleMessage(ws, msg, this);
-          } else if (msg.type.startsWith('workflow:')) {
-            if (this.workflowHandler) this.workflowHandler.handleMessage(ws, msg, this);
+          // --- CLI Terminal ---
+          } else if (msg.type === 'cli:newTab') {
+            if (this.cliSessionManager) {
+              const newTabId = this.cliSessionManager.nextTabId();
+              this.cliSessionManager.getOrCreate(newTabId);
+              this.cliSessionManager.broadcastTabs();
+              ws.send(JSON.stringify({ type: 'cli:newTab', tabId: newTabId }));
+            }
+          } else if (msg.type === 'cli:closeTab') {
+            if (this.cliSessionManager && msg.tabId) {
+              this.cliSessionManager.remove(msg.tabId);
+              this.cliSessionManager.broadcastTabs();
+            }
+          } else if (msg.type === 'cli:spawn') {
+            if (this.cliSessionManager && msg.tabId && msg.cwd) {
+              this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resume: !!msg.resume });
+            }
+          } else if (msg.type === 'cli:input') {
+            if (this.cliSessionManager && msg.tabId) {
+              this.cliSessionManager.write(msg.tabId, msg.data || '');
+            }
+          } else if (msg.type === 'cli:resize') {
+            if (this.cliSessionManager && msg.tabId) {
+              this.cliSessionManager.resize(msg.tabId, msg.cols || 80, msg.rows || 24);
+            }
+          } else if (msg.type === 'cli:kill') {
+            if (this.cliSessionManager && msg.tabId) {
+              this.cliSessionManager.kill(msg.tabId);
+            }
+          } else if (msg.type === 'cli:rename') {
+            if (this.cliSessionManager && msg.tabId) {
+              this.cliSessionManager.rename(msg.tabId, msg.title || null);
+            }
+          } else if (msg.type === 'cli:settings') {
+            if (this.cliSessionManager && msg.tabId && msg.settings) {
+              this.cliSessionManager.updateSettings(msg.tabId, msg.settings);
+              const session = this.cliSessionManager.get(msg.tabId);
+              if (session) {
+                ws.send(JSON.stringify({ type: 'cli:settingsData', tabId: msg.tabId, settings: session.getSettings() }));
+              }
+            }
+          } else if (msg.type === 'cli:getSettings') {
+            if (this.cliSessionManager && msg.tabId) {
+              const session = this.cliSessionManager.get(msg.tabId);
+              const models = caps.listModels(PROJECT_ROOT);
+              ws.send(JSON.stringify({
+                type: 'cli:settingsData',
+                tabId: msg.tabId,
+                settings: session ? session.getSettings() : {},
+                models,
+              }));
+            }
+          } else if (msg.type === 'cli:getSavedSessions') {
+            if (this.cliSessionManager) {
+              ws.send(JSON.stringify({ type: 'cli:savedSessions', sessions: this.cliSessionManager.getSavedSessions() }));
+            }
+          } else if (msg.type === 'cli:deleteSavedSession') {
+            if (this.cliSessionManager && msg.sessionId) {
+              this.cliSessionManager.deleteSavedSession(msg.sessionId);
+              ws.send(JSON.stringify({ type: 'cli:savedSessions', sessions: this.cliSessionManager.getSavedSessions() }));
+            }
           }
         } catch (err) { console.error('WS message handling error:', err); }
       });

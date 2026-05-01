@@ -1,6 +1,11 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+let _pty;
+function getPty() {
+  if (!_pty) _pty = require('node-pty');
+  return _pty;
+}
 
 let counter = 0;
 
@@ -13,6 +18,13 @@ const MIME_TYPES = {
   '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
   '.pdf': 'application/pdf',
   '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac', '.aac': 'audio/aac', '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.ogv': 'video/ogg',
+  '.ts': 'text/plain', '.tsx': 'text/plain',
+  '.py': 'text/plain', '.rb': 'text/plain', '.go': 'text/plain', '.rs': 'text/plain',
+  '.yaml': 'text/plain', '.yml': 'text/plain', '.toml': 'text/plain', '.ini': 'text/plain',
+  '.sh': 'text/plain', '.bash': 'text/plain', '.log': 'text/plain', '.env': 'text/plain',
 };
 
 function generateId() {
@@ -56,6 +68,33 @@ function buildClaudeArgs(profile, { skipTools } = {}) {
 }
 
 /**
+ * Build CLI args for interactive PTY mode.
+ * No -p, --output-format, or --verbose flags.
+ */
+function buildCliArgs(settings) {
+  const args = [];
+  if (!settings) return args;
+  if (settings.permissionMode && settings.permissionMode !== 'default') {
+    args.push('--permission-mode', settings.permissionMode);
+  }
+  if (settings.allowedTools?.length > 0) {
+    args.push('--allowedTools', ...settings.allowedTools);
+  }
+  if (settings.disabledTools?.length > 0) {
+    args.push('--disallowedTools', ...settings.disabledTools);
+  }
+  if (settings.model) args.push('--model', settings.model);
+  if (settings.effort) args.push('--effort', settings.effort);
+  if (settings.disableSlashCommands) args.push('--disable-slash-commands');
+  if (settings.bare) args.push('--bare');
+  if (settings.maxTurns) args.push('--max-turns', String(settings.maxTurns));
+  if (settings.maxBudgetUsd) args.push('--max-budget-usd', String(settings.maxBudgetUsd));
+  if (settings.appendSystemPrompt) args.push('--append-system-prompt', settings.appendSystemPrompt);
+  if (settings.systemPrompt) args.push('--system-prompt', settings.systemPrompt);
+  return args;
+}
+
+/**
  * Spawn `claude` with the proxy URL injected into the environment.
  */
 // Live tracking of running Claude processes
@@ -72,8 +111,8 @@ function getActiveProcessCount() {
 }
 
 function getInstances() {
-  return Array.from(_activeProcesses.values()).map(({ instanceId, profileName, spawnedAt, status }) => ({
-    instanceId, profileName, spawnedAt, status,
+  return Array.from(_activeProcesses.values()).map(({ instanceId, profileName, spawnedAt, status, cwd }) => ({
+    instanceId, profileName, spawnedAt, status, cwd: cwd || null,
   }));
 }
 
@@ -100,7 +139,7 @@ function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, das
   env.VISTACLAIR_INSTANCE_ID = instanceId;
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
-  _activeProcesses.set(instanceId, { proc, instanceId, profileName, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null });
+  _activeProcesses.set(instanceId, { proc, instanceId, profileName, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
   proc.on('exit', () => {
     const entry = _activeProcesses.get(instanceId);
@@ -112,6 +151,45 @@ function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, das
   });
 
   return proc;
+}
+
+/**
+ * Spawn `claude` in interactive PTY mode with the proxy URL injected.
+ */
+function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, disableAutoMemory, dashboardPort, authToken, extraEnv }) {
+  if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
+  const env = { ...process.env, ...extraEnv };
+  if (proxyPort) {
+    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
+  } else {
+    delete env.ANTHROPIC_BASE_URL;
+  }
+  if (disableAutoMemory) {
+    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  }
+  if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
+  if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
+  env.VISTACLAIR_INSTANCE_ID = instanceId;
+
+  const ptyProc = getPty().spawn('claude', args, {
+    name: 'xterm-256color',
+    cols: cols || 80,
+    rows: rows || 24,
+    cwd,
+    env,
+  });
+
+  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, profileName: null, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
+  _broadcastInstances('spawn', instanceId);
+  ptyProc.onExit(() => {
+    const entry = _activeProcesses.get(instanceId);
+    if (entry && entry.proc === ptyProc) {
+      entry.status = 'exited';
+      _broadcastInstances('exit', instanceId);
+    }
+  });
+
+  return ptyProc;
 }
 
 function killInstance(instanceId) {
@@ -399,53 +477,6 @@ function augmentPromptWithFiles(prompt, filenames) {
   return `[Files have been placed in your working directory. You MUST read them using the Read tool before responding:\n${fileList}\n]\n\n${prompt}`;
 }
 
-/**
- * Collect output files from a workflow's working directory, excluding uploaded input files.
- * Returns base64 data URL objects matching the input file format for symmetry.
- * @param {string} cwd - Working directory to scan
- * @returns {Array<{ name: string, data: string, mimeType: string, size: number }>}
- */
-function collectOutputFiles(cwd) {
-  const MAX_FILE_SIZE = 10 * 1024 * 1024;   // 10 MB per file
-  const MAX_TOTAL_SIZE = 50 * 1024 * 1024;  // 50 MB total
-
-  if (!cwd || !fs.existsSync(cwd)) return [];
-
-  const results = [];
-  let totalSize = 0;
-
-  let entries;
-  try { entries = fs.readdirSync(cwd); } catch { return []; }
-
-  for (const name of entries) {
-    if (name.startsWith('upload-')) continue;
-
-    const fullPath = path.join(cwd, name);
-    try {
-      const stat = fs.statSync(fullPath);
-      if (!stat.isFile()) continue;
-      if (stat.size > MAX_FILE_SIZE) continue;
-      if (totalSize + stat.size > MAX_TOTAL_SIZE) continue;
-
-      const ext = path.extname(name).toLowerCase();
-      const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
-      const buffer = fs.readFileSync(fullPath);
-      const base64 = buffer.toString('base64');
-
-      results.push({
-        name,
-        data: `data:${mimeType};base64,${base64}`,
-        mimeType,
-        size: stat.size,
-      });
-      totalSize += stat.size;
-    } catch {
-      continue;
-    }
-  }
-  return results;
-}
-
 module.exports = {
   generateId,
   filterRequestHeaders,
@@ -453,6 +484,8 @@ module.exports = {
   sanitizeForDashboard,
   buildClaudeArgs,
   spawnClaude,
+  buildCliArgs,
+  spawnClaudePty,
   setProcessBroadcaster,
   getActiveProcessCount,
   getInstances,
@@ -470,5 +503,4 @@ module.exports = {
   processUploadedFiles,
   placeFilesInCwd,
   augmentPromptWithFiles,
-  collectOutputFiles,
 };

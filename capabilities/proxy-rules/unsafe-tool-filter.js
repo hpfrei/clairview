@@ -18,7 +18,7 @@ module.exports = function(ctx) {
     !REMOVED_PREFIXES.some(p => t.name?.startsWith(p))
   );
   const removed = before - ctx.body.tools.length;
-  if (removed > 0) {
+  /*if (removed > 0) {
     console.log(`[rule:unsafe-tool-filter] Stripped ${removed} unsafe tools`);
-  }
+  }*/
 };

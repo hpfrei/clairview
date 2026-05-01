@@ -77,6 +77,36 @@ async function handleMessage(ws, msg, bc) {
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
         }
         break;
+
+      case 'rule:source': {
+        const source = caps.readProxyRuleSource(PROJECT_ROOT, msg.id);
+        if (source !== null) {
+          send({ type: 'rule:source', id: msg.id, source });
+        } else {
+          send({ type: 'rule:error', error: `Rule source not found: ${msg.id}` });
+        }
+        break;
+      }
+
+      case 'rule:save': {
+        if (!msg.id || typeof msg.source !== 'string') {
+          send({ type: 'rule:error', error: 'Rule ID and source are required' });
+          break;
+        }
+        try {
+          new Function(msg.source);
+        } catch (e) {
+          send({ type: 'rule:error', error: `Syntax error: ${e.message}` });
+          break;
+        }
+        if (caps.updateProxyRule(PROJECT_ROOT, msg.id, null, null, msg.source)) {
+          bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
+          send({ type: 'rule:saved', id: msg.id });
+        } else {
+          send({ type: 'rule:error', error: `Rule not found: ${msg.id}` });
+        }
+        break;
+      }
     }
   } catch (err) {
     console.error('Rule handler error:', err);

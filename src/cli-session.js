@@ -1,0 +1,185 @@
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const caps = require('./capabilities');
+const { buildCliArgs, spawnClaudePty } = require('./utils');
+
+const PROJECT_ROOT = path.dirname(__dirname);
+
+const DEFAULT_SETTINGS = {
+  modelMap: { opus: null, sonnet: null, haiku: null },
+};
+
+const SCROLLBACK_LIMIT = 128 * 1024;
+
+class CliSession {
+  constructor(proxyPort, broadcaster, store, opts = {}) {
+    this.proxyPort = proxyPort;
+    this.broadcaster = broadcaster;
+    this.store = store;
+    this.pty = null;
+    this.cwd = null;
+    this.tabId = null;
+    this.title = null;
+    this.settings = { ...DEFAULT_SETTINGS };
+    this.status = 'idle';
+    this._mcpConfigFile = null;
+    this._scrollback = '';
+    this._authToken = opts.authToken || '';
+    this._dashboardPort = opts.dashboardPort || 3457;
+  }
+
+  get instanceId() {
+    return `cli-${this.tabId}`;
+  }
+
+  get running() {
+    return this.status === 'running' && this.pty !== null;
+  }
+
+  spawn(cwd, cols, rows, { resume = false } = {}) {
+    if (this.running) this.kill();
+
+    this.cwd = cwd;
+    this.status = 'running';
+
+    const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];
+    if (resume) args.push('--continue');
+
+    // MCP config injection
+    this._cleanupMcpConfig();
+    const mcpConfigFile = this._buildMcpConfig();
+    if (mcpConfigFile) args.push('--mcp-config', mcpConfigFile);
+
+    // Hook reporters
+    const reporterPath = path.join(PROJECT_ROOT, 'lib', 'hook-reporter.js');
+    caps.ensureHookReporters(cwd, reporterPath);
+
+    this.pty = spawnClaudePty(args, {
+      cwd,
+      proxyPort: this.proxyPort,
+      instanceId: this.instanceId,
+      sourceContext: { tabId: this.tabId },
+      cols: cols || 80,
+      rows: rows || 24,
+      disableAutoMemory: this.settings.disableAutoMemory !== false,
+      dashboardPort: this._dashboardPort,
+      authToken: this._authToken,
+    });
+
+    this._scrollback = '';
+
+    this.pty.onData((data) => {
+      this._scrollback += data;
+      if (this._scrollback.length > SCROLLBACK_LIMIT) {
+        this._scrollback = this._scrollback.slice(-SCROLLBACK_LIMIT);
+      }
+      this.broadcaster.broadcast({ type: 'cli:output', tabId: this.tabId, data });
+    });
+
+    this.pty.onExit(({ exitCode }) => {
+      this._cleanupMcpConfig();
+      this.status = 'exited';
+      this.pty = null;
+      this.broadcaster.broadcast({ type: 'cli:exit', tabId: this.tabId, exitCode });
+    });
+
+    this.broadcaster.broadcast({
+      type: 'cli:spawned',
+      tabId: this.tabId,
+      cwd: this.cwd,
+      title: this.title,
+      settings: this.settings,
+    });
+  }
+
+  write(data) {
+    if (this.pty) this.pty.write(data);
+  }
+
+  resize(cols, rows) {
+    if (this.pty) this.pty.resize(cols, rows);
+  }
+
+  kill() {
+    if (this.pty) {
+      try { this.pty.kill('SIGTERM'); } catch {}
+      const pid = this.pty.pid;
+      this.pty = null;
+      if (pid) {
+        setTimeout(() => {
+          try { process.kill(pid, 0); process.kill(pid, 'SIGKILL'); } catch {}
+        }, 3000);
+      }
+    }
+    this.status = 'idle';
+    this._cleanupMcpConfig();
+  }
+
+  getScrollback() {
+    return this._scrollback;
+  }
+
+  updateSettings(newSettings) {
+    this.settings = { ...this.settings, ...newSettings };
+  }
+
+  getSettings() {
+    return { ...this.settings };
+  }
+
+  _cleanupMcpConfig() {
+    if (this._mcpConfigFile) {
+      try { fs.unlinkSync(this._mcpConfigFile); } catch {}
+      this._mcpConfigFile = null;
+    }
+  }
+
+  _buildMcpConfig() {
+    let mcpServers;
+    try {
+      mcpServers = require('./mcp/servers');
+    } catch { return null; }
+
+    const meta = mcpServers.readMeta();
+    if (!meta) return null;
+
+    const enabledTools = (meta.tools || []).filter(t => t.enabled);
+    if (enabledTools.length === 0) return null;
+
+    const appRoot = path.dirname(__dirname);
+    const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
+
+    const env = {};
+    if (meta.env && typeof meta.env === 'object' && !Array.isArray(meta.env)) {
+      for (const [k, v] of Object.entries(meta.env)) {
+        if (k) env[k] = String(v);
+      }
+    }
+    if (meta.secrets && typeof meta.secrets === 'object') {
+      for (const [k, v] of Object.entries(meta.secrets)) {
+        if (k) env[k] = String(v);
+      }
+    }
+    env.VISTACLAIR_DASHBOARD_PORT = String(this._dashboardPort || process.env.DASHBOARD_PORT || '3457');
+    env.VISTACLAIR_AUTH_TOKEN = String(this._authToken || process.env.AUTH_TOKEN || '');
+    env.VISTACLAIR_SERVER_SLUG = mcpServers.INTEGRATED_SLUG;
+
+    const config = {
+      mcpServers: {
+        [mcpServers.INTEGRATED_SLUG]: {
+          command: 'node',
+          args: [bridgePath, mcpServers.INTEGRATED_SLUG],
+          env,
+        },
+      },
+    };
+
+    const tmpFile = path.join(os.tmpdir(), `vistaclair-cli-mcp-${Date.now()}-${process.pid}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(config, null, 2));
+    this._mcpConfigFile = tmpFile;
+    return tmpFile;
+  }
+}
+
+module.exports = CliSession;

@@ -1,6 +1,6 @@
 # VistaClair External API
 
-VistaClair exposes a REST API on the dashboard port (default `:3457`) that lets external applications run chats and workflows programmatically. All responses stream as **Server-Sent Events (SSE)**, giving you real-time text deltas, workflow step progress, and interactive question prompts.
+VistaClair exposes a REST API on the dashboard port (default `:3457`) that lets external applications run chats programmatically. All responses stream as **Server-Sent Events (SSE)**, giving you real-time text deltas and interactive question prompts.
 
 ## Authentication
 
@@ -34,7 +34,7 @@ The server accepts JSON bodies up to **50 MB** (`express.json({ limit: '50mb' })
 
 ### POST /api/run
 
-Start a chat or workflow. By default returns a **Server-Sent Events** stream. Set `"stream": false` to block until completion and get a single JSON response instead.
+Start a chat. By default returns a **Server-Sent Events** stream. Set `"stream": false` to block until completion and get a single JSON response instead.
 
 #### Chat mode
 
@@ -64,71 +64,16 @@ Start a chat or workflow. By default returns a **Server-Sent Events** stream. Se
 | `files` | array | no | File attachments as base64 data URLs: `[{name, data}]`. Files are placed in the working directory and the prompt is automatically augmented with instructions for Claude to read them. |
 | `sourceInstanceId` | string | no | Instance ID for routing AskUserQuestion back to the originating chat tab. |
 
-#### Workflow mode
-
-```json
-{
-  "type": "workflow",
-  "workflow": "code-review",
-  "stream": false,
-  "inputs": { "target": "src/", "depth": "thorough" },
-  "cwd": "optional/subdirectory",
-  "profile": "full",
-  "sourceInstanceId": "originating-instance-id",
-  "files": {
-    "dataset": [
-      { "name": "data.csv", "data": "data:text/csv;base64,aWQsb..." }
-    ]
-  }
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | string | yes | `"workflow"` |
-| `workflow` | string | yes | Name of the workflow to run (e.g. `"code-review"`) |
-| `stream` | boolean | no | `false` to return a single JSON response instead of SSE. Default: `true`. |
-| `inputs` | object | no | Key-value input variables. For prompt-mode workflows, pass `{ "prompt": "your message" }`. |
-| `cwd` | string | no | Working directory (sandboxed into `outputs/`) |
-| `profile` | string | no | Profile override for all steps |
-| `files` | object | no | File attachments keyed by workflow input name: `{inputKey: [{name, data}]}`. Each file is a base64 data URL. The input variable (`{{inputKey}}`) resolves to the placed filename in step prompts. |
-| `sourceInstanceId` | string | no | Instance ID for routing AskUserQuestion back to the originating tab. |
-
-#### Workflow JSON schema
-
-Workflow definitions (`capabilities/workflows/<name>/workflow.json`) use this structure:
-
-```json
-{
-  "name": "my-workflow",
-  "description": "What this workflow does",
-  "inputs": {
-    "topic": "The topic to process",
-    "image": { "type": "file", "description": "Image to analyze", "accept": "image/*" }
-  },
-  "outputs": {
-    "summary": { "type": "string", "description": "Result text" },
-    "chart": { "type": "file", "description": "Generated chart image" }
-  },
-  "steps": { ... }
-}
-```
-
-The `outputs` field declares what the workflow returns. Output types: `string`, `file`, `object`. File outputs are automatically collected from the working directory and returned as base64 data URLs (see [Output files](#output-files)). The `outputs` spec is also surfaced in the MCP tool description when the workflow is registered as a tool.
-
-The `GET /api/workflows` endpoint (via WebSocket `workflow:list`) returns each workflow's `inputs` and `outputs` metadata alongside `name`, `description`, `status`, and `stepCount`.
-
 #### SSE events (stream mode, default)
 
 All responses stream as Server-Sent Events (`Content-Type: text/event-stream`).
 
 | Event | Payload | When |
 |-------|---------|------|
-| `text` | `{ text }` | Streamed text delta from Claude (both chat and workflow steps) |
+| `text` | `{ text }` | Streamed text delta from Claude |
 | `ask` | `{ toolUseId, questions }` | AskUserQuestion — the session needs user input to continue. Answer via `POST /api/run/answer`. |
-| `step` | `{ stepId, status, text? }` | Workflow only: step started (`status: "running"`), progress (`text` included), or completed (`status: "done"` / `"failed"`) |
 | `error` | `{ error }` | Error message |
-| `done` | `{ result, sessionId? }` (chat) or `{ result, runId, output?, files? }` (workflow) | Final result. Chat: `result` is the full text, `sessionId` enables multi-turn. Workflow: `result` is the status, `output` is the final step text, `files` is an array of output file objects (see [Output files](#output-files)), `runId` identifies the run. |
+| `done` | `{ result, sessionId? }` | Final result. `result` is the full text, `sessionId` enables multi-turn. |
 
 **SSE format:**
 ```
@@ -146,14 +91,9 @@ data: {"result":"Hello, world!","sessionId":"abc-123"}
 
 When `stream` is `false`, the request blocks until the run completes (30-minute timeout) and returns a single JSON response.
 
-**Chat response:**
+**Response:**
 ```json
 { "result": "...full text...", "text": "...full text...", "sessionId": "..." }
-```
-
-**Workflow response:**
-```json
-{ "result": "done", "text": "...concatenated text...", "runId": "...", "output": "...", "steps": [...], "files": [{"name": "chart.png", "data": "data:image/png;base64,...", "mimeType": "image/png", "size": 8192}] }
 ```
 
 If the run pauses on an `AskUserQuestion`, the response returns immediately with `status: "waiting"` and the question details so you can answer via `POST /api/run/answer` and re-submit:
@@ -161,23 +101,6 @@ If the run pauses on an `AskUserQuestion`, the response returns immediately with
 ```json
 { "status": "waiting", "toolUseId": "toolu_abc", "questions": [...], "text": "...so far..." }
 ```
-
-#### Output files
-
-When a workflow produces files in its working directory, they are automatically collected and returned in the `files` field of both the SSE `done` event and the JSON response. Input files (uploaded via the `files` request parameter, prefixed with `upload-`) are excluded.
-
-Each file object has:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Filename |
-| `data` | string | Base64 data URL: `data:<mimeType>;base64,<encoded>` |
-| `mimeType` | string | MIME type (e.g., `image/png`, `application/pdf`) |
-| `size` | number | File size in bytes (before encoding) |
-
-**Limits**: Files over 10 MB or a total exceeding 50 MB are excluded from the response. They remain accessible via `GET /api/file?path=<absolute-path>`.
-
-**Supported MIME types**: html, json, js, css, txt, md, csv, xml, png, jpg, jpeg, gif, svg, webp, pdf, zip, tar, gz. Unknown extensions default to `application/octet-stream`.
 
 ---
 
@@ -266,10 +189,6 @@ Examples:
 - Files are placed in the working directory as `upload-<timestamp>-<index>-<safename>`
 - The prompt is automatically augmented with instructions for Claude to read the files using the Read tool
 
-**Workflow files** (`files: {inputKey: [{name, data}]}`):
-- Files are placed in the working directory
-- The input variable (`{{inputKey}}` in step prompts) resolves to the placed filename(s), comma-separated if multiple
-
 **Answer files** (`files: [{questionId, name, data}]`):
 - Files are saved to `outputs/_uploads/<toolUseId>/`
 - Relative paths are patched into the answer array at the matching `questionId` positions
@@ -298,7 +217,7 @@ with open('photo.png', 'rb') as f:
 
 ## Examples
 
-Three use cases covering text input, file input, streaming the response, and capturing results. Each shows both Bash and Node.js.
+Two use cases covering text input, file input, streaming the response, and capturing results. Each shows both Bash and Node.js.
 
 ### Chat — with text and file input
 
@@ -434,126 +353,6 @@ async function main() {
 main().catch(console.error);
 ```
 
-### Workflow — with text and file input
-
-Run a workflow with text inputs and file inputs, stream step progress, and capture the final output.
-
-**Bash:**
-
-```bash
-#!/usr/bin/env bash
-TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
-
-# Encode file inputs (keyed by workflow input name)
-CSV_DATA="data:text/csv;base64,$(base64 -w0 sales.csv)"
-
-# Run workflow with text input + file input
-CURRENT_EVENT=""
-curl -N -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"workflow\",
-    \"workflow\": \"analyze-data\",
-    \"inputs\": { \"focus\": \"quarterly trends\" },
-    \"cwd\": \"reports\",
-    \"files\": { \"dataset\": [{\"name\": \"sales.csv\", \"data\": \"$CSV_DATA\"}] }
-  }" | while IFS= read -r line; do
-  if [[ "$line" == event:* ]]; then
-    CURRENT_EVENT="${line#event: }"
-  elif [[ "$line" == data:* ]]; then
-    JSON="${line#data: }"
-    case "$CURRENT_EVENT" in
-      text)  echo "$JSON" | jq -rj '.text // empty' ;;
-      step)  echo "$JSON" | jq -r '"[\(.stepId)] \(.status // .text // "")"' ;;
-      done)  echo "" ; echo "$JSON" | jq '"Status: \(.result)\nRun ID: \(.runId)\nOutput: \(.output // "none")"' -r ;;
-      error) echo "$JSON" | jq -r '.error' >&2 ;;
-    esac
-  fi
-done
-
-# Download files the workflow generated
-curl -s "$HOST/api/dirs?path=reports" -H "Authorization: Bearer $TOKEN" | jq '.dirs'
-curl -s "$HOST/api/file?path=$(pwd)/outputs/reports/analysis.html" \
-  -H "Authorization: Bearer $TOKEN" -o analysis.html
-```
-
-**Node.js:**
-
-```javascript
-const http = require('http');
-const fs = require('fs');
-
-const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
-const PORT = 3457;
-
-function post(path, body) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(body);
-    const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${TOKEN}`,
-      },
-    }, resolve);
-    req.on('error', reject);
-    req.end(data);
-  });
-}
-
-function streamSSE(res, handlers) {
-  let buf = '', currentEvent = '';
-  res.on('data', chunk => {
-    buf += chunk.toString();
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event: ')) currentEvent = line.slice(7);
-        else if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (handlers[currentEvent]) handlers[currentEvent](data);
-          } catch {}
-        }
-      }
-    }
-  });
-  return new Promise(resolve => res.on('end', resolve));
-}
-
-async function main() {
-  // Encode file input (keyed by workflow input name)
-  const csvB64 = fs.readFileSync('sales.csv', 'base64');
-  const csvData = `data:text/csv;base64,${csvB64}`;
-
-  // Run workflow with text + file inputs
-  const res = await post('/api/run', {
-    type: 'workflow',
-    workflow: 'analyze-data',
-    inputs: { focus: 'quarterly trends' },
-    cwd: 'reports',
-    files: { dataset: [{ name: 'sales.csv', data: csvData }] },
-  });
-
-  await streamSSE(res, {
-    text:  d => process.stdout.write(d.text || ''),
-    step:  d => console.log(`[${d.stepId}] ${d.status || d.text || ''}`),
-    error: d => console.error('Error:', d.error),
-    done:  d => {
-      console.log(`\nStatus: ${d.result}`);
-      console.log(`Run ID: ${d.runId}`);
-      if (d.output) console.log(`Output: ${d.output}`);
-    },
-  });
-}
-
-main().catch(console.error);
-```
-
 ### Answering an AskUserQuestion
 
 When Claude needs input mid-run, the stream emits an `ask` event. Answer it via `POST /api/run/answer` — the run resumes automatically. Answers can include file attachments.
@@ -652,14 +451,11 @@ async function handleAsk(data) {
 
 ## Reference client examples
 
-The `api_client_example/` directory contains zero-dependency Node.js reference clients with interactive AskUserQuestion handling:
+The `api_client_example/` directory contains a zero-dependency Node.js reference client with interactive AskUserQuestion handling:
 
 ```bash
 # Chat (with multi-turn support)
 TOKEN=your-token node api_client_example/chat.js "your prompt here"
-
-# Workflow
-TOKEN=your-token node api_client_example/workflow.js my-workflow '{"key":"value"}'
 ```
 
 Environment variables: `TOKEN` (required), `PORT` (default 3457), `HOST` (default localhost), `CWD` (optional working directory).
@@ -699,14 +495,4 @@ const ws = new WebSocket('ws://localhost:3457', {
 { "type": "ask:answer", "toolUseId": "toolu_abc", "answer": "yes" }
 ```
 
-**Run a workflow:**
-```json
-{ "type": "workflow:run", "name": "my-workflow", "inputs": {}, "tabId": "tab-1", "files": {"key": [{"name": "f.csv", "data": "data:text/csv;base64,..."}]} }
-```
-
-**Cancel a workflow:**
-```json
-{ "type": "workflow:run:cancel", "runId": "run-id" }
-```
-
-The WebSocket also receives all SSE-equivalent events (`chat:event`, `chat:output`, `ask:question`, `workflow:step:*`, `workflow:run:complete`, etc.) broadcast to all connected clients.
+The WebSocket also receives all SSE-equivalent events (`chat:event`, `chat:output`, `ask:question`, etc.) broadcast to all connected clients.

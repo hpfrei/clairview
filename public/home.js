@@ -1,5 +1,5 @@
 // ============================================================
-// HOME VIEW — Overview, architecture, workflows, tools, API docs
+// HOME VIEW — Overview, architecture, tools, API docs
 // ============================================================
 (function homeModule() {
   'use strict';
@@ -22,17 +22,16 @@
   const overviewMd = `
 # vistaclair
 
-A development dashboard that wraps **Claude Code** with real-time inspection, multi-session chat, workflow automation, custom MCP tools, multi-provider model routing, and a REST API.
+A development dashboard that wraps **Claude Code** with real-time inspection, multi-session chat, custom MCP tools, multi-provider model routing, and a REST API.
 
 ## What it does
 
 - **Chat** with Claude through multiple parallel browser tabs, each with its own working directory, profile, and model -- fully isolated sessions that never interfere with each other
 - **Inspect** every API call in real time -- request bodies, response streams, token usage, cost tracking, and timing -- across all sessions and providers
-- **Run workflows** -- multi-step automations where each step is a full \`claude -p\` session; multiple workflows can run in parallel. Compiled workflows automatically become MCP tools that Claude can call from any session
 - **Route to any model** -- use Anthropic Claude directly, or route through OpenAI, Google Gemini, DeepSeek, Kimi/Moonshot, or any OpenAI-compatible endpoint via provider translation
 - **Custom MCP tools** that Claude can call during any session -- you write the handler, Claude gets the capability
-- **AskUserQuestion** -- chat sessions and workflow steps can pause and ask you for input, then resume with the answer
-- **REST API** -- programmatically start chats, run workflows, and answer questions via Server-Sent Events
+- **AskUserQuestion** -- chat sessions can pause and ask you for input, then resume with the answer
+- **REST API** -- programmatically start chats and answer questions via Server-Sent Events
 
 \`\`\`svg
 <svg viewBox="0 0 800 380" xmlns="http://www.w3.org/2000/svg" style="max-width:800px;font-family:system-ui,sans-serif">
@@ -44,8 +43,8 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
   <!-- Browser tabs -->
   <rect x="20" y="20" width="160" height="70" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
   <text x="100" y="46" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">Browser UI</text>
-  <text x="100" y="63" text-anchor="middle" fill="var(--text-dim)" font-size="10">chat tabs / runs / inspector</text>
-  <text x="100" y="78" text-anchor="middle" fill="var(--text-dim)" font-size="10">profiles / models / workflows</text>
+  <text x="100" y="63" text-anchor="middle" fill="var(--text-dim)" font-size="10">chat tabs / inspector</text>
+  <text x="100" y="78" text-anchor="middle" fill="var(--text-dim)" font-size="10">profiles / models / rules</text>
 
   <!-- API client -->
   <rect x="20" y="110" width="160" height="40" rx="8" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
@@ -55,7 +54,7 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
   <rect x="280" y="10" width="240" height="90" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
   <text x="400" y="34" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">vistaclair server</text>
   <text x="400" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="10">dashboard :3457  |  proxy :3456</text>
-  <text x="400" y="67" text-anchor="middle" fill="var(--text-dim)" font-size="10">session manager  |  workflow engine</text>
+  <text x="400" y="67" text-anchor="middle" fill="var(--text-dim)" font-size="10">session manager  |  proxy rules</text>
   <text x="400" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="10">MCP server  |  cost tracker</text>
 
   <!-- Anthropic API -->
@@ -89,11 +88,11 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
 
   <rect x="220" y="200" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
   <text x="285" y="220" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="285" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">workflow step</text>
+  <text x="285" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat session 3</text>
 
   <rect x="370" y="200" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
   <text x="435" y="220" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="435" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">workflow step</text>
+  <text x="435" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">API session</text>
 
   <!-- Arrows: server to claude processes -->
   <line x1="340" y1="100" x2="285" y2="140" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
@@ -118,26 +117,21 @@ A development dashboard that wraps **Claude Code** with real-time inspection, mu
   <!-- MCP -->
   <rect x="520" y="225" width="180" height="45" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
   <text x="610" y="245" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">MCP Tools</text>
-  <text x="610" y="259" text-anchor="middle" fill="var(--text-dim)" font-size="9">custom + built-in + workflow tools</text>
+  <text x="610" y="259" text-anchor="middle" fill="var(--text-dim)" font-size="9">custom + built-in tools</text>
   <line x1="500" y1="220" x2="520" y2="235" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
 
-  <!-- Workflow engine -->
-  <rect x="300" y="290" width="200" height="45" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
-  <text x="400" y="310" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Workflow Engine</text>
-  <text x="400" y="324" text-anchor="middle" fill="var(--text-dim)" font-size="9">parallel steps / context passing</text>
-  <line x1="350" y1="245" x2="370" y2="290" stroke="var(--green)" stroke-width="1" stroke-dasharray="3"/>
+
 </svg>
 \`\`\`
 
 ## Quick start
 
 1. **Chat tab** -- type a prompt, pick a profile (model + permissions), set a working directory. Open multiple tabs for parallel conversations -- each is fully isolated.
-2. **Workflows tab** -- pick a workflow, fill inputs, watch steps execute live. Run multiple workflows at once. Create, edit, and delete workflows from the card grid. The \`+ New\` button opens the editor to design, generate, and compile multi-step automations. Once compiled, each workflow is automatically available as an MCP tool.
-3. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
-4. **Profiles tab** -- one tab per profile with inline editing of model, effort, permission mode, tools, and system prompts. Builtin profiles (\`full\`, \`safe\`, \`readonly\`, \`minimal\`) are read-only.
-5. **Tools tab** -- browse all tools, skills, agents, hooks, and MCP tools available to the active profile.
-6. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
-7. **REST API** -- \`POST /api/run\` to start chats or workflows programmatically and stream results via SSE.
+2. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
+3. **Profiles tab** -- one tab per profile with inline editing of model, effort, permission mode, tools, and system prompts. Builtin profiles (\`full\`, \`safe\`, \`readonly\`, \`minimal\`) are read-only.
+4. **Tools tab** -- browse all tools, skills, agents, hooks, and MCP tools available to the active profile.
+5. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
+6. **REST API** -- \`POST /api/run\` to start chats programmatically and stream results via SSE.
 `;
 
   const architectureMd = `
@@ -157,8 +151,7 @@ Internal services (no separate port):
 | Component | Purpose |
 |-----------|---------|
 | **Session Manager** | One \`claude -p\` process per chat tab, with independent cwd and profile. Sessions persist across browser reconnects. |
-| **Workflow Engine** | Walks workflow steps, spawns \`claude -p\` per step, handles step dependencies and context passing. Multiple workflows run in parallel. |
-| **MCP Server** | Integrated tool server auto-registered with every \`claude -p\` process. Custom tools + built-in workflow/chat tools. |
+| **MCP Server** | Integrated tool server auto-registered with every \`claude -p\` process. Custom tools + built-in chat tools. |
 | **Cost Tracker** | Records token usage and cost per interaction, per model, per provider. Visible in the Inspector. |
 
 ## Per-session model routing
@@ -169,7 +162,7 @@ Every \`claude -p\` process gets its profile baked into its base URL at spawn ti
 ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
 \`\`\`
 
-This means profile selection is **immutable for the process lifetime** -- switching profiles in the browser UI or starting a new workflow will never affect a running session. Concurrent chats, workflows, and API calls are fully isolated.
+This means profile selection is **immutable for the process lifetime** -- switching profiles in the browser UI will never affect a running session. Concurrent chats and API calls are fully isolated.
 
 \`\`\`svg
 <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" style="max-width:760px;font-family:system-ui,sans-serif">
@@ -242,158 +235,22 @@ This means profile selection is **immutable for the process lifetime** -- switch
 
 ## How AskUserQuestion works
 
-When \`claude -p\` calls the \`AskUserQuestion\` tool during a chat or workflow step:
+When \`claude -p\` calls the \`AskUserQuestion\` tool during a chat session:
 
 1. The **proxy** intercepts the tool call in the API response stream
 2. When \`claude -p\` sends back the error tool_result, the proxy **pauses** the request
-3. The proxy **broadcasts** \`ask:question\` to the dashboard UI (with session/workflow context)
+3. The proxy **broadcasts** \`ask:question\` to the dashboard UI (with session context)
 4. The UI renders the question with options + free text input
 5. User answers, UI sends \`ask:answer\` back via WebSocket
 6. Proxy **rewrites** the tool_result with the real answer and continues the API call
 7. Claude resumes as if the tool succeeded normally
 
-This works identically for chat sessions and workflow steps.
-`;
-
-  const workflowsMd = `
-# Workflows
-
-Workflows automate multi-step tasks. Each step is a full \`claude -p\` session that can use tools, read/write files, and call MCP tools. Multiple workflows can run simultaneously -- each is a separate set of processes with independent profiles.
-
-\`\`\`svg
-<svg viewBox="0 0 750 220" xmlns="http://www.w3.org/2000/svg" style="max-width:750px;font-family:system-ui,sans-serif">
-  <defs>
-    <marker id="a3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
-    <marker id="a3g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--green)"/></marker>
-  </defs>
-
-  <!-- Build phase boundary -->
-  <rect x="5" y="40" width="400" height="100" rx="10" fill="none" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="6"/>
-  <text x="205" y="32" text-anchor="middle" fill="var(--text-dim)" font-size="10" font-style="italic">Build phase (one-time or as-needed)</text>
-
-  <!-- Design -->
-  <rect x="20" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="70" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Design</text>
-  <text x="70" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">natural language</text>
-
-  <!-- Generate -->
-  <rect x="155" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="205" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Generate</text>
-  <text x="205" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JSON source</text>
-
-  <!-- Compile -->
-  <rect x="290" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
-  <text x="340" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Compile</text>
-  <text x="340" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">AI → JavaScript</text>
-
-  <!-- Build phase arrows -->
-  <line x1="120" y1="85" x2="155" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
-  <line x1="255" y1="85" x2="290" y2="85" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a3)"/>
-
-  <!-- Arrow from build to execute -->
-  <line x1="390" y1="85" x2="470" y2="85" stroke="var(--green)" stroke-width="1.5" marker-end="url(#a3g)"/>
-
-  <!-- Execute phase boundary -->
-  <rect x="460" y="40" width="280" height="100" rx="10" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-dasharray="6"/>
-  <text x="600" y="32" text-anchor="middle" fill="var(--green)" font-size="10" font-style="italic">Execute phase (repeatable)</text>
-
-  <!-- Run -->
-  <rect x="480" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
-  <text x="530" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Run</text>
-  <text x="530" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">execute steps</text>
-
-  <!-- Result -->
-  <rect x="620" y="60" width="100" height="50" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1.5"/>
-  <text x="670" y="82" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Result</text>
-  <text x="670" y="98" text-anchor="middle" fill="var(--text-dim)" font-size="9">output / report</text>
-
-  <!-- Run to Result arrow -->
-  <line x1="580" y1="85" x2="620" y2="85" stroke="var(--green)" stroke-width="1" marker-end="url(#a3g)"/>
-
-  <!-- Loop-back arrow: Result back to Run -->
-  <path d="M 670 110 Q 670 150, 600 150 Q 530 150, 530 110" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#a3g)"/>
-  <text x="600" y="168" text-anchor="middle" fill="var(--green)" font-size="9">new inputs</text>
-
-  <!-- Subtitle -->
-  <text x="375" y="200" text-anchor="middle" fill="var(--text-dim)" font-size="10">Design once, run repeatedly with different inputs. Each run is a fresh set of claude -p processes.</text>
-</svg>
-\`\`\`
-
-## Workflow lifecycle
-
-1. **Design** -- in the Workflows tab, click \`+ New\` to open the editor. Write a high-level description of what the workflow should do (e.g. "review code on a branch and produce a summary"). Name it and define its inputs.
-2. **Generate** -- click Generate and AI creates the source JSON from your description, defining steps, their order, profiles, and what each step produces.
-3. **Compile** -- click Compile and AI transforms the JSON into executable JavaScript that the workflow engine can run.
-4. **Run** -- pick a workflow card, fill in inputs (e.g. branch name), set a working directory, and click Run.
-
-## Workflow JSON structure
-
-\`\`\`json
-{
-  "name": "code-review",
-  "description": "Review code changes and suggest improvements",
-  "inputs": {
-    "branch": "Branch to review"
-  },
-  "steps": {
-    "analyze": {
-      "profile": "full",
-      "do": "Analyze the diff on branch {{branch}}",
-      "produces": "list of findings"
-    },
-    "suggest": {
-      "profile": "full",
-      "do": "For each finding, suggest a concrete fix",
-      "context": ["analyze"],
-      "produces": "actionable suggestions"
-    },
-    "summarize": {
-      "do": "Create a summary of the review",
-      "context": ["analyze", "suggest"]
-    }
-  }
-}
-\`\`\`
-
-Key fields:
-- **\`inputs\`** -- variables the user fills in at run time, referenced as \`{{variable}}\` in step prompts
-- **\`profile\`** -- which capability profile each step uses (controls model, permissions, tools)
-- **\`context\`** -- list of upstream steps whose output is passed as context to this step
-- **\`produces\`** -- description of what the step outputs (used as context label for downstream steps)
-
-## Running workflows
-
-- **Runs tab**: pick a workflow card, fill inputs, set working directory, click Run. Live streaming output appears for each step.
-- **MCP tool**: Claude can call \`workflow_run\` during a chat session to trigger a workflow programmatically.
-- **REST API**: \`POST /api/run\` with \`type: "workflow"\` to start a workflow and stream events via SSE.
-- Steps can **escalate** via AskUserQuestion -- the UI shows the question and waits for your answer before the step continues.
-- **Parallel execution**: multiple workflows (or multiple runs of the same workflow) can execute simultaneously. Each run gets its own set of \`claude -p\` processes with independent profiles. The footer shows a live count of active Claude processes.
-
-## Workflows as MCP tools
-
-Every compiled workflow is automatically registered as an MCP tool on the integrated server. Claude can invoke any workflow directly from a chat session, and external MCP clients can call them too.
-
-**Naming convention:** the tool name is derived from the workflow directory name -- strip the \`-workflow\` suffix (if present) and replace hyphens with underscores:
-
-| Workflow name | MCP tool name |
-|---------------|---------------|
-| \`d3-data-visualizer\` | \`d3_data_visualizer\` |
-| \`add-llm-model\` | \`add_llm_model\` |
-| \`code-review-workflow\` | \`code_review\` |
-
-**How it works:**
-1. At MCP bridge startup, the server scans \`capabilities/workflows/*/compiled.js\`
-2. Each compiled module's \`inputs\` are converted into a typed schema for input validation
-3. The tool is registered with the MCP server -- calling it triggers a full workflow run internally
-4. The workflow's final output is returned as the tool result
-
-No extra configuration needed -- compiling a workflow is all it takes. Recompiling updates the tool definition on the next session.
 `;
 
   const toolsMd = `
 # MCP Tools
 
-Custom tools extend what Claude can do. You write a JavaScript handler, and Claude can call it like any built-in tool during chat or workflow sessions.
+Custom tools extend what Claude can do. You write a JavaScript handler, and Claude can call it like any built-in tool during chat sessions.
 
 \`\`\`svg
 <svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
@@ -420,22 +277,16 @@ Custom tools extend what Claude can do. You write a JavaScript handler, and Clau
   <!-- Built-in tools -->
   <rect x="470" y="75" width="170" height="45" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
   <text x="555" y="95" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Built-in tools</text>
-  <text x="555" y="110" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat, workflow_run, ...</text>
-
-  <!-- Workflow tools -->
-  <rect x="470" y="130" width="170" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="555" y="150" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Workflow tools</text>
-  <text x="555" y="165" text-anchor="middle" fill="var(--text-dim)" font-size="9">auto-registered from compiled.js</text>
+  <text x="555" y="110" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat, ...</text>
 
   <!-- Arrows -->
   <line x1="130" y1="90" x2="210" y2="90" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a4)"/>
   <text x="170" y="83" text-anchor="middle" fill="var(--text-dim)" font-size="8">tool_use</text>
   <line x1="390" y1="55" x2="470" y2="43" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
   <line x1="390" y1="90" x2="470" y2="97" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
-  <line x1="390" y1="120" x2="470" y2="142" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
 
   <!-- Notes -->
-  <text x="350" y="210" text-anchor="middle" fill="var(--text-dim)" font-size="10">Custom tools are defined in Profiles > MCP Tools  |  Workflow tools are auto-registered from compiled workflows</text>
+  <text x="350" y="210" text-anchor="middle" fill="var(--text-dim)" font-size="10">Custom tools are defined in Profiles > MCP Tools</text>
   <text x="350" y="228" text-anchor="middle" fill="var(--text-dim)" font-size="10">External MCP clients can connect via stdio to access all tools  |  Tool calls appear in Inspector</text>
 </svg>
 \`\`\`
@@ -454,18 +305,8 @@ These are always available in every session and cannot be modified:
 | Tool | Purpose |
 |------|---------|
 | \`chat\` | Run a prompt through Claude Code via the dashboard. Supports multi-turn via \`session_id\`. Can specify \`profile\` and \`cwd\`. |
-| \`workflow_list\` | List available compiled workflows |
-| \`workflow_run\` | Execute a workflow with inputs and optional cwd. Returns the run ID. |
-| \`workflow_status\` | Check progress of a running workflow by run ID |
-| \`workflow_cancel\` | Cancel a running workflow by run ID |
 
 The \`chat\` tool is particularly useful for delegation -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator session using the \`chat\` tool to delegate research to a \`readonly\` session).
-
-## Workflow tools
-
-Compiled workflows are automatically registered as MCP tools alongside the custom and built-in tools above. They appear in the Tools tab with a \`workflow\` badge. See the Workflows tab for naming conventions and details.
-
-When Claude calls a workflow tool, the MCP server internally triggers a full workflow run and returns the final output as the tool result. This means a chat session can seamlessly orchestrate multi-step workflows without the user manually triggering them.
 
 ## Writing a tool handler
 
@@ -519,7 +360,7 @@ The bridge communicates over stdin/stdout using the MCP JSON-RPC protocol. The a
 
 ### What external clients get
 
-Connected clients have access to all tools on the integrated server: custom tools, built-in tools (\`chat\`, \`workflow_run\`, etc.), and all compiled workflow tools. Tool calls from external clients appear in the Inspector alongside calls from browser sessions.
+Connected clients have access to all tools on the integrated server: custom tools and built-in tools (\`chat\`, etc.). Tool calls from external clients appear in the Inspector alongside calls from browser sessions.
 `;
 
   const apiMd = `
@@ -573,7 +414,7 @@ The auth token is printed to the console when the server starts, or can be set v
 
 ## POST /api/run
 
-Start a chat or workflow. By default returns a **Server-Sent Events** stream. Set \`"stream": false\` to block until completion and get a single JSON response instead.
+Start a chat. By default returns a **Server-Sent Events** stream. Set \`"stream": false\` to block until completion and get a single JSON response instead.
 
 ### Chat mode
 
@@ -588,43 +429,24 @@ Start a chat or workflow. By default returns a **Server-Sent Events** stream. Se
 | \`files\` | array | no | File attachments as base64 data URLs: \`[{name, data}]\`. Files are placed in the working directory and the prompt is augmented with instructions to read them. |
 | \`sourceInstanceId\` | string | no | Instance ID for routing AskUserQuestion back to the originating chat tab. |
 
-### Workflow mode
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`type\` | string | yes | \`"workflow"\` |
-| \`workflow\` | string | yes | Name of the workflow to run (e.g. \`"code-review"\`) |
-| \`stream\` | boolean | no | \`false\` to return a single JSON response instead of SSE. Default: \`true\`. |
-| \`inputs\` | object | no | Key-value input variables. For prompt-mode workflows, pass \`{ "prompt": "your message" }\`. |
-| \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`) |
-| \`profile\` | string | no | Profile override for all steps |
-| \`files\` | object | no | File attachments keyed by input name: \`{inputKey: [{name, data}]}\`. Each file is a base64 data URL. The input variable resolves to the placed filename. |
-| \`sourceInstanceId\` | string | no | Instance ID for routing AskUserQuestion back to the originating tab. |
-
 ### SSE events (stream mode, default)
 
 All responses stream as Server-Sent Events (\`Content-Type: text/event-stream\`).
 
 | Event | Payload | When |
 |-------|---------|------|
-| \`text\` | \`{ text }\` | Streamed text delta from Claude (both chat and workflow steps) |
+| \`text\` | \`{ text }\` | Streamed text delta from Claude |
 | \`ask\` | \`{ toolUseId, questions }\` | AskUserQuestion -- the session needs user input to continue. Answer via \`POST /api/run/answer\`. |
-| \`step\` | \`{ stepId, status, text? }\` | Workflow only: step started (\`status: "running"\`), progress (\`text\` included), or completed (\`status: "done"\` / \`"failed"\`) |
 | \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId? }\` (chat) or \`{ result, runId, output? }\` (workflow) | Final result. Chat: \`result\` is the full text, \`sessionId\` enables multi-turn. Workflow: \`result\` is the status, \`output\` is the final step text, \`runId\` identifies the run. |
+| \`done\` | \`{ result, sessionId? }\` | Final result. \`result\` is the full text, \`sessionId\` enables multi-turn. |
 
 ### JSON response (stream: false)
 
 When \`stream\` is \`false\`, the request blocks until the run completes (30-minute timeout) and returns a single JSON response.
 
-**Chat response:**
+**Response:**
 \`\`\`json
 { "result": "...full text...", "text": "...full text...", "sessionId": "..." }
-\`\`\`
-
-**Workflow response:**
-\`\`\`json
-{ "result": "done", "text": "...concatenated text...", "runId": "...", "output": "...", "steps": [...] }
 \`\`\`
 
 If the run pauses on an \`AskUserQuestion\`, the response returns immediately with \`status: "waiting"\` and the question details so you can answer via \`POST /api/run/answer\` and re-submit:
@@ -698,8 +520,6 @@ For example: \`data:image/png;base64,iVBORw0KGgo...\`
 
 **Chat files** (\`files: [{name, data}]\`): placed in the working directory as \`upload-<timestamp>-<index>-<safename>\`. The prompt is augmented with instructions for Claude to read them.
 
-**Workflow files** (\`files: {inputKey: [{name, data}]}\`): placed in the working directory and the input variable (\`{{inputKey}}\`) resolves to the placed filename in step prompts.
-
 **Answer files** (\`files: [{questionId, name, data}]\`): saved to \`outputs/_uploads/<toolUseId>/\` and relative paths are patched into the answer array.
 
 ---
@@ -742,19 +562,7 @@ curl -s -X POST "$HOST/api/run" \
     \"files\": [{\"name\": \"photo.png\", \"data\": \"$FILE_DATA\"}]
   }" | jq '.text'
 
-# Workflow -- returns JSON with result and output
-CSV_DATA="data:text/csv;base64,$(base64 -w0 data.csv)"
-curl -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"workflow\",
-    \"workflow\": \"analyze-data\",
-    \"stream\": false,
-    \"inputs\": {\"focus\": \"trends\"},
-    \"files\": {\"dataset\": [{\"name\": \"data.csv\", \"data\": \"$CSV_DATA\"}]}
-  }" | jq '.'
-# {"result":"done","text":"...","runId":"...","output":"...","steps":[...]}</code></pre></div>
+</code></pre></div>
   </div>
   <div class="code-tab-panel" data-tab="node">
     <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
@@ -803,19 +611,6 @@ async function main() {
     files: [{ name: 'photo.png', data: \`data:image/png;base64,\${fileB64}\` }],
   });
   console.log('Description:', fileResult.text);
-
-  // Workflow with file input
-  const csvB64 = fs.readFileSync('data.csv', 'base64');
-  const wfResult = await postJSON('/api/run', {
-    type: 'workflow',
-    workflow: 'analyze-data',
-    stream: false,
-    inputs: { focus: 'trends' },
-    files: { dataset: [{ name: 'data.csv', data: \`data:text/csv;base64,\${csvB64}\` }] },
-  });
-  console.log('Status:', wfResult.result);
-  console.log('Output:', wfResult.output);
-  console.log('Steps:', wfResult.steps);
 }
 
 main().catch(console.error);</code></pre></div>
@@ -971,129 +766,6 @@ main().catch(console.error);</code></pre></div>
 </div>
 \`\`\`
 
-### Streaming (SSE) -- Workflow
-
-Run a workflow with text and file inputs, stream step progress, and capture the final output.
-
-\`\`\`html
-<div class="code-tabs">
-  <div class="code-tab-bar">
-    <button class="code-tab-btn active" data-tab="bash">Bash</button>
-    <button class="code-tab-btn" data-tab="node">Node.js</button>
-  </div>
-  <div class="code-tab-panel active" data-tab="bash">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
-TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
-
-# Encode file inputs (keyed by workflow input name)
-CSV_DATA="data:text/csv;base64,$(base64 -w0 sales.csv)"
-
-# Run workflow with text input + file input
-CURRENT_EVENT=""
-curl -N -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"workflow\",
-    \"workflow\": \"analyze-data\",
-    \"inputs\": { \"focus\": \"quarterly trends\" },
-    \"cwd\": \"reports\",
-    \"files\": { \"dataset\": [{\"name\": \"sales.csv\", \"data\": \"$CSV_DATA\"}] }
-  }" | while IFS= read -r line; do
-  if [[ "$line" == event:* ]]; then
-    CURRENT_EVENT="\${line#event: }"
-  elif [[ "$line" == data:* ]]; then
-    JSON="\${line#data: }"
-    case "$CURRENT_EVENT" in
-      text)  echo "$JSON" | jq -rj '.text // empty' ;;
-      step)  echo "$JSON" | jq -r '"[\(.stepId)] \(.status // .text // "")"' ;;
-      done)  echo "" ; echo "$JSON" | jq '"Status: \(.result)\nRun ID: \(.runId)\nOutput: \(.output // "none")"' -r ;;
-      error) echo "$JSON" | jq -r '.error' &gt;&amp;2 ;;
-    esac
-  fi
-done
-
-# Download files the workflow generated
-curl -s "$HOST/api/dirs?path=reports" -H "Authorization: Bearer $TOKEN" | jq '.dirs'
-curl -s "$HOST/api/file?path=$(pwd)/outputs/reports/analysis.html" \
-  -H "Authorization: Bearer $TOKEN" -o analysis.html</code></pre></div>
-  </div>
-  <div class="code-tab-panel" data-tab="node">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
-const fs = require('fs');
-
-const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
-const PORT = 3457;
-
-function post(path, body) {
-  return new Promise((resolve, reject) =&gt; {
-    const data = JSON.stringify(body);
-    const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': \`Bearer \${TOKEN}\`,
-      },
-    }, resolve);
-    req.on('error', reject);
-    req.end(data);
-  });
-}
-
-function streamSSE(res, handlers) {
-  let buf = '', currentEvent = '';
-  res.on('data', chunk =&gt; {
-    buf += chunk.toString();
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event: ')) currentEvent = line.slice(7);
-        else if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (handlers[currentEvent]) handlers[currentEvent](data);
-          } catch {}
-        }
-      }
-    }
-  });
-  return new Promise(resolve =&gt; res.on('end', resolve));
-}
-
-async function main() {
-  // Encode file input (keyed by workflow input name)
-  const csvB64 = fs.readFileSync('sales.csv', 'base64');
-  const csvData = \`data:text/csv;base64,\${csvB64}\`;
-
-  // Run workflow with text + file inputs
-  const res = await post('/api/run', {
-    type: 'workflow',
-    workflow: 'analyze-data',
-    inputs: { focus: 'quarterly trends' },
-    cwd: 'reports',
-    files: { dataset: [{ name: 'sales.csv', data: csvData }] },
-  });
-
-  await streamSSE(res, {
-    text:  d =&gt; process.stdout.write(d.text || ''),
-    step:  d =&gt; console.log(\`[\${d.stepId}] \${d.status || d.text || ''}\`),
-    error: d =&gt; console.error('Error:', d.error),
-    done:  d =&gt; {
-      console.log(\`\\nStatus: \${d.result}\`);
-      console.log(\`Run ID: \${d.runId}\`);
-      if (d.output) console.log(\`Output: \${d.output}\`);
-    },
-  });
-}
-
-main().catch(console.error);</code></pre></div>
-  </div>
-</div>
-\`\`\`
-
 ### Answering an AskUserQuestion
 
 When Claude needs input mid-run, the stream emits an \`ask\` event. Answer it via \`POST /api/run/answer\` -- the run resumes automatically. Answers can include file attachments.
@@ -1197,7 +869,6 @@ async function handleAsk(data) {
     const sections = {
       'home-overview': overviewMd,
       'home-architecture': architectureMd,
-      'home-workflows': workflowsMd,
       'home-tools': toolsMd,
       'home-api': apiMd,
     };

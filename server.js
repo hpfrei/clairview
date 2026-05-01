@@ -8,12 +8,29 @@ const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
 const ClaudeSessionManager = require('./src/claude-sessions');
+const CliSessionManager = require('./src/cli-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
-const workflowHandler = require('./src/workflow-handler');
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
+
+// Check and auto-install native dependencies
+function checkDependencies() {
+  const { execSync } = require('child_process');
+  const missing = [];
+  try { require.resolve('node-pty'); } catch { missing.push('node-pty'); }
+  if (missing.length === 0) return;
+  console.log(`\n  Installing missing dependencies: ${missing.join(', ')}...`);
+  try {
+    execSync(`npm install --no-save ${missing.join(' ')}`, { cwd: __dirname, stdio: 'inherit' });
+    console.log('  Dependencies installed successfully.\n');
+  } catch (err) {
+    console.error(`  Failed to install dependencies: ${err.message}`);
+    console.error('  CLI terminal feature will be unavailable. Run manually: npm install ' + missing.join(' '));
+  }
+}
+checkDependencies();
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const PORT_ARG = process.argv.slice(2).find(a => /^\d+$/.test(a));
@@ -108,7 +125,7 @@ dashboardApp.use((req, res, next) => {
 
 dashboardApp.use(express.static(path.join(__dirname, 'public')));
 
-// Serve workflow/chat outputs at /outputs (directory auto-created)
+// Serve chat outputs at /outputs (directory auto-created)
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
 
@@ -116,10 +133,11 @@ const dashboardServer = http.createServer(dashboardApp);
 
 // Session manager (spawns claude -p instances through the proxy)
 sessionManager = new ClaudeSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
+const cliSessionManager = new CliSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
 // WebSocket server on dashboard (with auth)
 const wss = new WebSocketServer({ noServer: true });
-broadcaster = new DashboardBroadcaster(wss, store, sessionManager, { authToken: AUTH_TOKEN });
+broadcaster = new DashboardBroadcaster(wss, store, sessionManager, { authToken: AUTH_TOKEN, cliSessionManager });
 setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
@@ -141,29 +159,19 @@ for (const [tabId, session] of sessionManager.sessions) {
   session.broadcaster = { broadcast(msg) { if (msg.type && (msg.type.startsWith('chat:') || msg.type.startsWith('ask:'))) msg.tabId = tabId; broadcaster.broadcast(msg); } };
 }
 sessionManager.broadcaster = broadcaster;
+cliSessionManager.broadcaster = broadcaster;
+
+// Wire CLI settings getter for proxy model mapping
+createProxyRouter._cliSettingsGetter = (instanceId) => cliSessionManager.getSettingsByInstanceId(instanceId);
 
 // Initialize MCP Server Manager
 mcp.init({ broadcaster, store, claudeSession: sessionManager, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
-// Migrate: remove old force-disabled WebSearch/WebFetch from non-Anthropic profiles
-for (const summary of caps.listProfiles(__dirname)) {
-  if (summary.builtin) continue;
-  const p = caps.loadProfile(__dirname, summary.name);
-  if (p && p.modelDef && Array.isArray(p.disabledTools)) {
-    const before = p.disabledTools.length;
-    p.disabledTools = p.disabledTools.filter(t => t !== 'WebSearch' && t !== 'WebFetch');
-    if (p.disabledTools.length !== before) {
-      caps.saveProfile(__dirname, caps.validateProfile(p));
-    }
-  }
-}
 
-// Initialize Workflow Handler
-workflowHandler.init({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 ruleHandler.init({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
 // Mount REST API
-dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN }));
+dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN, cliSessionManager }));
 
 // Restart endpoint (auth handled by middleware)
 dashboardApp.post('/api/restart', (req, res) => {

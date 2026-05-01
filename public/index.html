@@ -7,7 +7,12 @@
   <link rel="stylesheet" id="themeLink" href="theme-bright.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="mcp.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0/lib/addon-web-links.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.min.js"></script>
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -29,12 +34,11 @@
       <h1 class="header-tab header-brand active" data-view="home" id="brandBtn"><svg class="brand-logo" width="28" height="28" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#f5f5f0"/><ellipse cx="32" cy="32" rx="22" ry="14" stroke="#2255aa" stroke-width="2.5"/><circle cx="32" cy="32" r="9" stroke="#7744bb" stroke-width="2"/><circle cx="32" cy="32" r="5" fill="#2255aa"/><circle cx="29" cy="30" r="1.8" fill="#fff" opacity="0.9"/><line x1="10" y1="22" x2="16" y2="26" stroke="#cc3344" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="8" y1="32" x2="14" y2="32" stroke="#1a8a3a" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="10" y1="42" x2="16" y2="38" stroke="#1088aa" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="48" y1="26" x2="54" y2="22" stroke="#c07020" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="50" y1="32" x2="56" y2="32" stroke="#7744bb" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="48" y1="38" x2="54" y2="42" stroke="#2255aa" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/></svg> vistaclair</h1>
       <nav class="header-tabs" id="headerTabs">
         <button class="header-tab" data-view="dashboard">Inspector</button>
-        <button class="header-tab" data-view="claude">Chat</button>
-        <button class="header-tab" data-view="profiles">Profiles</button>
+        <button class="header-tab" data-view="claude">CLIs</button>
         <button class="header-tab" data-view="capabilities">Tools &amp; MCP</button>
-        <button class="header-tab" data-view="workflow-runs">Workflows</button>
         <button class="header-tab" data-view="models">Models</button>
         <button class="header-tab" data-view="rules">Rules</button>
+        <button class="header-tab" data-view="directories">Directories</button>
       </nav>
     </div>
     <div class="header-actions">
@@ -61,14 +65,12 @@
     <div class="view-nav" id="homeNav">
       <button class="view-tab active" data-section="overview">Overview</button>
       <button class="view-tab" data-section="architecture">Architecture</button>
-      <button class="view-tab" data-section="workflows">Workflows</button>
       <button class="view-tab" data-section="tools">Tools &amp; MCP</button>
       <button class="view-tab" data-section="api">API</button>
     </div>
     <div class="view-body" id="homeContent">
       <div class="home-section active" id="home-overview"></div>
       <div class="home-section" id="home-architecture"></div>
-      <div class="home-section" id="home-workflows"></div>
       <div class="home-section" id="home-tools"></div>
       <div class="home-section" id="home-api"></div>
     </div>
@@ -99,7 +101,6 @@
           <ul class="empty-state-list">
             <li><b>External Claude</b> &mdash; run with the proxy env var:<br><code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code></li>
             <li><b>Chat</b> &mdash; use the <span class="empty-state-link" data-view="claude">Chat</span> tab to talk to Claude directly through the proxy</li>
-            <li><b>Workflow</b> &mdash; run a multi-step workflow from the <span class="empty-state-link" data-view="workflow-runs">Workflows</span> tab</li>
             <li><b>API</b> &mdash; POST to <code>/api/run</code> with a prompt to get an SSE stream</li>
           </ul>
         </div>
@@ -110,62 +111,37 @@
 
   <!-- ===== CLAUDE VIEW ===== -->
   <div id="view-claude" class="hidden" style="display:none">
-    <div class="view-nav" id="chatTabStrip">
-      <button class="view-tab active" data-tab-id="tab-1">Tab 1</button>
-      <button class="view-tab-new" id="chatTabNew" title="New tab">+</button>
+    <div class="view-nav" id="cliTabStrip">
+      <button class="view-tab-new" id="cliTabNew" title="New CLI">+</button>
     </div>
-    <div class="chat-container">
-      <div class="chat-files-panel collapsed" id="chatFilesBar">
-        <div class="chat-files-body" id="chatFilesBody">
-          <div class="chat-files-header">
-            <span class="chat-files-title">Files</span>
-            <span class="chat-files-count" id="chatFilesCount"></span>
-            <button class="chat-files-refresh" id="chatFilesRefresh" title="Refresh">&#8635;</button>
-          </div>
-          <div class="chat-files-list" id="chatFilesList"></div>
-        </div>
-        <button class="chat-files-handle" id="chatFilesHandle" title="Toggle files panel">
-          <span class="chat-files-handle-badge" id="chatFilesHandleBadge">&#128196; <span id="chatFilesHandleCount">0</span></span>
-          <span class="chat-files-handle-chevron">&#9662;</span>
-        </button>
-      </div>
-      <div class="chat-messages" id="chatMessages">
-        <div class="chat-welcome">
-          Type a message below to start chatting with Claude.
-        </div>
-        <!-- old welcome SVG removed, now in home view -->
-      </div>
-      <div class="chat-input-area">
-        <div class="chat-toolbar">
-          <button class="chat-cwd-btn" id="chatCwdBtn" title="Change project directory">&#128193;</button>
-          <span class="chat-cwd-label" id="chatCwdLabel"></span>
-          <span class="chat-toolbar-sep"></span>
-          <span class="chat-toolbar-label">profile:</span>
-          <select class="chat-profile-select" id="chatProfileSelect" title="Switch active profile"></select>
-          <span class="chat-profile-info" id="chatProfileInfo"></span>
-        </div>
-        <div class="chat-status-bar">
-          <span id="chatStatus" class="chat-status idle">idle</span>
-          <button id="chatStopBtn" class="chat-stop hidden">Stop</button>
-        </div>
-        <div id="chatAttachedFiles" class="chat-attached-files hidden"></div>
-        <div class="chat-input-row">
-          <button id="chatAttachBtn" class="chat-attach" title="Attach files">&#128206;</button>
-          <textarea id="chatInput" placeholder="Send a prompt to Claude..." rows="3"></textarea>
-          <button id="chatSendBtn" class="chat-send">Send</button>
-          <input type="file" id="chatFileInput" multiple style="display:none">
-        </div>
+    <div class="cli-container" id="cliContainer">
+      <div class="cli-placeholder" id="cliPlaceholder">
+        Click <strong>+</strong> to spawn a new Claude Code CLI
       </div>
     </div>
   </div>
 
-  <!-- ===== PROFILES VIEW ===== -->
-  <div id="view-profiles" class="hidden" style="display:none">
-    <div class="view-nav" id="profilesNav">
-      <button class="cap-action-btn view-nav-action" id="profileNewBtn" title="Create a new profile">+ New</button>
-    </div>
-    <div class="view-body" id="profilesBody">
-      <div id="profileEditor"></div>
+  <!-- CLI Settings Modal -->
+  <div class="modal-overlay hidden" id="cliSettingsModal">
+    <div class="modal-box" style="max-width:440px">
+      <div class="modal-header">
+        <span>CLI Settings</span>
+        <button class="modal-close cli-settings-cancel">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:60px;font-weight:600">Title</span><input id="cliSettingsTitle" type="text" placeholder="(auto from directory)" style="flex:1;padding:4px 6px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font:inherit"></label>
+        <h4 style="margin:0 0 10px">Model Mapping</h4>
+        <p style="margin:0 0 12px;font-size:12px;opacity:0.7">Map incoming Claude model families to any model from the Models tab. Leave as "Default" to pass through unchanged.</p>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Opus</span><select data-map="opus" style="flex:1;padding:4px 6px"></select></label>
+          <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Sonnet</span><select data-map="sonnet" style="flex:1;padding:4px 6px"></select></label>
+          <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Haiku</span><select data-map="haiku" style="flex:1;padding:4px 6px"></select></label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px">
+        <button class="cli-settings-cancel" style="padding:6px 16px;cursor:pointer">Cancel</button>
+        <button class="cli-settings-save" style="padding:6px 16px;cursor:pointer;background:var(--accent);color:#fff;border:none;border-radius:4px">Save</button>
+      </div>
     </div>
   </div>
 
@@ -204,7 +180,7 @@
           <button class="ref-filter-btn" data-cat="agent">Agents</button>
           <button class="ref-filter-btn" data-cat="web">Web</button>
           <button class="ref-filter-btn" data-cat="task">Tasks</button>
-          <button class="ref-filter-btn" data-cat="workflow">Workflow</button>
+          <button class="ref-filter-btn" data-cat="planning">Planning</button>
           <button class="ref-filter-btn" data-cat="schedule">Scheduling</button>
         </div>
 
@@ -569,8 +545,8 @@
         </div>
 
         <!-- Workflow -->
-        <div class="ref-category" data-cat="workflow">
-          <div class="ref-category-title">Planning &amp; Workflow</div>
+        <div class="ref-category" data-cat="planning">
+          <div class="ref-category-title">Planning</div>
           <div class="ref-grid">
 
             <div class="ref-card">
@@ -1349,202 +1325,6 @@ jq -r '.tool_input.command' |
       </div>
     </div>
 
-  <!-- Workflow Edit Modal -->
-  <div class="cap-modal-backdrop hidden" id="wfModal">
-    <div class="cap-modal cap-modal-wide">
-      <div class="cap-modal-header">
-        <h3 id="wfModalTitle">New Workflow</h3>
-        <button class="cap-modal-close" id="wfModalClose">&times;</button>
-      </div>
-      <div class="cap-modal-body">
-        <div class="pm-field-row">
-          <label>Name: <input type="text" id="wfName" placeholder="my-workflow"></label>
-        </div>
-        <div class="pm-field-row">
-          <label class="pm-wide">High-level description:
-            <textarea id="wfDesc" rows="3" placeholder="Describe what this workflow does at a high level — its purpose, inputs, expected outcome. Used as the prompt when generating or regenerating the source JSON."></textarea>
-          </label>
-        </div>
-        <div class="pm-field-row">
-          <label>Input:</label>
-          <div class="wf-input-mode-group">
-            <label class="wf-input-mode-opt">
-              <input type="radio" name="wfInputMode" value="none" id="wfInputModeNone" checked> None
-            </label>
-            <label class="wf-input-mode-opt">
-              <input type="radio" name="wfInputMode" value="prompt" id="wfInputModePrompt"> Prompt
-            </label>
-          </div>
-          <div class="wf-input-mode-help" id="wfInputModeHelp">Runs autonomously. Steps can still use AskUserQuestion, fetch from the web, read files, check git, etc.</div>
-        </div>
-        <div class="pm-field-row">
-          <label>Profiles to use:</label>
-          <div id="wfProfileList" class="wf-profile-checklist"></div>
-        </div>
-        <!-- Action bar -->
-        <div class="wf-modal-tabbar">
-          <button class="wf-modal-tab active" id="wfTabSource">Source JSON</button>
-          <button class="wf-modal-tab disabled" id="wfTabCompiled">Compiled JS</button>
-          <button class="wf-modal-tab" id="wfTabHelp">Help</button>
-          <div style="flex:1"></div>
-          <button class="wf-action-btn hidden" id="wfRegenBtn">Regenerate JSON</button>
-          <button class="wf-action-btn" id="wfCompileBtn">Compile</button>
-        </div>
-        <!-- Code editor (shared textarea, content swapped by tab) -->
-        <textarea id="wfTextarea" class="cap-modal-code" spellcheck="false" rows="18"></textarea>
-        <!-- Help panel (shown when Help tab is active) -->
-        <div id="wfHelpPanel" class="wf-help-panel hidden">
-          <div class="wf-help-columns">
-            <div class="wf-help-col">
-              <h4>Source JSON</h4>
-              <pre class="wf-help-pre">{
-  "name": "my-workflow",
-  "description": "What this workflow does",
-  "inputMode": "none" or "prompt",
-  "inputs": {
-    "topic": "The topic to process"
-  },
-  "steps": {
-    "step-id": { ... },
-    "step-id": { ... }
-  }
-}</pre>
-              <p class="wf-help-note"><b>inputMode</b>: <code>none</code> (default) runs autonomously. <code>prompt</code> shows a text input when running &mdash; the value is available as <code>{{prompt}}</code> in step instructions.</p>
-              <p class="wf-help-note">Steps execute in key order unless overridden by navigation fields.</p>
-
-              <h4>Step fields</h4>
-              <pre class="wf-help-pre"><b>do</b>           The prompt sent to claude -p.
-             Use {{key}} for input substitution.
-
-<b>profile</b>      Profile name for this step.
-             e.g. "safe", "full", or a custom one.
-             Falls back to the active profile.
-
-<b>produces</b>     Describes expected output format.
-             Appended as a hint to the prompt.
-
-<b>context</b>      Array of step IDs whose output is
-             prepended to this step's prompt.
-             e.g. ["research", "outline"]</pre>
-
-              <h4>Navigation</h4>
-              <pre class="wf-help-pre"><b>next</b>         Unconditional jump to step ID.
-<b>condition</b>    Natural-language branch condition.
-<b>then</b>         Step ID if condition is true.
-<b>else</b>         Step ID if condition is false.
-
-Without next/then/else, advances to the
-next step in key order automatically.</pre>
-
-              <h4>Advanced</h4>
-              <pre class="wf-help-pre"><b>parallel</b>     Array of step IDs to run concurrently.
-             The step itself has no "do" field.
-<b>join</b>         Step ID to resume after parallel done.
-<b>maxRetries</b>   Retry count on failure (default: 0).
-<b>timeout</b>      Step timeout in ms. Kills the process.
-<b>onError</b>      Step ID to jump to on failure.</pre>
-            </div>
-
-            <div class="wf-help-col">
-              <h4>Compiled JS</h4>
-              <pre class="wf-help-pre">module.exports = {
-  name: "my-workflow",
-  sourceHash: "f68b47ebd7a6",
-  inputs: {
-    topic: {
-      type: "string",
-      required: true,
-      description: "The topic to process"
-    }
-  },
-  steps: [ { id, profile, buildPrompt,
-             parseOutput, evaluate, ... } ]
-};</pre>
-              <p class="wf-help-note">sourceHash is first 12 chars of SHA-256 of the source JSON. Used for staleness detection.</p>
-
-              <h4>Step object</h4>
-              <pre class="wf-help-pre"><b>id</b>           Matches the key in workflow.json.
-<b>profile</b>      "safe" | "full" | null (default).
-<b>type</b>         "agent" (has do) or "condition".
-
-<b>buildPrompt(ctx)</b>
-  Returns the full prompt string.
-  ctx.inputs.key    &mdash; resolved input values
-  ctx.steps.id.output &mdash; previous step output
-
-<b>parseOutput(raw)</b>
-  Transforms the raw agent output.
-  Return a string for pass-through, or an
-  object with named fields for downstream
-  steps to reference specific parts.
-
-<b>evaluate(ctx)</b>
-  Deterministic JS predicate for branching.
-  Only on condition steps. No AI call.
-  return ctx.steps["check"].output.passed;
-
-<b>next</b>         "step-id" | null (end).
-<b>then / else</b>  Branch targets from evaluate().
-<b>maxRetries</b>   Same as source JSON.</pre>
-
-              <h4>Output rendering</h4>
-              <pre class="wf-help-pre">Markdown     Tables, lists, headings
-```html       Rendered in an iframe
-```svg        Inline SVG diagrams
-$..$ / $$..$$  LaTeX math (MathJax)
-```lang       Syntax-highlighted code
-
-buildPrompt can instruct the agent to use
-any of these formats in its response.</pre>
-
-              <h4>Runtime context object</h4>
-              <pre class="wf-help-pre">ctx = {
-  inputs: { topic: "user value" },
-  steps: {
-    "research": {
-      output: "raw text or parsed object"
-    },
-    "failed-step": {
-      output: null,
-      error: "error message"
-    }
-  }
-}</pre>
-            </div>
-          </div>
-        </div>
-        <!-- Redo bar (only after generate) -->
-        <div id="wfRedoBar" class="hidden" style="display:flex; gap:8px; margin-top:8px">
-          <input type="text" id="wfRedoInput" placeholder="What should be different..."
-            style="flex:1; background:var(--bg); border:1px solid var(--border); color:var(--text);
-                   border-radius:4px; padding:4px 8px; font-size:12px">
-          <button class="cap-new-btn" id="wfRedoBtn">Redo</button>
-        </div>
-        <!-- Log area -->
-        <div id="wfLog" class="wf-modal-log hidden"></div>
-      </div>
-      <div class="cap-modal-footer">
-        <button class="wf-footer-btn wf-footer-cancel" id="wfModalCancel">Cancel</button>
-        <button class="wf-footer-btn wf-footer-generate" id="wfGenerateBtn">Generate</button>
-        <button class="wf-footer-btn wf-footer-secondary" id="wfSaveJson" disabled>Save JSON</button>
-        <button class="wf-footer-btn wf-footer-secondary" id="wfSaveJs" disabled>Save JS</button>
-      </div>
-    </div>
-  </div>
-
-
-  <!-- ===== WORKFLOW RUNS VIEW ===== -->
-  <div id="view-workflow-runs" class="hidden" style="display:none">
-    <div class="view-nav" id="wfrunTabStrip">
-      <button class="view-tab active" data-tab-id="wfrun-1">Workflows</button>
-      <button class="cap-action-btn view-nav-action" id="wfNewBtn" title="Create a new workflow">+ New</button>
-    </div>
-    <div class="wf-error-bar hidden" id="wfErrorBar"></div>
-    <div class="view-body" id="wfrunContainer">
-      <!-- Phase panels swapped here per tab -->
-    </div>
-  </div>
-
   <!-- ===== MODELS VIEW ===== -->
   <div id="view-models" class="hidden" style="display:none">
     <div class="view-nav" id="modelsNav">
@@ -1568,12 +1348,24 @@ any of these formats in its response.</pre>
         Rules run in order before model routing. They can modify request bodies, filter tools, swap models, replace system prompts, or short-circuit responses entirely.
         <br><br>
         Rules are created and edited by describing what you want in natural language &mdash; Claude writes the implementation.
-        Toggle rules on/off, or drag to reorder. The server restarts automatically after changes.
+        Toggle rules on/off, or drag to reorder. Changes are hot-reloaded and take effect immediately &mdash; no restart required.
       </div>
       <div id="ruleGeneratingStatus" class="hidden" style="padding:12px 14px;font-size:13px;color:var(--text-dim);">
         <span class="busy-dot"></span> Generating rule&hellip;
       </div>
       <div id="ruleList"></div>
+    </div>
+  </div>
+
+  <!-- ===== DIRECTORIES VIEW ===== -->
+  <div id="view-directories" class="hidden" style="display:none">
+    <div class="view-nav" id="dirTabStrip">
+      <button class="view-tab-new" id="dirTabNew" title="New directory browser">+</button>
+    </div>
+    <div class="dir-container" id="dirContainer">
+      <div class="dir-placeholder" id="dirPlaceholder">
+        Click <strong>+</strong> to open a directory browser
+      </div>
     </div>
   </div>
 
@@ -1627,13 +1419,12 @@ any of these formats in its response.</pre>
   <script src="core.js"></script>
   <script src="dir-picker.js"></script>
   <script src="inspector.js"></script>
-  <script src="chat.js"></script>
+  <script src="cli.js"></script>
   <script src="capabilities.js"></script>
   <script src="tasks.js"></script>
   <script src="mcp.js"></script>
-  <script src="workflows.js"></script>
-  <script src="workflow-runs.js"></script>
   <script src="home.js"></script>
   <script src="rules.js"></script>
+  <script src="directories.js"></script>
 </body>
 </html>

@@ -163,7 +163,6 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instan
     if (tb && tb.name === 'AskUserQuestion' && instanceId) {
       try {
         const input = JSON.parse(tb.inputJson);
-        // Capture workflow context now (not later) to avoid race conditions with parallel steps
         // Store full form data for enhanced AskUserQuestion (title, description, submitLabel, cancelLabel, questions)
         pendingQuestions.set(tb.id, { formData: input, questions: input.questions || [], resolve: null, reject: null, ctx: getInstanceContext(instanceId) });
       } catch {}
@@ -275,15 +274,22 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     next();
   });
 
+  // /i/:instanceId prefix: CLI terminal instance routing (no profile)
+  router.use('/i/:instanceId', (req, res, next) => {
+    req.instanceId = decodeURIComponent(req.params.instanceId);
+    next();
+  });
+
   // POST /v1/messages - main endpoint
-  router.post(['/v1/messages', '/p/:profileName/v1/messages', '/p/:profileName/i/:instanceId/v1/messages'], async (req, res) => {
+  router.post(['/v1/messages', '/p/:profileName/v1/messages', '/p/:profileName/i/:instanceId/v1/messages', '/i/:instanceId/v1/messages'], async (req, res) => {
     const body = req.body;
     const isStreaming = !!body.stream;
 
     // --- AskUserQuestion interception ---
     // Scan request messages for error tool_results matching a pending question
     let intercepted = false;
-    if (body.messages && req.instanceId) {
+    const isCliInstance = req.instanceId && req.instanceId.startsWith('cli-');
+    if (body.messages && req.instanceId && !isCliInstance) {
       for (const msg of body.messages) {
         if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
         for (let i = 0; i < msg.content.length; i++) {
@@ -334,13 +340,34 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     }
 
     // Replace AskUserQuestion schema with enhanced version (internal sessions only)
-    if (Array.isArray(body.tools) && req.instanceId) {
+    if (Array.isArray(body.tools) && req.instanceId && !isCliInstance) {
       body.tools = body.tools.map(t => t.name === 'AskUserQuestion' ? enhancedAskTool : t);
     }
 
     // Resolve profile and model from per-request URL context
     const profileName = req.profileName || null;
     const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
+
+    // --- CLI instance: model mapping + settings-based tool filtering ---
+    let cliSettings = null;
+    let cliModelDef = null;
+    if (isCliInstance && createProxyRouter._cliSettingsGetter) {
+      cliSettings = createProxyRouter._cliSettingsGetter(req.instanceId);
+    }
+    if (cliSettings?.modelMap && body.model) {
+      const modelLower = body.model.toLowerCase();
+      let mappedModelName = null;
+      if (modelLower.includes('opus') && cliSettings.modelMap.opus) mappedModelName = cliSettings.modelMap.opus;
+      else if (modelLower.includes('sonnet') && cliSettings.modelMap.sonnet) mappedModelName = cliSettings.modelMap.sonnet;
+      else if (modelLower.includes('haiku') && cliSettings.modelMap.haiku) mappedModelName = cliSettings.modelMap.haiku;
+      if (mappedModelName) {
+        cliModelDef = caps.loadModel(PROJECT_ROOT, mappedModelName);
+        if (cliModelDef) {
+          console.log(`[proxy] CLI model map: ${body.model} \u2192 ${cliModelDef.label || cliModelDef.name} (${cliModelDef.provider})`);
+          body.model = cliModelDef.modelId || cliModelDef.name;
+        }
+      }
+    }
 
     const instCtx = getInstanceContext(req.instanceId);
     const interaction = {
@@ -434,7 +461,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
     // --- Check for model translation ---
     // Profile's modelDef determines routing: if set → translate, if null → direct to Anthropic
-    const modelDef = profileData?.modelDef ? caps.loadModel(PROJECT_ROOT, profileData.modelDef) : null;
+    const modelDef = cliModelDef || (profileData?.modelDef ? caps.loadModel(PROJECT_ROOT, profileData.modelDef) : null);
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider && modelDef.provider !== 'anthropic') {
@@ -747,7 +774,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   });
 
   // POST /v1/messages/count_tokens
-  router.post(['/v1/messages/count_tokens', '/p/:profileName/v1/messages/count_tokens', '/p/:profileName/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
+  router.post(['/v1/messages/count_tokens', '/p/:profileName/v1/messages/count_tokens', '/p/:profileName/i/:instanceId/v1/messages/count_tokens', '/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
     const body = req.body;
 
     const profileName = req.profileName || null;
@@ -878,6 +905,8 @@ function clearPendingQuestionsForTab(tabId) {
     }
   }
 }
+
+createProxyRouter._cliSettingsGetter = null;
 
 module.exports = createProxyRouter;
 module.exports.pendingQuestions = pendingQuestions;

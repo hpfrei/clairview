@@ -124,7 +124,7 @@
           <label class="mcp-tool-toggle" title="${bi ? 'Built-in (always enabled)' : t.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
             <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${t.slug}" class="mcp-tool-cb" ${bi ? 'disabled' : ''}>
           </label>
-          <span class="cap-item-name${t.enabled ? '' : ' mcp-disabled'}">${escHtml(t.name)}${t.source === 'workflow' ? ' <span class="ref-tag tag-ro" style="font-size:9px;margin-left:4px">workflow</span>' : bi ? ' <span class="ref-tag tag-ro" style="font-size:9px;margin-left:4px">built-in</span>' : ''}</span>
+          <span class="cap-item-name${t.enabled ? '' : ' mcp-disabled'}">${escHtml(t.name)}${bi ? ' <span class="ref-tag tag-ro" style="font-size:9px;margin-left:4px">built-in</span>' : ''}</span>
           <span class="cap-item-desc">${escHtml(t.description || '')}</span>
           <span class="cap-list-actions">
             <button class="cap-edit-btn mcp-tool-edit" data-slug="${t.slug}" title="${bi ? 'View tool' : 'Edit tool'}">&#9998;</button>
@@ -220,9 +220,8 @@
     const tool = mcp.editTool;
     const isNew = mcp.editing === '__new__' && !tool?.name;
     const isBuiltin = tool?.builtin;
-    const isWorkflow = tool?.source === 'workflow';
     const title = isNew ? 'New Tool' : isBuiltin ? 'View Tool: ' + escHtml(tool?.name || mcp.editing) : 'Edit Tool: ' + escHtml(tool?.name || mcp.editing);
-    const tag = isWorkflow ? 'workflow' : isBuiltin ? 'built-in' : '';
+    const tag = isBuiltin ? 'built-in' : '';
     el.innerHTML = `
       <h3>${title}${tag ? ` <span class="ref-tag tag-ro" style="font-size:10px;vertical-align:middle">${tag}</span>` : ''}</h3>
       <div class="mcp-tool-modal-actions">
@@ -271,10 +270,8 @@
 
         <div class="mcp-form-group">
           <h4>Implementation</h4>
-          ${tool.source === 'workflow'
-            ? `<div class="mcp-form-hint">This tool is generated from the compiled workflow <strong>${escHtml(tool.workflow || '')}</strong>. Edit the workflow to change this tool's behavior.</div>`
-            : ro ? '<div class="mcp-form-hint">Built-in tool — read only.</div>' : '<div class="mcp-form-hint">Write the handler body. It receives the parameters as named arguments and must return MCP content.</div>'}
-          ${tool.source === 'workflow' ? '' : `<div class="mcp-handler-sig">async (input) => {  <span style="color:var(--text-dim)">// input = { ${paramNames} }</span></div>
+          ${ro ? '<div class="mcp-form-hint">Built-in tool — read only.</div>' : '<div class="mcp-form-hint">Write the handler body. It receives the parameters as named arguments and must return MCP content.</div>'}
+          ${`<div class="mcp-handler-sig">async (input) => {  <span style="color:var(--text-dim)">// input = { ${paramNames} }</span></div>
           <textarea id="mcpToolHandler" class="cap-modal-code mcp-handler-editor" spellcheck="false" rows="10" ${ro ? 'readonly' : ''}>${escHtml(tool.handlerBody || 'return {\n    content: [{ type: "text", text: "Result" }],\n  };')}</textarea>
           <div class="mcp-handler-sig">}</div>`}
         </div>
