@@ -19,9 +19,6 @@ const state = {
   selection: null,
   ws: null,
   reconnectDelay: 1000,
-  activeSessionId: null,
-  // Chat
-  chatCurrentEl: null,
   // Capabilities
   capabilities: null,
   profiles: [],
@@ -42,10 +39,6 @@ const state = {
   mcpServers: [],
   outputsDir: '',
   serverRestarting: false,
-  // Tasks — keyed by instanceId (or '_none' for external/unknown)
-  taskSets: {},       // { [instanceId]: { tasks: {}, todos: [] } }
-  pendingTaskTools: {},
-  taskPanelCollapsed: true,
 };
 
 // --- Utilities ---
@@ -267,9 +260,6 @@ const detailContent = document.getElementById('detail-content');
 const emptyState = document.getElementById('empty-state');
 const statusEl = document.getElementById('status');
 const statsEl = document.getElementById('footerStats');
-const sessionPickerBtn = document.getElementById('sessionPickerBtn');
-const newSessionBtn = document.getElementById('newSessionBtn');
-let cachedSessions = [];
 
 
 // Centralized settings state sync — called once, modules just re-render
@@ -859,7 +849,7 @@ function askFormBind(container, formData, callbacks) {
   // Initial readiness check
   onChange();
 
-  return { collectAnswers, getFileData, disableForm };
+  return { collectAnswers, getFileData, disableForm, checkReady };
 }
 
 window.dashboard = {
@@ -953,35 +943,17 @@ function handleMessage(msg) {
     case 'interaction:error':
     case 'cleared':
       window.inspectorModule?.handleMessage(msg);
-      if (msg.type === 'sse_event') window.taskModule?.interceptSSE(msg.event, msg.interactionId);
       break;
 
-    // Session
-    case 'session:list':
-      updateSessionPicker(msg.sessions, msg.activeId);
-      window.inspectorModule?.handleMessage(msg);
-      break;
-    case 'session:switched':
-      window.inspectorModule?.handleMessage(msg);
-      window.taskModule?.handleMessage(msg);
-      window.chatModule?.handleMessage(msg);
-      break;
-
-    // Chat + Ask
-    case 'chat:event':
-    case 'chat:output':
-    case 'chat:error':
-    case 'chat:status':
-    case 'chat:tabs':
+    // Ask (routed to CLI tab overlay)
     case 'ask:question':
     case 'ask:answered':
     case 'ask:timeout':
-      window.chatModule?.handleMessage(msg);
+      window.cliModule?.handleAskMessage(msg);
       break;
     case 'chat:settings':
       syncSettings(msg);
       window.homeModule?.updateTokenDisplay?.();
-      window.chatModule?.handleMessage(msg);
       window.capabilitiesModule?.handleSettings(msg);
       break;
 
@@ -993,6 +965,7 @@ function handleMessage(msg) {
     case 'cli:newTab':
     case 'cli:settingsData':
     case 'cli:savedSessions':
+      if (window.directoriesModule?.handleShellMessage?.(msg)) break;
       window.cliModule?.handleMessage(msg);
       break;
 
@@ -1011,11 +984,6 @@ function handleMessage(msg) {
       break;
     case 'profile:list':
       window.capabilitiesModule?.handleMessage(msg);
-      break;
-
-    // Output files
-    case 'files:list':
-      window.chatModule?.handleMessage(msg);
       break;
 
     // Proxy rules
@@ -1045,102 +1013,6 @@ function handleMessage(msg) {
   }
 }
 
-// --- Session management ---
-newSessionBtn?.addEventListener('click', () => {
-  const view = document.querySelector('.header-tab.active')?.dataset.view;
-  if (view === 'dashboard' && window.inspectorModule?.newExtTab) {
-    window.inspectorModule.newExtTab();
-    return;
-  }
-  if (state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 'session:new' }));
-  }
-});
-
-function updateSessionLabel() {
-  if (!sessionPickerBtn) return;
-  const active = cachedSessions.find(s => s.id === state.activeSessionId);
-  sessionPickerBtn.textContent = active
-    ? `Session ${active.id} (${active.interactionCount})`
-    : `Session ${state.activeSessionId || '?'}`;
-}
-
-function updateSessionPicker(sessions, activeId) {
-  state.activeSessionId = activeId;
-  cachedSessions = sessions || [];
-  updateSessionLabel();
-}
-
-sessionPickerBtn?.addEventListener('click', () => {
-  if (!cachedSessions.length) return;
-  const backdrop = document.createElement('div');
-  backdrop.className = 'session-modal-backdrop';
-  let html = '<div class="session-modal">';
-  html += '<div class="session-modal-header"><h3>Sessions</h3>';
-  html += '<div class="session-modal-actions">';
-  html += '<button class="session-modal-delete-all">Delete All Inactive</button>';
-  html += '<button class="session-modal-close">\u00d7</button>';
-  html += '</div></div>';
-  html += '<div class="session-modal-body">';
-  for (const s of cachedSessions) {
-    const isActive = s.id === state.activeSessionId;
-    html += `<div class="session-modal-item${isActive ? ' active' : ''}" data-id="${s.id}">`;
-    html += `<span class="session-modal-label">Session ${s.id}</span>`;
-    html += `<span class="session-modal-calls">${s.interactionCount} call${s.interactionCount !== 1 ? 's' : ''}</span>`;
-    if (isActive) {
-      html += '<span class="session-modal-badge">current</span>';
-    } else {
-      html += `<button class="session-modal-del" data-id="${s.id}" title="Delete">\u2715</button>`;
-    }
-    html += '</div>';
-  }
-  html += '</div></div>';
-  backdrop.innerHTML = html;
-  document.body.appendChild(backdrop);
-
-  const close = () => backdrop.remove();
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-  backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-  backdrop.querySelector('.session-modal-close').addEventListener('click', close);
-
-  // Click a session row to load it
-  backdrop.querySelectorAll('.session-modal-item:not(.active)').forEach(row => {
-    row.addEventListener('click', (e) => {
-      if (e.target.closest('.session-modal-del')) return;
-      const id = parseInt(row.dataset.id, 10);
-      if (id && state.ws?.readyState === WebSocket.OPEN) {
-        window.dashboard.sendWs({ type: 'session:switch', id });
-      }
-      close();
-    });
-  });
-
-  // Delete individual session
-  backdrop.querySelectorAll('.session-modal-del').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const id = parseInt(btn.dataset.id, 10);
-      if (id && state.ws?.readyState === WebSocket.OPEN) {
-        window.dashboard.sendWs({ type: 'session:delete', id });
-      }
-      btn.closest('.session-modal-item').remove();
-    });
-  });
-
-  // Delete all inactive
-  backdrop.querySelector('.session-modal-delete-all')?.addEventListener('click', () => {
-    if (state.ws?.readyState !== WebSocket.OPEN) return;
-    for (const s of cachedSessions) {
-      if (s.id !== state.activeSessionId) {
-        window.dashboard.sendWs({ type: 'session:delete', id: s.id });
-      }
-    }
-    backdrop.querySelectorAll('.session-modal-item:not(.active)').forEach(el => el.remove());
-  });
-
-  backdrop.focus();
-});
-
 // ============================================================
 // VIEW SWITCHING (Dashboard / Claude / Capabilities)
 // ============================================================
@@ -1163,10 +1035,6 @@ function switchView(view) {
     }
   }
 
-  // Show session picker only in Inspector and Chat views
-  const showSession = (view === 'dashboard' || view === 'claude');
-  if (sessionPickerBtn) sessionPickerBtn.style.display = showSession ? '' : 'none';
-  if (newSessionBtn) newSessionBtn.style.display = showSession ? '' : 'none';
 }
 
 document.getElementById('headerTabs').addEventListener('click', e => {

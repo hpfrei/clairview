@@ -3,7 +3,7 @@
 
 const enhancedAskTool = {
   name: 'AskUserQuestion',
-  description: `Ask the user one or more questions via an interactive form in the browser dashboard. Use this when you need user input, confirmation, file selection, or a decision before proceeding.
+  description: `Ask the user one or more questions via an interactive form. Use this whenever you need user input, confirmation, file selection, or a decision before proceeding. When in doubt, ask rather than assume — the user prefers to be consulted.
 
 Question types:
 - "select": Single-select from a list of options (renders as button group). Use for 2-6 choices.

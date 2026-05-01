@@ -8,12 +8,12 @@ module.exports = function(ctx) {
     'PushNotification',
     'RemoteTrigger',
     'ScheduleWakeup',
-    'TaskOutput',
   ]);
   const REMOVED_PREFIXES = ['mcp__claude_ai_'];
 
   const before = ctx.body.tools.length;
   ctx.body.tools = ctx.body.tools.filter(t =>
+    t != null &&
     !REMOVED.has(t.name) &&
     !REMOVED_PREFIXES.some(p => t.name?.startsWith(p))
   );

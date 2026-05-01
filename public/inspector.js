@@ -175,6 +175,41 @@
     }
   }
 
+  const _faviconLink = document.querySelector('link[rel="icon"]');
+  const _faviconNormal = 'favicon.svg';
+  const _busyFrames = [0, 5, 0, -5].map(dx => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#cc3344"/><stop offset="25%" stop-color="#c07020"/><stop offset="50%" stop-color="#1a8a3a"/><stop offset="75%" stop-color="#2255aa"/><stop offset="100%" stop-color="#7744bb"/></linearGradient></defs>
+  <ellipse cx="32" cy="32" rx="29" ry="18" fill="#fff" stroke="#aaa" stroke-width="1.5"/>
+  <circle cx="${32 + dx}" cy="32" r="13" fill="url(#g)"/>
+  <circle cx="${32 + dx}" cy="32" r="5.5" fill="#1a1a2e"/>
+  <circle cx="${28 + dx}" cy="28" r="2.5" fill="#fff"/>
+  <circle cx="53" cy="12" r="11" fill="#22c55e" stroke="#fff" stroke-width="2.5"/>
+</svg>`;
+    return 'data:image/svg+xml,' + encodeURIComponent(svg);
+  });
+  let _faviconIsBusy = false;
+  let _busyInterval = null;
+  let _busyFrame = 0;
+
+  function setFavicon(busy) {
+    if (busy === _faviconIsBusy) return;
+    _faviconIsBusy = busy;
+    if (!_faviconLink) return;
+    if (busy) {
+      _busyFrame = 0;
+      _faviconLink.href = _busyFrames[0];
+      _busyInterval = setInterval(() => {
+        _busyFrame = (_busyFrame + 1) % 4;
+        _faviconLink.href = _busyFrames[_busyFrame];
+      }, 250);
+    } else {
+      clearInterval(_busyInterval);
+      _busyInterval = null;
+      _faviconLink.href = _faviconNormal;
+    }
+  }
+
   function updateStreamingState() {
     const busyInstances = new Set();
     if (inspectorTabStrip) {
@@ -194,7 +229,8 @@
       inspectorTab.classList.toggle('instance-running', count > 0);
       inspectorTab.textContent = 'Inspector';
     }
-    document.title = busyInstances.size > 0 ? '● vistaclair' : 'vistaclair';
+    setFavicon(busyInstances.size > 0);
+    document.title = 'vistaclair';
     window.cliModule?.updateStreamingState?.(busyInstances);
   }
 
@@ -654,27 +690,38 @@
   // TIMELINE RENDERING
   // ============================================================
 
+  function llmTurnNumber(interaction) {
+    let n = 0;
+    for (const i of state.interactions) {
+      if (!i.isMcp && !i.isHook) n++;
+      if (i === interaction) return n;
+    }
+    return n;
+  }
+
   function renderTimeline() {
     timelineList.innerHTML = '';
-    state.interactions.forEach((interaction, idx) => {
+    let turnNum = 0;
+    state.interactions.forEach((interaction) => {
       // Apply instance filter
       if (activeInstanceTab === 'all') {
         // "Others" — exclude interactions that belong to a known instance tab
         if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
       } else if (interaction.instanceId !== activeInstanceTab) return;
-      appendTurnToTimeline(interaction, idx);
+      if (!interaction.isMcp && !interaction.isHook) turnNum++;
+      appendTurnToTimeline(interaction, turnNum);
     });
     updateUserTurnTotals();
   }
 
-  function appendTurnToTimeline(interaction, idx) {
-    if (idx === undefined) idx = state.interactions.length - 1;
+  function appendTurnToTimeline(interaction, turnNum) {
+    if (turnNum === undefined) turnNum = llmTurnNumber(interaction);
 
     if (interaction.isMcp) {
-      return appendMcpCallToTimeline(interaction, idx);
+      return appendMcpCallToTimeline(interaction);
     }
     if (interaction.isHook) {
-      return appendHookEntryToTimeline(interaction, idx);
+      return appendHookEntryToTimeline(interaction);
     }
 
     const group = document.createElement('div');
@@ -693,7 +740,7 @@
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
     const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
-    const turnLabel = stepId ? `Turn ${idx + 1} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${idx + 1}`;
+    const turnLabel = stepId ? `Turn ${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${turnNum}`;
     const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
       ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
     const tokenSummary = compactTokens(interaction.usage);
@@ -793,17 +840,12 @@
 
     const hookEvent = interaction.hookEvent || 'Hook';
     const toolName = interaction.toolName || '';
-    const time = new Date(interaction.timestamp).toLocaleTimeString();
+    const arrow = /post/i.test(hookEvent) ? '←' : '→';
 
     el.innerHTML = `
-      <div class="entry-header">
-        <span class="entry-num hook-label">${escHtml(hookEvent)}</span>
-        <span class="entry-badge badge-complete">ok</span>
-      </div>
-      <div class="entry-model hook-tool-name">${escHtml(toolName)}</div>
-      <div class="entry-meta">
-        <span>${time}</span>
-      </div>
+      <span class="hook-arrow">${arrow}</span>
+      <span class="hook-label">${escHtml(hookEvent)}</span>
+      <span class="hook-tool-name">${escHtml(toolName)}</span>
     `;
 
     el.addEventListener('click', (e) => {
@@ -1256,7 +1298,7 @@
       html += `<span class="info-label">Arguments</span><span class="info-value">${escHtml(tc.input.args)}</span>`;
     }
     html += `<span class="info-label">Status</span><span class="info-value">${tc.status}</span>
-      <span class="info-label">Turn</span><span class="info-value"><a href="#" class="turn-link" data-turn-id="${interaction.id}">Turn ${state.interactions.indexOf(interaction) + 1}</a></span>
+      <span class="info-label">Turn</span><span class="info-value"><a href="#" class="turn-link" data-turn-id="${interaction.id}">Turn ${llmTurnNumber(interaction)}</a></span>
     </div>`;
 
     html += `<div class="section-title">Input</div>`;
@@ -1709,34 +1751,6 @@
         updateInspectorBusy();
         break;
 
-      case 'session:switched':
-        _userPinnedSelection = false;
-        state.interactions = msg.interactions || [];
-        state.selection = null;
-        knownInstances.clear();
-        activeInstanceTab = 'all';
-        extTabCounter = 0;
-        activeExtTab = null;
-        renderInspectorTabStrip();
-        renderTimeline();
-        updateStats();
-        updateInspectorBusy();
-        if (state.interactions.length > 0) {
-          select({ type: 'turn', id: state.interactions[state.interactions.length - 1].id });
-        } else {
-          detailContent.innerHTML = '';
-          detailContent.classList.add('hidden');
-          emptyState.classList.remove('hidden');
-          renderEmptyState();
-        }
-        break;
-
-      case 'session:list':
-        if (state.interactions.length === 0) {
-          renderEmptyState();
-        }
-        break;
-
       case 'cleared':
         state.interactions = [];
         state.selection = null;
@@ -1826,15 +1840,5 @@
     });
   }
 
-  function newExtTab() {
-    extTabCounter++;
-    activeExtTab = `ext-${extTabCounter}`;
-    knownInstances.set(activeExtTab, {
-      instanceId: activeExtTab, profileName: null,
-      status: 'running', spawnedAt: Date.now(), cwd: null,
-    });
-    switchInstanceTab(activeExtTab);
-  }
-
-  window.inspectorModule = { handleMessage, newExtTab, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
+  window.inspectorModule = { handleMessage, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
 })();

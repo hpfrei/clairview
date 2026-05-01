@@ -81,9 +81,7 @@ function validateSlug(slug) {
 
 function listTools() {
   const meta = readMeta();
-  const tools = meta ? [...(meta.tools || [])] : [];
-
-  return tools;
+  return meta ? [...(meta.tools || [])] : [];
 }
 
 function loadTool(slug) {
@@ -342,11 +340,33 @@ function installAll(onData, onDone) {
   proc.on('close', code => onDone?.(code === 0));
 }
 
+function readToolSource(slug) {
+  const meta = readMeta();
+  if (!meta) return { error: 'Integrated server not initialized.' };
+  const tool = (meta.tools || []).find(t => t.slug === slug);
+  if (!tool) return { error: 'Tool not found.' };
+  const filePath = path.join(serverDir(), 'tools', tool.file);
+  if (!fs.existsSync(filePath)) return { error: 'Tool file not found.' };
+  return { source: fs.readFileSync(filePath, 'utf8'), slug, builtin: !!tool.builtin };
+}
+
+function saveToolSource(slug, source) {
+  const meta = readMeta();
+  if (!meta) return { error: 'Integrated server not initialized.' };
+  const tool = (meta.tools || []).find(t => t.slug === slug);
+  if (!tool) return { error: 'Tool not found.' };
+  if (tool.builtin) return { error: 'Cannot modify built-in tool.' };
+  const filePath = path.join(serverDir(), 'tools', tool.file);
+  fs.writeFileSync(filePath, source);
+  return { ok: true, slug };
+}
+
 module.exports = {
   INTEGRATED_SLUG, getServersDir, serverDir, slugify, validateSlug,
   ensureIntegratedServer, readMeta, writeMeta,
   listTools, loadTool, saveTool, deleteTool, toggleTool,
   generateServerJs, writeToolFile,
+  readToolSource, saveToolSource,
   listFiles, readFile, writeFile, deleteFile,
   listDeps, installDep, uninstallDep, installAll,
 };

@@ -7,7 +7,7 @@ const path = require('path');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
-const ClaudeSessionManager = require('./src/claude-sessions');
+const { pendingQuestions, clearPendingQuestionsForTab } = createProxyRouter;
 const CliSessionManager = require('./src/cli-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
@@ -46,7 +46,6 @@ const store = new InteractionStore(MAX_HISTORY);
 // --- Proxy server (port 3456) ---
 const proxyApp = express();
 let broadcaster = { broadcast() {} };
-let sessionManager = null; // forward reference, assigned below
 
 const proxyRouter = createProxyRouter(store, { broadcast: (...args) => broadcaster.broadcast(...args) }, TARGET_URL);
 proxyApp.use(proxyRouter);
@@ -106,6 +105,39 @@ dashboardApp.post('/api/hook-report', (req, res) => {
   res.status(200).end();
 });
 
+// AskUserQuestion endpoint — called by vista-AskUserQuestion MCP tool handler.
+// Broadcasts the question to the dashboard and waits for the user's answer.
+const { getInstanceContext } = require('./src/utils');
+let askSeq = 0;
+dashboardApp.post('/api/ask', async (req, res) => {
+  if (req.body?.token !== AUTH_TOKEN) return res.status(401).end();
+  const { instanceId, formData, questions } = req.body;
+  const askId = `ask-${Date.now()}-${++askSeq}`;
+  const ctx = instanceId ? getInstanceContext(instanceId) : null;
+  const tabId = ctx?.tabId || '__default__';
+
+  const promise = new Promise((resolve, reject) => {
+    pendingQuestions.set(askId, { formData: formData || {}, questions: questions || [], resolve, reject, ctx });
+  });
+
+  broadcaster.broadcast({
+    type: 'ask:question',
+    toolUseIds: [askId],
+    forms: [{ toolUseId: askId, formData: formData || {}, questions: questions || [] }],
+    ...(tabId !== '__default__' ? { tabId } : {}),
+  });
+  console.log(`[api/ask] Broadcasting ask:question askId=${askId} tabId=${tabId}`);
+
+  try {
+    const answer = await promise;
+    res.json({ ok: true, answer });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  } finally {
+    pendingQuestions.delete(askId);
+  }
+});
+
 // Landing page (public, no auth)
 dashboardApp.use('/landing_page', express.static(path.join(__dirname, 'public', 'landing_page')));
 
@@ -131,13 +163,11 @@ dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
 
 const dashboardServer = http.createServer(dashboardApp);
 
-// Session manager (spawns claude -p instances through the proxy)
-sessionManager = new ClaudeSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 const cliSessionManager = new CliSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
 // WebSocket server on dashboard (with auth)
 const wss = new WebSocketServer({ noServer: true });
-broadcaster = new DashboardBroadcaster(wss, store, sessionManager, { authToken: AUTH_TOKEN, cliSessionManager });
+broadcaster = new DashboardBroadcaster(wss, store, { authToken: AUTH_TOKEN, proxyPort: PROXY_PORT, cliSessionManager });
 setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
@@ -154,24 +184,19 @@ dashboardServer.on('upgrade', (req, socket, head) => {
   });
 });
 
-// Fix circular ref: point all sessions' broadcasters at the real one
-for (const [tabId, session] of sessionManager.sessions) {
-  session.broadcaster = { broadcast(msg) { if (msg.type && (msg.type.startsWith('chat:') || msg.type.startsWith('ask:'))) msg.tabId = tabId; broadcaster.broadcast(msg); } };
-}
-sessionManager.broadcaster = broadcaster;
 cliSessionManager.broadcaster = broadcaster;
 
 // Wire CLI settings getter for proxy model mapping
 createProxyRouter._cliSettingsGetter = (instanceId) => cliSessionManager.getSettingsByInstanceId(instanceId);
 
 // Initialize MCP Server Manager
-mcp.init({ broadcaster, store, claudeSession: sessionManager, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
+mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
 
-ruleHandler.init({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
+ruleHandler.init({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
 // Mount REST API
-dashboardApp.use('/api', createApiRouter({ broadcaster, sessionManager, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN, cliSessionManager }));
+dashboardApp.use('/api', createApiRouter({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN, cliSessionManager }));
 
 // Restart endpoint (auth handled by middleware)
 dashboardApp.post('/api/restart', (req, res) => {
@@ -228,13 +253,11 @@ killStalePortProcesses();
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
   dashboardServer.listen(DASHBOARD_PORT, () => {
-    sessionManager.setReady();
     console.log('');
     console.log('  Claude Code API Proxy running.');
     console.log('');
     console.log(`  Proxy:     http://127.0.0.1:${PROXY_PORT} (localhost only)`);
     console.log(`  Dashboard: http://localhost:${DASHBOARD_PORT}`);
-    console.log(`  API:       http://localhost:${DASHBOARD_PORT}/api/run`);
     console.log(`  Upstream:  ${TARGET_URL}`);
     console.log('');
     if (AUTH_TOKEN_SOURCE === 'generated') {

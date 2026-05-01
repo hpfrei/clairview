@@ -8,71 +8,56 @@ class InteractionStore {
     this.interactions = new Map();
     this.order = [];
     this.maxSize = maxSize;
-    this.seqMap = new Map(); // interaction id -> sequence number
     this.seq = 0;
 
-    // Ensure root dir exists, derive session id from existing dirs
+    // Per-CLI-session disk storage
+    this.sessionMap = new Map();   // instanceId → sessId
+    this.sessionSeqs = new Map();  // sessId → seq counter
+    this.filePaths = new Map();    // interaction id → absolute file path
+
     fs.mkdirSync(INTERACTIONS_DIR, { recursive: true });
-    this.sessionId = this._nextSessionId();
-    this._ensureSessionDir();
+    this._purgeNumericDirs();
   }
 
-  _nextSessionId() {
+  _purgeNumericDirs() {
     try {
-      const ids = fs.readdirSync(INTERACTIONS_DIR)
-        .map(Number)
-        .filter(n => !isNaN(n) && n > 0);
-      return ids.length > 0 ? Math.max(...ids) + 1 : 1;
-    } catch {
-      return 1;
-    }
-  }
-
-  _ensureSessionDir() {
-    this.sessionDir = path.join(INTERACTIONS_DIR, String(this.sessionId));
-    fs.mkdirSync(this.sessionDir, { recursive: true });
-  }
-
-  _isSessionEmpty(id) {
-    const dir = path.join(INTERACTIONS_DIR, String(id));
-    try {
-      const files = fs.readdirSync(dir).filter(f => f !== 'meta.json');
-      return files.length === 0;
-    } catch {
-      return true;
-    }
-  }
-
-  _purgeEmpty() {
-    try {
-      const ids = fs.readdirSync(INTERACTIONS_DIR)
-        .map(Number)
-        .filter(n => !isNaN(n) && n > 0 && n !== this.sessionId);
-      for (const id of ids) {
-        if (this._isSessionEmpty(id)) {
-          this._deleteSessionDir(id);
+      const entries = fs.readdirSync(INTERACTIONS_DIR);
+      for (const name of entries) {
+        if (/^\d+$/.test(name)) {
+          fs.rmSync(path.join(INTERACTIONS_DIR, name), { recursive: true, force: true });
         }
       }
     } catch {}
   }
 
-  _deleteSessionDir(id) {
-    const dir = path.join(INTERACTIONS_DIR, String(id));
+  registerSession(instanceId, sessId) {
+    this.sessionMap.set(instanceId, sessId);
+    this.sessionSeqs.set(sessId, 0);
+    const dir = path.join(INTERACTIONS_DIR, sessId);
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  unregisterSession(instanceId) {
+    this.sessionMap.delete(instanceId);
+  }
+
+  deleteSessionData(sessId) {
+    const dir = path.join(INTERACTIONS_DIR, sessId);
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {}
+    this.sessionSeqs.delete(sessId);
   }
 
   add(interaction) {
     if (this.order.length >= this.maxSize) {
       const oldestId = this.order.shift();
       this.interactions.delete(oldestId);
-      this.seqMap.delete(oldestId);
+      this.filePaths.delete(oldestId);
     }
     this.interactions.set(interaction.id, interaction);
     this.order.push(interaction.id);
     this.seq++;
-    this.seqMap.set(interaction.id, this.seq);
   }
 
   get(id) {
@@ -86,8 +71,13 @@ class InteractionStore {
   save(id) {
     const interaction = this.interactions.get(id);
     if (!interaction) return;
-    const seqNum = this.seqMap.get(id);
-    if (!seqNum) return;
+
+    const sessId = this.sessionMap.get(interaction.instanceId);
+    if (!sessId) return;
+
+    let seqNum = this.sessionSeqs.get(sessId) || 0;
+    seqNum++;
+    this.sessionSeqs.set(sessId, seqNum);
 
     const fileContent = {
       request: {
@@ -111,116 +101,11 @@ class InteractionStore {
       },
     };
 
-    const filePath = path.join(this.sessionDir, `${seqNum}.json`);
+    const filePath = path.join(INTERACTIONS_DIR, sessId, `${seqNum}.json`);
+    this.filePaths.set(id, filePath);
     fs.writeFile(filePath, JSON.stringify(fileContent, null, 2), (err) => {
-      if (err) console.error(`Failed to write interaction ${seqNum}:`, err.message);
+      if (err) console.error(`Failed to write interaction ${sessId}/${seqNum}:`, err.message);
     });
-  }
-
-  saveSessionMeta(claudeSessionId) {
-    const metaPath = path.join(this.sessionDir, 'meta.json');
-    const meta = { claudeSessionId, updatedAt: new Date().toISOString() };
-    fs.writeFile(metaPath, JSON.stringify(meta, null, 2), (err) => {
-      if (err) console.error(`Failed to write session meta:`, err.message);
-    });
-  }
-
-  listSessions() {
-    try {
-      const dirs = fs.readdirSync(INTERACTIONS_DIR)
-        .map(Number)
-        .filter(n => !isNaN(n) && n > 0)
-        .sort((a, b) => b - a); // newest first
-
-      const sessions = [];
-      for (const id of dirs) {
-        const dir = path.join(INTERACTIONS_DIR, String(id));
-        const metaPath = path.join(dir, 'meta.json');
-        let meta = {};
-        try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch {}
-
-        // Count interaction files (exclude meta.json)
-        let count = 0;
-        try {
-          count = fs.readdirSync(dir).filter(f => f !== 'meta.json').length;
-        } catch {}
-
-        // Skip empty sessions unless it's the active one
-        if (count === 0 && id !== this.sessionId) continue;
-
-        // Get timestamp from dir stat
-        let timestamp = null;
-        try {
-          const stat = fs.statSync(dir);
-          timestamp = stat.mtime.toISOString();
-        } catch {}
-
-        sessions.push({
-          id,
-          claudeSessionId: meta.claudeSessionId || null,
-          interactionCount: count,
-          timestamp,
-          active: id === this.sessionId,
-        });
-      }
-      return sessions;
-    } catch {
-      return [];
-    }
-  }
-
-  loadSession(id) {
-    const dir = path.join(INTERACTIONS_DIR, String(id));
-    if (!fs.existsSync(dir)) return null;
-
-    // Read meta
-    const metaPath = path.join(dir, 'meta.json');
-    let meta = {};
-    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch {}
-
-    // Read interaction files in order
-    const files = fs.readdirSync(dir)
-      .filter(f => f !== 'meta.json' && f.endsWith('.json'))
-      .map(f => ({ name: f, num: parseInt(f, 10) }))
-      .filter(f => !isNaN(f.num))
-      .sort((a, b) => a.num - b.num);
-
-    const interactions = [];
-    for (const f of files) {
-      try {
-        const data = JSON.parse(fs.readFileSync(path.join(dir, f.name), 'utf-8'));
-        interactions.push(data);
-      } catch {}
-    }
-
-    return { meta, interactions };
-  }
-
-  switchTo(id) {
-    // Clear in-memory state and point to existing session
-    this.interactions.clear();
-    this.order = [];
-    this.seqMap.clear();
-    this.seq = 0;
-    this.sessionId = id;
-    this._ensureSessionDir();
-
-    // Count existing files to resume seq numbering
-    try {
-      const files = fs.readdirSync(this.sessionDir)
-        .filter(f => f !== 'meta.json' && f.endsWith('.json'));
-      this.seq = files.length;
-    } catch {}
-  }
-
-  newSession() {
-    this._purgeEmpty();
-    this.interactions.clear();
-    this.order = [];
-    this.seqMap.clear();
-    this.seq = 0;
-    this.sessionId = this._nextSessionId();
-    this._ensureSessionDir();
   }
 
   removeByInstanceIds(instanceIds) {
@@ -233,25 +118,15 @@ class InteractionStore {
       }
     }
     for (const id of toRemove) {
-      const seqNum = this.seqMap.get(id);
-      if (seqNum) {
-        const filePath = path.join(this.sessionDir, `${seqNum}.json`);
+      const filePath = this.filePaths.get(id);
+      if (filePath) {
         try { fs.unlinkSync(filePath); } catch {}
+        this.filePaths.delete(id);
       }
       this.interactions.delete(id);
-      this.seqMap.delete(id);
     }
     this.order = this.order.filter(id => !toRemove.includes(id));
     return toRemove.length;
-  }
-
-  deleteSession(id) {
-    // Can't delete active session
-    if (id === this.sessionId) return false;
-    const dir = path.join(INTERACTIONS_DIR, String(id));
-    if (!fs.existsSync(dir)) return false;
-    this._deleteSessionDir(id);
-    return true;
   }
 }
 

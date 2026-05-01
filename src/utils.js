@@ -111,8 +111,8 @@ function getActiveProcessCount() {
 }
 
 function getInstances() {
-  return Array.from(_activeProcesses.values()).map(({ instanceId, profileName, spawnedAt, status, cwd }) => ({
-    instanceId, profileName, spawnedAt, status, cwd: cwd || null,
+  return Array.from(_activeProcesses.values()).map(({ instanceId, spawnedAt, status, cwd }) => ({
+    instanceId, spawnedAt, status, cwd: cwd || null,
   }));
 }
 
@@ -121,25 +121,21 @@ function getInstanceContext(instanceId) {
   return entry?.sourceContext || null;
 }
 
-function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, dashboardPort, authToken, instanceId, sourceContext, extraEnv }) {
+function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
-    const profile = profileName ? `/p/${encodeURIComponent(profileName)}` : '';
-    const instance = `/i/${encodeURIComponent(instanceId)}`;
-    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}${profile}${instance}`;
+    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
-  if (disableAutoMemory) {
-    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
-  }
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
   env.VISTACLAIR_INSTANCE_ID = instanceId;
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
-  _activeProcesses.set(instanceId, { proc, instanceId, profileName, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
+  _activeProcesses.set(instanceId, { proc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
   proc.on('exit', () => {
     const entry = _activeProcesses.get(instanceId);
@@ -156,7 +152,7 @@ function spawnClaude(args, { cwd, proxyPort, profileName, disableAutoMemory, das
 /**
  * Spawn `claude` in interactive PTY mode with the proxy URL injected.
  */
-function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, disableAutoMemory, dashboardPort, authToken, extraEnv }) {
+function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
@@ -164,9 +160,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
-  if (disableAutoMemory) {
-    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
-  }
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
   env.VISTACLAIR_INSTANCE_ID = instanceId;
@@ -179,7 +173,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
     env,
   });
 
-  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, profileName: null, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
+  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
   ptyProc.onExit(() => {
     const entry = _activeProcesses.get(instanceId);
@@ -414,8 +408,8 @@ function processUploadedFiles(toolUseId, files, answer) {
     const filePath = path.join(uploadDir, safeName);
     fs.writeFileSync(filePath, buffer);
 
-    // Relative path from project root
-    const relPath = `_uploads/${toolUseId}/${safeName}`;
+    // Relative path from project root (files live under outputs/)
+    const relPath = `outputs/_uploads/${toolUseId}/${safeName}`;
     byQuestion[f.questionId].push(relPath);
   }
 

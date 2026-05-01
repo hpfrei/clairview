@@ -20,6 +20,7 @@ class CliSession {
     this.pty = null;
     this.cwd = null;
     this.tabId = null;
+    this.sessId = null;
     this.title = null;
     this.settings = { ...DEFAULT_SETTINGS };
     this.status = 'idle';
@@ -42,6 +43,8 @@ class CliSession {
 
     this.cwd = cwd;
     this.status = 'running';
+    this.sessId = 'sess-' + Date.now();
+    this.store.registerSession(this.instanceId, this.sessId);
 
     const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];
     if (resume) args.push('--continue');
@@ -62,7 +65,6 @@ class CliSession {
       sourceContext: { tabId: this.tabId },
       cols: cols || 80,
       rows: rows || 24,
-      disableAutoMemory: this.settings.disableAutoMemory !== false,
       dashboardPort: this._dashboardPort,
       authToken: this._authToken,
     });
@@ -79,6 +81,47 @@ class CliSession {
 
     this.pty.onExit(({ exitCode }) => {
       this._cleanupMcpConfig();
+      this.store.unregisterSession(this.instanceId);
+      this.status = 'exited';
+      this.pty = null;
+      this.broadcaster.broadcast({ type: 'cli:exit', tabId: this.tabId, exitCode });
+    });
+
+    this.broadcaster.broadcast({
+      type: 'cli:spawned',
+      tabId: this.tabId,
+      cwd: this.cwd,
+      title: this.title,
+      settings: this.settings,
+    });
+  }
+
+  spawnShell(cwd, cols, rows) {
+    if (this.running) this.kill();
+
+    this.cwd = cwd;
+    this.status = 'running';
+    this._scrollback = '';
+
+    const shell = process.env.SHELL || '/bin/bash';
+    const pty = require('node-pty');
+    this.pty = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd,
+      env: { ...process.env },
+    });
+
+    this.pty.onData((data) => {
+      this._scrollback += data;
+      if (this._scrollback.length > SCROLLBACK_LIMIT) {
+        this._scrollback = this._scrollback.slice(-SCROLLBACK_LIMIT);
+      }
+      this.broadcaster.broadcast({ type: 'cli:output', tabId: this.tabId, data });
+    });
+
+    this.pty.onExit(({ exitCode }) => {
       this.status = 'exited';
       this.pty = null;
       this.broadcaster.broadcast({ type: 'cli:exit', tabId: this.tabId, exitCode });
@@ -164,6 +207,7 @@ class CliSession {
     env.VISTACLAIR_DASHBOARD_PORT = String(this._dashboardPort || process.env.DASHBOARD_PORT || '3457');
     env.VISTACLAIR_AUTH_TOKEN = String(this._authToken || process.env.AUTH_TOKEN || '');
     env.VISTACLAIR_SERVER_SLUG = mcpServers.INTEGRATED_SLUG;
+    env.VISTACLAIR_INSTANCE_ID = this.instanceId;
 
     const config = {
       mcpServers: {

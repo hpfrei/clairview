@@ -13,40 +13,6 @@ const KNOWN_TOOLS = [
   'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger',
 ];
 
-const BUILTIN_PROFILES = {
-  full: {
-    name: 'full', label: 'Full', description: 'All tools allowed, no permission prompts', builtin: true,
-    model: null, effort: null, permissionMode: 'bypassPermissions',
-    allowedTools: [...KNOWN_TOOLS], disabledTools: [], disableSlashCommands: false,
-    bare: false, disableAutoMemory: true,
-    maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
-  },
-  safe: {
-    name: 'safe', label: 'Safe', description: 'No file writes or shell execution', builtin: true,
-    model: null, effort: null, permissionMode: 'acceptEdits',
-    disabledTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'CronCreate', 'CronDelete', 'EnterWorktree', 'ExitWorktree'],
-    disableSlashCommands: false, bare: false, disableAutoMemory: true,
-    maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
-  },
-  readonly: {
-    name: 'readonly', label: 'Read-only', description: 'Read and search only', builtin: true,
-    model: null, effort: null, permissionMode: 'plan',
-    disabledTools: KNOWN_TOOLS.filter(t => !['Read', 'Glob', 'Grep', 'AskUserQuestion'].includes(t)),
-    disableSlashCommands: true, bare: false, disableAutoMemory: true,
-    maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
-  },
-  minimal: {
-    name: 'minimal', label: 'Minimal', description: 'Absolute minimum for code reading', builtin: true,
-    model: null, effort: null, permissionMode: 'plan',
-    disabledTools: KNOWN_TOOLS.filter(t => !['Read', 'Glob', 'Grep'].includes(t)),
-    disableSlashCommands: true, bare: false, disableAutoMemory: true,
-    maxTurns: null, maxBudgetUsd: null, appendSystemPrompt: null, systemPrompt: null,
-  },
-};
-
-// Backward compat alias
-const PRESETS = BUILTIN_PROFILES;
-
 const HOOK_EVENTS = [
   'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
   'SessionStart', 'Notification', 'PreCompact', 'PostCompact',
@@ -66,135 +32,6 @@ const KNOWN_SKILLS = [
   { name: 'memory', description: "Manage Claude's project memory (CLAUDE.md)" },
 ];
 
-// --- Profile management (multi-profile) ---
-
-const VALID_EFFORTS = ['low', 'medium', 'high', 'max'];
-const VALID_PERMISSIONS = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'];
-
-function profilesDir(baseDir) {
-  return path.join(baseDir, 'capabilities', 'profiles');
-}
-
-function profileFilePath(baseDir, name) {
-  return path.join(profilesDir(baseDir), `${name}.json`);
-}
-
-function activeFilePath(baseDir) {
-  return path.join(baseDir, 'capabilities', 'active.json');
-}
-
-function listProfiles(baseDir) {
-  const builtins = Object.values(BUILTIN_PROFILES).map(p => JSON.parse(JSON.stringify(p)));
-  const dir = profilesDir(baseDir);
-  let customs = [];
-  try {
-    if (fs.existsSync(dir)) {
-      customs = fs.readdirSync(dir)
-        .filter(f => f.endsWith('.json'))
-        .map(f => {
-          try {
-            const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
-            return validateProfile(data);
-          } catch { return null; }
-        })
-        .filter(Boolean)
-        .filter(p => !BUILTIN_PROFILES[p.name]); // don't shadow builtins
-    }
-  } catch {}
-  return [...builtins, ...customs];
-}
-
-function loadProfile(baseDir, name) {
-  if (BUILTIN_PROFILES[name]) {
-    return JSON.parse(JSON.stringify(BUILTIN_PROFILES[name]));
-  }
-  const file = profileFilePath(baseDir, name);
-  try {
-    if (fs.existsSync(file)) {
-      return validateProfile(JSON.parse(fs.readFileSync(file, 'utf-8')));
-    }
-  } catch {}
-  return null;
-}
-
-function loadActiveProfile(baseDir) {
-  // Migration: old single-file profile.json
-  const oldFile = path.join(baseDir, 'capabilities', 'profile.json');
-  const actFile = activeFilePath(baseDir);
-  if (fs.existsSync(oldFile) && !fs.existsSync(actFile)) {
-    try {
-      const old = JSON.parse(fs.readFileSync(oldFile, 'utf-8'));
-      const migrated = validateProfile({ ...old, name: old.name || 'custom', label: old.label || 'Custom (migrated)' });
-      if (!BUILTIN_PROFILES[migrated.name]) {
-        const dir = profilesDir(baseDir);
-        ensureDir(dir);
-        fs.writeFileSync(profileFilePath(baseDir, migrated.name), JSON.stringify(migrated, null, 2));
-        setActiveProfile(baseDir, migrated.name);
-      } else {
-        setActiveProfile(baseDir, migrated.name);
-      }
-      fs.unlinkSync(oldFile);
-      return loadProfile(baseDir, migrated.name) || JSON.parse(JSON.stringify(BUILTIN_PROFILES.full));
-    } catch {}
-  }
-
-  // Normal load
-  try {
-    if (fs.existsSync(actFile)) {
-      const { active } = JSON.parse(fs.readFileSync(actFile, 'utf-8'));
-      if (active) {
-        const profile = loadProfile(baseDir, active);
-        if (profile) return profile;
-      }
-    }
-  } catch (err) { console.error('Error loading active profile:', err); }
-  return JSON.parse(JSON.stringify(BUILTIN_PROFILES.full));
-}
-
-function saveProfile(baseDir, profile) {
-  const validated = validateProfile(profile);
-  if (!isValidName(validated.name)) return false;
-  // Cannot overwrite builtin names
-  if (BUILTIN_PROFILES[validated.name]) return false;
-  const dir = profilesDir(baseDir);
-  ensureDir(dir);
-  fs.writeFileSync(profileFilePath(baseDir, validated.name), JSON.stringify(validated, null, 2));
-  return true;
-}
-
-function deleteProfile(baseDir, name) {
-  if (!isValidName(name)) return false;
-  if (BUILTIN_PROFILES[name]) return false;
-  const file = profileFilePath(baseDir, name);
-  if (!fs.existsSync(file)) return false;
-  fs.unlinkSync(file);
-  // If deleted profile was active, reset to full
-  try {
-    const actFile = activeFilePath(baseDir);
-    if (fs.existsSync(actFile)) {
-      const { active } = JSON.parse(fs.readFileSync(actFile, 'utf-8'));
-      if (active === name) setActiveProfile(baseDir, 'full');
-    }
-  } catch (err) { console.error('Error resetting active profile after delete:', err); }
-  return true;
-}
-
-function setActiveProfile(baseDir, name) {
-  if (!BUILTIN_PROFILES[name] && !isValidName(name)) return false;
-  const dir = path.join(baseDir, 'capabilities');
-  ensureDir(dir);
-  fs.writeFileSync(activeFilePath(baseDir), JSON.stringify({ active: name }, null, 2));
-}
-
-function duplicateProfile(baseDir, sourceName, newName) {
-  if (!isValidName(newName)) return false;
-  if (BUILTIN_PROFILES[newName]) return false;
-  const source = loadProfile(baseDir, sourceName);
-  if (!source) return false;
-  const copy = { ...source, name: newName, label: newName, builtin: false };
-  return saveProfile(baseDir, copy);
-}
-
 // Provider keys that support native web search (used by UI + adapter)
 const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
 
@@ -207,35 +44,6 @@ const PROVIDER_ADAPTER_MAP = {
   moonshot: 'openai',
   ollama: 'openai',
 };
-
-function validateProfile(p) {
-  const modelDef = typeof p.modelDef === 'string' && p.modelDef.trim() ? p.modelDef.trim() : null;
-  let disabledTools = Array.isArray(p.disabledTools) ? p.disabledTools.filter(t => KNOWN_TOOLS.includes(t) || t.startsWith('mcp__')) : [];
-  // WebFetch is Anthropic server-side only — force-disable for non-Anthropic profiles
-  if (modelDef && !disabledTools.includes('WebFetch')) {
-    disabledTools.push('WebFetch');
-  }
-  return {
-    name: p.name || 'custom',
-    label: p.name || 'custom',
-    description: '',
-    builtin: !!p.builtin,
-    model: p.model || null,
-    effort: VALID_EFFORTS.includes(p.effort) ? p.effort : null,
-    permissionMode: VALID_PERMISSIONS.includes(p.permissionMode) ? p.permissionMode : 'default',
-    allowedTools: Array.isArray(p.allowedTools) ? p.allowedTools.filter(t => KNOWN_TOOLS.includes(t) || t.startsWith('mcp__')) : [],
-    disabledTools,
-    disableSlashCommands: !!p.disableSlashCommands,
-    bare: !!p.bare,
-    disableAutoMemory: p.disableAutoMemory !== false,
-    maxTurns: typeof p.maxTurns === 'number' && p.maxTurns > 0 ? p.maxTurns : null,
-    maxBudgetUsd: typeof p.maxBudgetUsd === 'number' && p.maxBudgetUsd > 0 ? p.maxBudgetUsd : null,
-    appendSystemPrompt: typeof p.appendSystemPrompt === 'string' && p.appendSystemPrompt.trim() ? p.appendSystemPrompt.trim() : null,
-    systemPrompt: typeof p.systemPrompt === 'string' && p.systemPrompt.trim() ? p.systemPrompt.trim() : null,
-    mcpServers: Array.isArray(p.mcpServers) ? p.mcpServers.filter(s => typeof s === 'string') : [],
-    modelDef,
-  };
-}
 
 // --- Generic Markdown entity CRUD factory ---
 
@@ -1201,19 +1009,9 @@ module.exports = {
   KNOWN_TOOLS,
   WEB_SEARCH_PROVIDERS,
   PROVIDER_ADAPTER_MAP,
-  BUILTIN_PROFILES,
-  PRESETS, // backward compat alias
   KNOWN_SKILLS,
   HOOK_EVENTS,
   MATCHER_EVENTS,
-  listProfiles,
-  loadProfile,
-  loadActiveProfile,
-  saveProfile,
-  deleteProfile,
-  setActiveProfile,
-  duplicateProfile,
-  validateProfile,
   listCommands: commandsCrud.list,
   readCommand: commandsCrud.read,
   saveCommand: commandsCrud.save,

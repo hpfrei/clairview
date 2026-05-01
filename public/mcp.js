@@ -1,23 +1,106 @@
-// === MCP Tool Manager — single integrated server, tool-centric UI ===
+// === MCP Tool Manager — inline collapsible items with Monaco editors ===
 (function() {
   'use strict';
   const { state, sendWs, escHtml, showAlert } = window.dashboard;
 
   // --- State ---
   const mcp = {
-    tools: [],           // tool entries from meta.json
-    status: 'stopped',   // integrated server status
+    tools: [],
+    status: 'stopped',
     needsRestart: false,
-    meta: null,          // server meta (name, env, secrets)
-    editing: null,       // slug of tool being edited
-    editTool: null,      // working copy of the tool being edited
-    liveTools: [],       // tools discovered from running server (for testing)
+    meta: null,
+    expandedSlug: null,
+    liveTools: [],
     testResult: null,
     testHistory: [],
-    output: [],
-    deps: [],
-    depOutput: '',
   };
+
+  // --- Monaco infrastructure ---
+  let monacoReady = false;
+  let monacoReadyPromise = null;
+  let currentEditor = null;
+  let currentEditorSlug = null;
+  let isEditorDirty = false;
+
+  function getMonacoTheme() {
+    const t = localStorage.getItem('theme') || 'bright';
+    return t === 'dark' ? 'vs-dark' : 'vs';
+  }
+
+  function ensureMonaco() {
+    if (monacoReady) return Promise.resolve();
+    if (monacoReadyPromise) return monacoReadyPromise;
+    monacoReadyPromise = new Promise((resolve) => {
+      if (typeof window.require === 'undefined' || !window.require.config) {
+        console.warn('Monaco loader not available');
+        resolve();
+        return;
+      }
+      window.require.config({
+        paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' }
+      });
+      window.require(['vs/editor/editor.main'], function() {
+        monacoReady = true;
+        resolve();
+      });
+    });
+    return monacoReadyPromise;
+  }
+
+  function updateEditorHeight() {
+    if (!currentEditor) return;
+    const container = currentEditor.getDomNode()?.parentElement;
+    if (!container) return;
+    const lineCount = currentEditor.getModel().getLineCount();
+    const lineHeight = currentEditor.getOption(monaco.editor.EditorOption.lineHeight);
+    const height = Math.min(500, Math.max(120, lineCount * lineHeight + 20));
+    container.style.height = height + 'px';
+    currentEditor.layout();
+  }
+
+  function createEditor(container, source, slug, readOnly) {
+    disposeEditor();
+    currentEditorSlug = slug;
+    isEditorDirty = false;
+
+    currentEditor = monaco.editor.create(container, {
+      value: source,
+      language: 'javascript',
+      theme: getMonacoTheme(),
+      readOnly: !!readOnly,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      lineNumbers: 'on',
+      fontSize: 12,
+      fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+      automaticLayout: true,
+      scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+      overviewRulerLanes: 0,
+      renderLineHighlight: 'none',
+      folding: true,
+      wordWrap: 'on',
+    });
+
+    if (!readOnly) {
+      currentEditor.onDidChangeModelContent(() => {
+        isEditorDirty = true;
+        const saveBtn = document.querySelector(`.rule-save-btn[data-slug="${slug}"]`);
+        if (saveBtn) saveBtn.disabled = false;
+      });
+    }
+
+    updateEditorHeight();
+    currentEditor.onDidChangeModelContent(updateEditorHeight);
+  }
+
+  function disposeEditor() {
+    if (currentEditor) {
+      currentEditor.dispose();
+      currentEditor = null;
+      currentEditorSlug = null;
+      isEditorDirty = false;
+    }
+  }
 
   // --- WS Message Dispatch ---
   function handleMessage(msg) {
@@ -26,23 +109,24 @@
         mcp.tools = msg.tools || [];
         renderPanel();
         break;
-      case 'mcp:tool:saved':
-        mcp.editTool = msg.tool;
-        mcp.editing = msg.tool.slug;
-        renderModalHeader();
+      case 'mcp:tool:saved': {
+        const saved = msg.tool;
+        if (saved?.slug && !mcp.expandedSlug) {
+          mcp.expandedSlug = saved.slug;
+        }
         break;
+      }
       case 'mcp:status':
         mcp.status = msg.status || 'stopped';
         mcp.needsRestart = !!msg.needsRestart;
-        renderPanel();
-        if (mcp.editing) renderModalHeader();
+        renderStatusBar();
         break;
       case 'mcp:meta':
         mcp.meta = msg.meta;
         break;
       case 'mcp:tools':
         mcp.liveTools = msg.tools || [];
-        if (mcp.editing) renderTestSection();
+        if (mcp.expandedSlug) renderTestSection(mcp.expandedSlug);
         break;
       case 'mcp:test:result':
         mcp.testResult = msg;
@@ -54,23 +138,32 @@
           result: msg.result,
           error: msg.error,
         });
-        if (mcp.editing) renderTestResult();
+        if (mcp.expandedSlug) renderTestResult();
         break;
+      case 'mcp:tool:source': {
+        if (msg.slug !== mcp.expandedSlug) break;
+        const container = document.querySelector(`.rule-editor-container[data-slug="${msg.slug}"]`);
+        if (!container || !monacoReady) break;
+        container.innerHTML = '';
+        createEditor(container, msg.source, msg.slug, msg.builtin);
+        break;
+      }
+      case 'mcp:tool:source-saved':
+        isEditorDirty = false;
+        break;
+      case 'mcp:tool:generating': {
+        const btn = document.querySelector(`.rule-edit-submit[data-slug="${msg.slug}"]`);
+        if (btn) { btn.textContent = 'Generating…'; btn.disabled = true; }
+        break;
+      }
       case 'mcp:error':
         showAlert(msg.error);
-        break;
-      case 'mcp:output':
-        mcp.output.push({
-          ts: new Date().toLocaleTimeString('en-US', { hour12: false }),
-          data: msg.data,
-          stream: msg.stream,
-        });
-        break;
-      case 'mcp:deps:list':
-        mcp.deps = msg.deps || [];
-        break;
-      case 'mcp:dep-progress':
-        mcp.depOutput += msg.output;
+        // Reset AI button if it was generating
+        const aiBtn = document.querySelector('.rule-edit-submit[disabled]');
+        if (aiBtn && aiBtn.textContent === 'Generating…') {
+          aiBtn.textContent = 'Apply with AI';
+          aiBtn.disabled = false;
+        }
         break;
     }
   }
@@ -98,12 +191,12 @@
     </div>`;
 
     // Server status bar
-    html += `<div class="mcp-status-bar">
+    html += `<div class="mcp-status-bar" id="mcpStatusBar">
       <span class="mcp-status ${statusClass}"></span>
       <span>${statusLabel}</span>
       ${mcp.needsRestart ? '<span class="mcp-restart-badge">restart needed</span>' : ''}
       <div style="margin-left:auto;display:flex;gap:4px">
-        <button class="cap-new-btn" id="mcpRestart" title="Restart the integrated server">${mcp.needsRestart ? '↻ Restart Now' : '↻ Restart'}</button>
+        <button class="cap-new-btn" id="mcpRestart" title="Restart MCP server">${mcp.needsRestart ? '↻ Restart Now' : '↻ Restart'}</button>
       </div>
     </div>`;
 
@@ -117,215 +210,205 @@
     if (mcp.tools.length === 0) {
       html += '<div class="mcp-empty">No tools yet. Click <strong>+ New Tool</strong> to create one.</div>';
     } else {
-      html += '<div class="cap-list" id="mcpToolList">';
+      html += '<div id="mcpToolList">';
       for (const t of mcp.tools) {
         const bi = t.builtin;
-        html += `<div class="cap-list-item mcp-tool-row">
-          <label class="mcp-tool-toggle" title="${bi ? 'Built-in (always enabled)' : t.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
-            <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${t.slug}" class="mcp-tool-cb" ${bi ? 'disabled' : ''}>
-          </label>
-          <span class="cap-item-name${t.enabled ? '' : ' mcp-disabled'}">${escHtml(t.name)}${bi ? ' <span class="ref-tag tag-ro" style="font-size:9px;margin-left:4px">built-in</span>' : ''}</span>
-          <span class="cap-item-desc">${escHtml(t.description || '')}</span>
-          <span class="cap-list-actions">
-            <button class="cap-edit-btn mcp-tool-edit" data-slug="${t.slug}" title="${bi ? 'View tool' : 'Edit tool'}">&#9998;</button>
-            ${bi ? '' : `<button class="cap-del-btn mcp-tool-del" data-slug="${t.slug}" title="Delete tool">&#10005;</button>`}
-          </span>
-        </div>`;
+        const isExpanded = mcp.expandedSlug === t.slug;
+        html += renderToolItem(t, bi, isExpanded);
       }
       html += '</div>';
     }
 
     panel.innerHTML = html;
     attachPanelEvents(panel);
+
+    if (mcp.expandedSlug) {
+      ensureMonaco().then(() => {
+        if (mcp.expandedSlug && monacoReady) {
+          sendWs({ type: 'mcp:tool:source', slug: mcp.expandedSlug });
+        }
+      });
+      const tool = mcp.tools.find(t => t.slug === mcp.expandedSlug);
+      if (tool && mcp.status === 'running') {
+        sendWs({ type: 'mcp:tools' });
+      }
+    }
   }
+
+  function renderToolItem(t, bi, isExpanded) {
+    const paramSummary = (t.params || []).map(p =>
+      `<span class="mcp-param-chip">${escHtml(p.name)}<span class="mcp-param-type">${escHtml(p.type || 'string')}</span>${p.required ? '' : '?'}</span>`
+    ).join(' ');
+
+    return `<div class="mcp-tool-item${isExpanded ? ' expanded' : ''}${t.enabled ? '' : ' disabled'}" data-slug="${escHtml(t.slug)}">
+      <div class="mcp-tool-item-header">
+        <label class="rule-toggle" title="${bi ? 'Built-in (always enabled)' : t.enabled ? 'Enabled' : 'Disabled'}">
+          <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${escHtml(t.slug)}" class="mcp-toggle-cb" ${bi ? 'disabled' : ''}>
+          <span class="rule-toggle-slider"></span>
+        </label>
+        <div class="mcp-tool-item-info">
+          <span class="mcp-tool-item-name">${escHtml(t.name)}</span>
+          ${bi ? '<span class="ref-tag tag-ro" style="font-size:9px">built-in</span>' : ''}
+        </div>
+        <span class="cap-item-desc">${escHtml(t.description || '')}</span>
+        ${bi ? '' : `<button class="rule-del-btn mcp-del-btn" data-slug="${escHtml(t.slug)}" title="Delete tool">&#10005;</button>`}
+      </div>
+      <div class="mcp-tool-item-detail" style="display:${isExpanded ? 'block' : 'none'}">
+        ${paramSummary ? `<div class="mcp-detail-params">${paramSummary}</div>` : ''}
+        <div class="rule-source-section">
+          <div class="rule-source-toolbar">
+            <span class="rule-source-label">Source</span>
+            ${bi ? '' : `<button class="rule-save-btn" data-slug="${escHtml(t.slug)}" disabled>Save</button>`}
+          </div>
+          <div class="rule-editor-container" data-slug="${escHtml(t.slug)}">
+            <div class="rule-editor-loading">Loading editor&hellip;</div>
+          </div>
+        </div>
+        ${bi ? '' : `<div class="rule-edit-row">
+          <textarea class="rule-edit-input" data-slug="${escHtml(t.slug)}" rows="3" placeholder="Describe a change to this tool&hellip;"></textarea>
+          <button class="rule-edit-submit" data-slug="${escHtml(t.slug)}">Apply with AI</button>
+        </div>`}
+        <div class="mcp-test-section" id="mcpTest-${escHtml(t.slug)}"></div>
+      </div>
+    </div>`;
+  }
+
+  function renderStatusBar() {
+    const bar = document.getElementById('mcpStatusBar');
+    if (!bar) return;
+    const running = mcp.status === 'running';
+    const statusClass = running ? 'running' : 'stopped';
+    const statusLabel = mcp.status.charAt(0).toUpperCase() + mcp.status.slice(1);
+    bar.innerHTML = `
+      <span class="mcp-status ${statusClass}"></span>
+      <span>${statusLabel}</span>
+      ${mcp.needsRestart ? '<span class="mcp-restart-badge">restart needed</span>' : ''}
+      <div style="margin-left:auto;display:flex;gap:4px">
+        <button class="cap-new-btn" id="mcpRestart" title="Restart MCP server">${mcp.needsRestart ? '↻ Restart Now' : '↻ Restart'}</button>
+      </div>`;
+    bar.querySelector('#mcpRestart')?.addEventListener('click', () => sendWs({ type: 'mcp:restart' }));
+  }
+
+  // ========== EVENT DELEGATION ==========
 
   function attachPanelEvents(panel) {
     panel.querySelector('#mcpNewTool')?.addEventListener('click', createNewTool);
     panel.querySelector('#mcpRestart')?.addEventListener('click', () => sendWs({ type: 'mcp:restart' }));
-    panel.querySelectorAll('.mcp-tool-cb').forEach(cb => cb.addEventListener('change', () => {
-      sendWs({ type: 'mcp:tool:toggle', slug: cb.dataset.slug, enabled: cb.checked });
-    }));
-    panel.querySelectorAll('.mcp-tool-edit').forEach(btn => btn.addEventListener('click', () => {
-      const tool = mcp.tools.find(t => t.slug === btn.dataset.slug);
-      if (tool) { mcp.editTool = { ...tool }; openToolModal(tool.slug); }
-    }));
-    panel.querySelectorAll('.mcp-tool-del').forEach(btn => btn.addEventListener('click', () => {
-      if (confirm(`Delete tool "${btn.dataset.slug}"? This cannot be undone.`)) {
-        sendWs({ type: 'mcp:tool:delete', slug: btn.dataset.slug });
+
+    const list = panel.querySelector('#mcpToolList');
+    if (!list) return;
+
+    list.addEventListener('click', (e) => {
+      // Toggle switch
+      const toggle = e.target.closest('.mcp-toggle-cb');
+      if (toggle) {
+        e.stopPropagation();
+        sendWs({ type: 'mcp:tool:toggle', slug: toggle.dataset.slug, enabled: toggle.checked });
+        return;
       }
-    }));
+      if (e.target.closest('.rule-toggle')) return;
+
+      // Delete button
+      const delBtn = e.target.closest('.mcp-del-btn');
+      if (delBtn) {
+        e.stopPropagation();
+        if (confirm(`Delete tool "${delBtn.dataset.slug}"? This cannot be undone.`)) {
+          sendWs({ type: 'mcp:tool:delete', slug: delBtn.dataset.slug });
+          if (mcp.expandedSlug === delBtn.dataset.slug) {
+            mcp.expandedSlug = null;
+            disposeEditor();
+          }
+        }
+        return;
+      }
+
+      // Save button
+      const saveBtn = e.target.closest('.rule-save-btn');
+      if (saveBtn) {
+        e.stopPropagation();
+        if (!currentEditor || !isEditorDirty) return;
+        sendWs({ type: 'mcp:tool:save-source', slug: saveBtn.dataset.slug, source: currentEditor.getValue() });
+        saveBtn.disabled = true;
+        return;
+      }
+
+      // AI edit submit
+      const submitBtn = e.target.closest('.rule-edit-submit');
+      if (submitBtn) {
+        e.stopPropagation();
+        const input = submitBtn.parentElement.querySelector('.rule-edit-input');
+        const desc = input?.value?.trim();
+        if (!desc) return;
+        sendWs({ type: 'mcp:tool:ai-edit', slug: submitBtn.dataset.slug, description: desc });
+        input.value = '';
+        return;
+      }
+
+      // Test execute
+      const testBtn = e.target.closest('.mcp-test-exec');
+      if (testBtn) {
+        e.stopPropagation();
+        executeTest(testBtn.dataset.slug);
+        return;
+      }
+
+      // Don't toggle expansion when clicking inside detail area
+      if (e.target.closest('.mcp-tool-item-detail')) return;
+
+      // Click header -> expand/collapse
+      const item = e.target.closest('.mcp-tool-item');
+      if (item) {
+        const slug = item.dataset.slug;
+        const newSlug = mcp.expandedSlug === slug ? null : slug;
+        if (mcp.expandedSlug !== newSlug) disposeEditor();
+        mcp.expandedSlug = newSlug;
+        renderPanel();
+      }
+    });
+
+    // Ctrl+Enter in AI edit input
+    list.addEventListener('keydown', (e) => {
+      if (!(e.key === 'Enter' && (e.ctrlKey || e.metaKey))) return;
+      const input = e.target.closest('.rule-edit-input');
+      if (!input) return;
+      const desc = input.value.trim();
+      if (!desc) return;
+      sendWs({ type: 'mcp:tool:ai-edit', slug: input.dataset.slug, description: desc });
+      input.value = '';
+    });
   }
 
-  // ========== TOOL MODAL ==========
+  // ========== NEW TOOL ==========
 
   function createNewTool() {
-    mcp.editTool = {
-      slug: null,
-      name: '',
+    const name = prompt('Tool name (e.g. my-tool):');
+    if (!name?.trim()) return;
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+    if (slug.length < 2) { showAlert('Name too short.'); return; }
+    const tool = {
+      slug,
+      name: name.trim(),
       description: '',
       enabled: true,
       params: [{ name: 'input', type: 'string', description: '', required: true }],
       handlerBody: 'return {\n    content: [{ type: "text", text: "Result" }],\n  };',
     };
-    openToolModal('__new__');
+    mcp.expandedSlug = slug;
+    sendWs({ type: 'mcp:tool:save', tool });
   }
 
-  function openToolModal(slug) {
-    mcp.editing = slug;
-    mcp.testResult = null;
-    mcp.testHistory = [];
+  // ========== TEST SECTION ==========
 
-    // Request live tools for testing if server is running
-    if (mcp.status === 'running' && slug !== '__new__') sendWs({ type: 'mcp:tools' });
-
-    renderToolModal();
-  }
-
-  function closeToolModal() {
-    mcp.editing = null;
-    mcp.editTool = null;
-    document.getElementById('mcp-modal-root').innerHTML = '';
-  }
-
-  function renderToolModal() {
-    const tool = mcp.editTool;
-    if (!tool) return;
-
-    const root = document.getElementById('mcp-modal-root');
-    root.innerHTML = `<div class="mcp-modal-backdrop" id="mcpToolBackdrop">
-      <div class="mcp-tool-modal">
-        <div class="mcp-tool-modal-header" id="mcpToolHeader"></div>
-        <div class="mcp-tool-modal-body" id="mcpToolBody"></div>
-      </div>
-    </div>`;
-
-    document.getElementById('mcpToolBackdrop')?.addEventListener('click', (e) => {
-      if (e.target.id === 'mcpToolBackdrop') closeToolModal();
-    });
-    document.addEventListener('keydown', toolModalKeyHandler);
-
-    renderModalHeader();
-    renderModalBody();
-  }
-
-  function toolModalKeyHandler(e) {
-    if (!mcp.editing) { document.removeEventListener('keydown', toolModalKeyHandler); return; }
-    if (e.key === 'Escape') closeToolModal();
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (!mcp.editTool?.builtin) saveTool(); }
-  }
-
-  function renderModalHeader() {
-    const el = document.getElementById('mcpToolHeader');
-    if (!el) return;
-    const tool = mcp.editTool;
-    const isNew = mcp.editing === '__new__' && !tool?.name;
-    const isBuiltin = tool?.builtin;
-    const title = isNew ? 'New Tool' : isBuiltin ? 'View Tool: ' + escHtml(tool?.name || mcp.editing) : 'Edit Tool: ' + escHtml(tool?.name || mcp.editing);
-    const tag = isBuiltin ? 'built-in' : '';
-    el.innerHTML = `
-      <h3>${title}${tag ? ` <span class="ref-tag tag-ro" style="font-size:10px;vertical-align:middle">${tag}</span>` : ''}</h3>
-      <div class="mcp-tool-modal-actions">
-        ${isBuiltin ? '' : '<button class="mcp-action-btn primary" id="mcpToolSave">Save</button>'}
-        <button class="mcp-action-btn close-btn" id="mcpToolClose">&times;</button>
-      </div>`;
-    el.querySelector('#mcpToolSave')?.addEventListener('click', saveTool);
-    el.querySelector('#mcpToolClose')?.addEventListener('click', closeToolModal);
-  }
-
-  function renderModalBody() {
-    const el = document.getElementById('mcpToolBody');
-    if (!el) return;
-    const tool = mcp.editTool;
-    if (!tool) return;
-    const ro = tool.builtin;
-
-    const paramRows = (tool.params || []).map((p, i) => `
-      <tr class="mcp-param-row" data-idx="${i}">
-        <td><input type="text" class="mcp-p-name" value="${escHtml(p.name)}" placeholder="param_name" ${ro ? 'readonly' : ''}></td>
-        <td><select class="mcp-p-type" ${ro ? 'disabled' : ''}>
-          ${['string','number','boolean','object','array'].map(t => `<option ${p.type === t ? 'selected' : ''}>${t}</option>`).join('')}
-        </select></td>
-        <td><input type="text" class="mcp-p-desc" value="${escHtml(p.description || '')}" placeholder="Help text for Claude" ${ro ? 'readonly' : ''}></td>
-        <td style="text-align:center"><input type="checkbox" class="mcp-p-req" ${p.required ? 'checked' : ''} ${ro ? 'disabled' : ''}></td>
-        ${ro ? '<td></td>' : '<td><button class="mcp-p-del" title="Remove">&times;</button></td>'}
-      </tr>`).join('');
-
-    const paramNames = (tool.params || []).map(p => p.name).join(', ');
-
-    el.innerHTML = `
-      <div class="mcp-tool-form">
-        <div class="mcp-form-group">
-          <div class="mcp-form-row"><label>Name: <input type="text" id="mcpToolName" value="${escHtml(tool.name)}" placeholder="my-tool" ${ro ? 'readonly' : ''}></label></div>
-          <div class="mcp-form-row"><label style="flex:1">Description: <input type="text" id="mcpToolDesc" value="${escHtml(tool.description || '')}" placeholder="What this tool does — shown to Claude" ${ro ? 'readonly' : ''}></label></div>
-        </div>
-
-        <div class="mcp-form-group">
-          <div class="mcp-form-group-header"><h4>Parameters</h4>${ro ? '' : '<button class="cap-new-btn" id="mcpAddParam" style="font-size:11px">+ Add</button>'}</div>
-          ${ro ? '' : '<div class="mcp-form-hint">Define what Claude passes to your tool. Each parameter becomes a Zod schema entry.</div>'}
-          <table class="mcp-param-table" id="mcpParamTable">
-            <tr><th>Name</th><th>Type</th><th>Description</th><th>Req</th><th></th></tr>
-            ${paramRows}
-          </table>
-        </div>
-
-        <div class="mcp-form-group">
-          <h4>Implementation</h4>
-          ${ro ? '<div class="mcp-form-hint">Built-in tool — read only.</div>' : '<div class="mcp-form-hint">Write the handler body. It receives the parameters as named arguments and must return MCP content.</div>'}
-          ${`<div class="mcp-handler-sig">async (input) => {  <span style="color:var(--text-dim)">// input = { ${paramNames} }</span></div>
-          <textarea id="mcpToolHandler" class="cap-modal-code mcp-handler-editor" spellcheck="false" rows="10" ${ro ? 'readonly' : ''}>${escHtml(tool.handlerBody || 'return {\n    content: [{ type: "text", text: "Result" }],\n  };')}</textarea>
-          <div class="mcp-handler-sig">}</div>`}
-        </div>
-
-        <div class="mcp-form-group" id="mcpTestSection">
-          <h4>Test</h4>
-        </div>
-
-        ${ro ? '' : `<div class="mcp-form-group">
-          <h4>Extra Files</h4>
-          <div class="mcp-form-hint">Add helper modules when your tool logic needs shared utilities, data files, or grows too complex for one file. Import them with relative paths like <code>import { helper } from "../helpers/utils.js";</code> in your handler. Files live in the integrated server directory alongside <code>tools/</code>.</div>
-        </div>`}
-      </div>`;
-
-    // Events (only for non-builtin tools)
-    if (!ro) {
-      el.querySelector('#mcpAddParam')?.addEventListener('click', addParamRow);
-      el.querySelectorAll('.mcp-p-del').forEach(btn => btn.addEventListener('click', () => {
-        btn.closest('tr').remove();
-      }));
-    }
-
-    renderTestSection();
-  }
-
-  function addParamRow() {
-    const table = document.getElementById('mcpParamTable');
-    if (!table) return;
-    const row = document.createElement('tr');
-    row.className = 'mcp-param-row';
-    row.innerHTML = `
-      <td><input type="text" class="mcp-p-name" value="" placeholder="param_name"></td>
-      <td><select class="mcp-p-type">
-        <option>string</option><option>number</option><option>boolean</option><option>object</option><option>array</option>
-      </select></td>
-      <td><input type="text" class="mcp-p-desc" value="" placeholder="Help text for Claude"></td>
-      <td style="text-align:center"><input type="checkbox" class="mcp-p-req" checked></td>
-      <td><button class="mcp-p-del" title="Remove">&times;</button></td>`;
-    row.querySelector('.mcp-p-del')?.addEventListener('click', () => row.remove());
-    table.appendChild(row);
-  }
-
-  // --- Test section ---
-
-  function renderTestSection() {
-    const el = document.getElementById('mcpTestSection');
+  function renderTestSection(slug) {
+    const el = document.getElementById('mcpTest-' + slug);
     if (!el) return;
 
-    const tool = mcp.editTool;
+    const tool = mcp.tools.find(t => t.slug === slug);
     const running = mcp.status === 'running';
     const liveTool = mcp.liveTools.find(t => t.name === tool?.name);
 
     if (!running) {
-      el.innerHTML = '<h4>Test</h4><div class="mcp-form-hint" style="color:var(--yellow)">Start the server and restart after saving to test this tool.</div>';
+      el.innerHTML = '<h4>Test</h4><div class="mcp-form-hint" style="color:var(--yellow)">Start the server to test this tool.</div>';
       return;
     }
 
@@ -355,19 +438,20 @@
     el.innerHTML = `<h4>Test</h4>
       <div class="mcp-test-inline">
         ${paramInputs}
-        <button class="mcp-action-btn primary" id="mcpTestExec">&#9654; Execute</button>
+        <button class="mcp-action-btn primary mcp-test-exec" data-slug="${escHtml(slug)}">&#9654; Execute</button>
       </div>
       <div id="mcpTestResult"></div>`;
 
-    el.querySelector('#mcpTestExec')?.addEventListener('click', executeTest);
     if (mcp.testResult) renderTestResult();
   }
 
-  function executeTest() {
-    const tool = mcp.editTool;
+  function executeTest(slug) {
+    const tool = mcp.tools.find(t => t.slug === slug);
     if (!tool) return;
+    const section = document.getElementById('mcpTest-' + slug);
+    if (!section) return;
     const params = {};
-    document.querySelectorAll('#mcpTestSection [data-param]').forEach(el => {
+    section.querySelectorAll('[data-param]').forEach(el => {
       const name = el.dataset.param;
       const type = el.dataset.type;
       if (type === 'boolean') params[name] = el.checked;
@@ -397,52 +481,6 @@
     </div>`;
   }
 
-  // --- Save ---
-
-  function saveTool() {
-    const tool = collectToolForm();
-    if (!tool) return;
-    // Pass oldSlug so backend can handle renames (delete old file)
-    const oldSlug = mcp.editing !== '__new__' ? mcp.editing : undefined;
-    sendWs({ type: 'mcp:tool:save', tool, oldSlug });
-    // Update local state for immediate feedback
-    mcp.editTool = tool;
-    mcp.editing = tool.slug;
-    renderModalHeader();
-  }
-
-  function collectToolForm() {
-    const name = document.getElementById('mcpToolName')?.value?.trim();
-    if (!name) { showAlert('Tool name is required.'); return null; }
-
-    const description = document.getElementById('mcpToolDesc')?.value?.trim() || '';
-    const handlerBody = document.getElementById('mcpToolHandler')?.value || '';
-
-    const params = [];
-    document.querySelectorAll('#mcpParamTable .mcp-param-row').forEach(row => {
-      const pName = row.querySelector('.mcp-p-name')?.value?.trim();
-      if (!pName) return;
-      params.push({
-        name: pName,
-        type: row.querySelector('.mcp-p-type')?.value || 'string',
-        description: row.querySelector('.mcp-p-desc')?.value?.trim() || '',
-        required: row.querySelector('.mcp-p-req')?.checked !== false,
-      });
-    });
-
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
-
-    return {
-      slug,
-      name,
-      description,
-      params,
-      handlerBody,
-      enabled: mcp.editTool?.enabled !== false,
-    };
-  }
-
   // ========== EXPOSE MODULE ==========
-
   window.mcpModule = { handleMessage };
 })();

@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { Readable } = require('stream');
+const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream');
 const SSEPassthrough = require('./sse-passthrough');
 const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard, getInstanceContext } = require('./utils');
@@ -11,9 +11,39 @@ const enhancedAskTool = require('./ask-schema');
 
 const PROJECT_ROOT = path.dirname(__dirname);
 
-// Shared state: pending AskUserQuestion interceptions
-// Map<tool_use_id, { questions, resolve, reject }>
+// Shared state: pending AskUserQuestion interceptions (used by /api/ask endpoint)
 const pendingQuestions = new Map();
+
+/**
+ * Generic Transform that chains rule-provided transformSSE hooks over each SSE line.
+ */
+class RuleResponseTransform extends Transform {
+  constructor(hooks) {
+    super();
+    this._hooks = hooks;
+    this._remainder = '';
+  }
+  _transform(chunk, encoding, callback) {
+    const text = this._remainder + chunk.toString('utf-8');
+    const lines = text.split('\n');
+    this._remainder = lines.pop();
+    const out = [];
+    for (let line of lines) {
+      for (const hook of this._hooks) line = hook(line);
+      out.push(line + '\n');
+    }
+    if (out.length) this.push(Buffer.from(out.join(''), 'utf-8'));
+    callback();
+  }
+  _flush(callback) {
+    if (this._remainder) {
+      let line = this._remainder;
+      for (const hook of this._hooks) line = hook(line);
+      this.push(Buffer.from(line, 'utf-8'));
+    }
+    callback();
+  }
+}
 
 const RETRYABLE_ERR_CODES = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -149,7 +179,7 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instan
     interaction.status = 'complete';
   }
 
-  // Track tool_use blocks for AskUserQuestion
+  // Track tool_use blocks (for inspector timeline)
   if (event.eventType === 'content_block_start' && event.data?.content_block?.type === 'tool_use') {
     const cb = event.data.content_block;
     activeToolBlocks.set(event.data.index, { id: cb.id, name: cb.name, inputJson: '' });
@@ -159,14 +189,6 @@ function trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instan
     if (tb) tb.inputJson += event.data.delta.partial_json || '';
   }
   if (event.eventType === 'content_block_stop') {
-    const tb = activeToolBlocks.get(event.data?.index);
-    if (tb && tb.name === 'AskUserQuestion' && instanceId) {
-      try {
-        const input = JSON.parse(tb.inputJson);
-        // Store full form data for enhanced AskUserQuestion (title, description, submitLabel, cancelLabel, questions)
-        pendingQuestions.set(tb.id, { formData: input, questions: input.questions || [], resolve: null, reject: null, ctx: getInstanceContext(instanceId) });
-      } catch {}
-    }
     activeToolBlocks.delete(event.data?.index);
   }
 
@@ -261,92 +283,18 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   router.use(express.json({ limit: '50mb' }));
   router.use(express.raw({ limit: '50mb', type: () => false }));
 
-  // /p/:profileName/i/:instanceId prefix: per-session profile + instance scoped routing
-  router.use('/p/:profileName/i/:instanceId', (req, res, next) => {
-    req.profileName = decodeURIComponent(req.params.profileName);
-    req.instanceId = decodeURIComponent(req.params.instanceId);
-    next();
-  });
-
-  // /p/:profileName prefix: per-session profile-scoped routing (fallback without instance)
-  router.use('/p/:profileName', (req, res, next) => {
-    req.profileName = decodeURIComponent(req.params.profileName);
-    next();
-  });
-
-  // /i/:instanceId prefix: CLI terminal instance routing (no profile)
+  // /i/:instanceId prefix: instance-scoped routing
   router.use('/i/:instanceId', (req, res, next) => {
     req.instanceId = decodeURIComponent(req.params.instanceId);
     next();
   });
 
   // POST /v1/messages - main endpoint
-  router.post(['/v1/messages', '/p/:profileName/v1/messages', '/p/:profileName/i/:instanceId/v1/messages', '/i/:instanceId/v1/messages'], async (req, res) => {
+  router.post(['/v1/messages', '/i/:instanceId/v1/messages'], async (req, res) => {
     const body = req.body;
     const isStreaming = !!body.stream;
 
-    // --- AskUserQuestion interception ---
-    // Scan request messages for error tool_results matching a pending question
-    let intercepted = false;
     const isCliInstance = req.instanceId && req.instanceId.startsWith('cli-');
-    if (body.messages && req.instanceId && !isCliInstance) {
-      for (const msg of body.messages) {
-        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
-        for (let i = 0; i < msg.content.length; i++) {
-          const block = msg.content[i];
-          if (block.type === 'tool_result' && block.is_error && pendingQuestions.has(block.tool_use_id)) {
-            intercepted = true;
-            const toolUseId = block.tool_use_id;
-            const pending = pendingQuestions.get(toolUseId);
-
-            // Set up promise for the answer
-            const answerPromise = new Promise((resolve, reject) => {
-              pending.resolve = resolve;
-              pending.reject = reject;
-            });
-
-            // Use context captured when the question was recorded (not global)
-            const qCtx = pending.ctx || {};
-            console.log(`[proxy] Broadcasting ask:question ${toolUseId}, questionContext:`, qCtx.tabId ? `tabId=${qCtx.tabId}` : 'none (chat)');
-            broadcaster.broadcast({
-              type: 'ask:question',
-              toolUseId,
-              questions: pending.questions,
-              formData: pending.formData,
-              ...(qCtx.tabId ? { tabId: qCtx.tabId, runId: qCtx.runId, stepId: qCtx.stepId } : {}),
-            });
-
-            try {
-              // Wait for user answer (no timeout — user may take hours)
-              const answer = await answerPromise;
-
-              // Rewrite the tool_result with the real answer
-              msg.content[i] = {
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: JSON.stringify(answer),
-              };
-
-              broadcaster.broadcast({ type: 'ask:answered', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
-            } catch {
-              // Rejected (e.g. chat stopped) - forward original error as-is
-              broadcaster.broadcast({ type: 'ask:timeout', toolUseId, ...(qCtx.tabId ? { tabId: qCtx.tabId } : {}) });
-            }
-
-            pendingQuestions.delete(toolUseId);
-          }
-        }
-      }
-    }
-
-    // Replace AskUserQuestion schema with enhanced version (internal sessions only)
-    if (Array.isArray(body.tools) && req.instanceId && !isCliInstance) {
-      body.tools = body.tools.map(t => t.name === 'AskUserQuestion' ? enhancedAskTool : t);
-    }
-
-    // Resolve profile and model from per-request URL context
-    const profileName = req.profileName || null;
-    const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
 
     // --- CLI instance: model mapping + settings-based tool filtering ---
     let cliSettings = null;
@@ -374,9 +322,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages',
-      profile: profileName || instCtx?.profile || null,
-      bare: !!profileData?.bare,
-      disableAutoMemory: profileData ? profileData.disableAutoMemory !== false : true,
+      disableAutoMemory: true,
       instanceId: req.instanceId || null,
       stepId: instCtx?.stepId || null,
       runId: instCtx?.runId || null,
@@ -394,27 +340,28 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       },
       usage: null,
       isStreaming,
-      status: intercepted ? 'intercepted' : 'pending',
+      status: 'pending',
     };
 
-    // --- Run proxy rules ---
+    // --- Run proxy rules (may return response hooks) ---
+    const responseHooks = [];
     for (const rule of getEnabledRules()) {
       try {
         const ctx = {
           body,
           isStreaming,
-          profileName,
-          profileData,
+          profileName: null,
+          profileData: null,
           instanceId: req.instanceId || null,
           req,
           res,
           interaction,
           store,
           broadcaster,
-          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent },
+          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent, enhancedAskTool },
         };
-        const shortCircuited = await rule.fn(ctx);
-        if (shortCircuited === true) {
+        const result = await rule.fn(ctx);
+        if (result === true) {
           interaction.request = { ...body };
           interaction.timing.duration = Date.now() - interaction.timing.startedAt;
           if (interaction.status === 'pending') interaction.status = 'complete';
@@ -425,31 +372,16 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           broadcaster.broadcast({ type: 'interaction:complete', interaction: sanitizeForDashboard(interaction) });
           return;
         }
+        if (result && typeof result === 'object' && (result.transformSSE || result.transformBody)) {
+          responseHooks.push(result);
+        }
       } catch (err) {
         console.error(`[proxy] Rule "${rule.name}" (${rule.id}) threw:`, err.message);
       }
     }
 
-    // --- Profile-level tool filtering (applies to all paths) ---
-    if (profileData && Array.isArray(body.tools)) {
-      const disabledSet = profileData.disabledTools?.length > 0
-        ? new Set(profileData.disabledTools)
-        : null;
-      const allowedSet = profileData.allowedTools?.length > 0
-        ? new Set(profileData.allowedTools)
-        : null;
-      if (disabledSet || allowedSet) {
-        const before = body.tools.length;
-        body.tools = body.tools.filter(t => {
-          if (!t.name) return true;
-          if (disabledSet && disabledSet.has(t.name)) return false;
-          if (allowedSet && !allowedSet.has(t.name)) return false;
-          return true;
-        });
-        const removed = before - body.tools.length;
-        if (removed > 0) console.log(`[proxy] Profile "${profileName}" filtered ${removed} tools (${body.tools.length} remaining)`);
-      }
-    }
+    const sseHooks = responseHooks.filter(h => h.transformSSE).map(h => h.transformSSE);
+    const bodyHooks = responseHooks.filter(h => h.transformBody).map(h => h.transformBody);
 
     // Snapshot request after all filtering, then broadcast to dashboard
     interaction.request = { ...body };
@@ -460,8 +392,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     });
 
     // --- Check for model translation ---
-    // Profile's modelDef determines routing: if set → translate, if null → direct to Anthropic
-    const modelDef = cliModelDef || (profileData?.modelDef ? caps.loadModel(PROJECT_ROOT, profileData.modelDef) : null);
+    const modelDef = cliModelDef || null;
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider && modelDef.provider !== 'anthropic') {
@@ -531,10 +462,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
                 if (!data) continue;
 
                 const anthropicEvents = provider.translateSSEChunk(data, streamState);
-                for (const eventStr of anthropicEvents) {
+                for (let eventStr of anthropicEvents) {
+                  for (const hook of sseHooks) eventStr = hook(eventStr);
                   res.write(eventStr);
-
-                  // Parse the translated event for inspector/dashboard tracking
                   const parsed = parseSSEString(eventStr);
                   if (parsed) {
                     interaction.response.sseEvents.push(parsed);
@@ -553,7 +483,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
                 const data = remaining.slice(6).trim();
                 if (data) {
                   const anthropicEvents = provider.translateSSEChunk(data, streamState);
-                  for (const eventStr of anthropicEvents) {
+                  for (let eventStr of anthropicEvents) {
+                    for (const hook of sseHooks) eventStr = hook(eventStr);
                     res.write(eventStr);
                     const parsed = parseSSEString(eventStr);
                     if (parsed) {
@@ -568,7 +499,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
             // Safety-net finalization — ensures proper Anthropic SSE termination
             // even if the provider stream ends without explicit signal (e.g. Gemini has no [DONE])
             const finalEvents = provider.finalizeStream(streamState);
-            for (const eventStr of finalEvents) {
+            for (let eventStr of finalEvents) {
+              for (const hook of sseHooks) eventStr = hook(eventStr);
               res.write(eventStr);
               const parsed = parseSSEString(eventStr);
               if (parsed) {
@@ -687,7 +619,12 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           ? Readable.from(resumeWebStream(firstChunk, reader))
           : Readable.fromWeb(upstream.body);
 
-        pipeline(nodeStream, passthrough, res, (err) => {
+        const ruleTransform = sseHooks.length > 0 ? new RuleResponseTransform(sseHooks) : null;
+        const pipelineArgs = ruleTransform
+          ? [nodeStream, ruleTransform, passthrough, res]
+          : [nodeStream, passthrough, res];
+
+        pipeline(...pipelineArgs, (err) => {
           if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
             console.error('Stream pipeline error:', err.message);
             interaction.status = 'error';
@@ -721,20 +658,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           if (interaction.response.body.usage) {
             interaction.usage = interaction.response.body.usage;
           }
-          // Track AskUserQuestion in non-streaming responses too
-          if (interaction.response.body.content) {
-            for (const block of interaction.response.body.content) {
-              if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && interaction.instanceId) {
-                pendingQuestions.set(block.id, {
-                  formData: block.input || {},
-                  questions: block.input?.questions || [],
-                  resolve: null,
-                  reject: null,
-                  ctx: getInstanceContext(interaction.instanceId),
-                });
-                console.log(`[proxy] Recorded AskUserQuestion ${block.id} (non-streaming)`);
-              }
-            }
+          for (const hook of bodyHooks) {
+            interaction.response.body = hook(interaction.response.body);
           }
         } catch {
           interaction.response.body = responseBody;
@@ -742,12 +667,17 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
         interaction.status = upstream.ok ? 'complete' : 'error';
 
+        // Send rule-transformed body if parsed, otherwise original
+        const finalBody = interaction.response.body && typeof interaction.response.body === 'object'
+          ? JSON.stringify(interaction.response.body)
+          : responseBody;
+
         const responseHeaders = filterResponseHeaders(upstream.headers);
         if (!responseHeaders['content-type']) {
           responseHeaders['content-type'] = 'application/json';
         }
         res.writeHead(upstream.status, responseHeaders);
-        res.end(responseBody);
+        res.end(finalBody);
 
         store.save(interaction.id);
         broadcaster.broadcast({
@@ -774,20 +704,17 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   });
 
   // POST /v1/messages/count_tokens
-  router.post(['/v1/messages/count_tokens', '/p/:profileName/v1/messages/count_tokens', '/p/:profileName/i/:instanceId/v1/messages/count_tokens', '/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
+  router.post(['/v1/messages/count_tokens', '/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
     const body = req.body;
-
-    const profileName = req.profileName || null;
-    const profileData = profileName ? caps.loadProfile(PROJECT_ROOT, profileName) : null;
 
     // Apply proxy rules (tool filtering, etc.)
     for (const rule of getEnabledRules()) {
       try {
         const ctx = {
-          body, isStreaming: false, profileName, profileData,
+          body, isStreaming: false, profileName: null, profileData: null,
           instanceId: req.instanceId || null, req, res,
           interaction: null, store, broadcaster,
-          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent },
+          helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent, enhancedAskTool },
         };
         if (await rule.fn(ctx) === true) {
           res.json({ input_tokens: 0 });
@@ -795,20 +722,6 @@ function createProxyRouter(store, broadcaster, targetUrl) {
         }
       } catch (err) {
         console.error(`[proxy] Rule "${rule.name}" (${rule.id}) threw on count_tokens:`, err.message);
-      }
-    }
-
-    // Profile-level tool filtering
-    if (profileData && Array.isArray(body.tools)) {
-      const disabledSet = profileData.disabledTools?.length > 0 ? new Set(profileData.disabledTools) : null;
-      const allowedSet = profileData.allowedTools?.length > 0 ? new Set(profileData.allowedTools) : null;
-      if (disabledSet || allowedSet) {
-        body.tools = body.tools.filter(t => {
-          if (!t.name) return true;
-          if (disabledSet && disabledSet.has(t.name)) return false;
-          if (allowedSet && !allowedSet.has(t.name)) return false;
-          return true;
-        });
       }
     }
 

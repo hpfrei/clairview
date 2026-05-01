@@ -1,6 +1,8 @@
 const servers = require('./servers');
 const registrar = require('./registrar');
 const logs = require('./logs');
+const caps = require('../capabilities');
+const { buildClaudeArgs, spawnClaude } = require('../utils');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -88,6 +90,49 @@ function handleMessage(ws, msg, bc) {
           broadcastToolList();
           markNeedsRestart();
         }
+        break;
+      }
+
+      // --- Tool Source ---
+      case 'mcp:tool:source': {
+        const result = servers.readToolSource(msg.slug);
+        if (result.error) {
+          send({ type: 'mcp:error', error: result.error });
+        } else {
+          send({ type: 'mcp:tool:source', slug: result.slug, source: result.source, builtin: result.builtin });
+        }
+        break;
+      }
+
+      case 'mcp:tool:save-source': {
+        if (!msg.slug || typeof msg.source !== 'string') {
+          send({ type: 'mcp:error', error: 'Tool slug and source are required' });
+          break;
+        }
+        const result = servers.saveToolSource(msg.slug, msg.source);
+        if (result.error) {
+          send({ type: 'mcp:error', error: result.error });
+        } else {
+          send({ type: 'mcp:tool:source-saved', slug: msg.slug });
+          markNeedsRestart();
+        }
+        break;
+      }
+
+      case 'mcp:tool:ai-edit': {
+        if (!msg.slug || !msg.description?.trim()) {
+          send({ type: 'mcp:error', error: 'Tool slug and description are required' });
+          break;
+        }
+        send({ type: 'mcp:tool:generating', slug: msg.slug });
+        editToolWithAI(msg.slug, msg.description.trim())
+          .then(result => {
+            send({ type: 'mcp:tool:source', slug: msg.slug, source: result.source, builtin: false });
+            markNeedsRestart();
+          })
+          .catch(err => {
+            send({ type: 'mcp:error', error: `AI edit failed: ${err.message}` });
+          });
         break;
       }
 
@@ -302,7 +347,7 @@ function startServer(send, broadcast) {
 function finishStart(meta) {
   const appRoot = path.dirname(path.dirname(__dirname));
   const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
-  const projectDir = opts.claudeSession?.cwd || process.cwd();
+  const projectDir = process.cwd();
 
   const regResult = registrar.register(
     servers.INTEGRATED_SLUG, meta, bridgePath,
@@ -337,7 +382,7 @@ function finishStart(meta) {
 
 function stopServer() {
   const meta = servers.readMeta();
-  const projectDir = opts.claudeSession?.cwd || process.cwd();
+  const projectDir = process.cwd();
 
   if (meta) {
     registrar.unregister(servers.INTEGRATED_SLUG, meta.scope || 'project', projectDir);
@@ -349,6 +394,128 @@ function stopServer() {
 
 function shutdown() {
   stopServer();
+}
+
+// --- AI Tool Editing ---
+
+const MCP_TOOL_CONTRACT = `The file is an ES module that registers one MCP tool with the MCP SDK.
+
+Structure:
+
+import { z } from "zod";
+
+export default function register(server) {
+  server.tool(
+    "tool-name",
+    "Description shown to Claude — explain what it does",
+    {
+      paramName: z.string().describe("param description"),
+      optionalParam: z.number().optional(),
+      // Zod schema entries for each parameter
+    },
+    async (input) => {
+      // input is an object with the declared parameters
+      // Can use dynamic imports: const http = await import('http');
+      // Environment variables available:
+      //   process.env.VISTACLAIR_DASHBOARD_PORT — dashboard HTTP port
+      //   process.env.VISTACLAIR_AUTH_TOKEN     — auth token
+      //   process.env.VISTACLAIR_INSTANCE_ID    �� instance ID
+      //
+      // Must return MCP content:
+      return {
+        content: [{ type: "text", text: "Result" }],
+      };
+    }
+  );
+}
+
+IMPORTANT:
+- Use ES module syntax (import/export), NOT CommonJS (require/module.exports)
+- The file must default-export a register(server) function
+- Use Zod (z) for parameter schemas — it's available from the server's dependencies
+- The handler must return { content: [{ type: "text", text: "..." }] }
+- For HTTP calls, use dynamic import: const http = await import('http');
+- Keep error handling graceful — resolve with error text, don't throw`;
+
+function editToolWithAI(slug, description) {
+  return new Promise((resolve, reject) => {
+    const existing = servers.readToolSource(slug);
+    if (existing.error) {
+      reject(new Error(existing.error));
+      return;
+    }
+
+    const dir = servers.serverDir();
+    const meta = servers.readMeta();
+    const tool = (meta?.tools || []).find(t => t.slug === slug);
+    if (!tool) { reject(new Error('Tool not found')); return; }
+    if (tool.builtin) { reject(new Error('Cannot modify built-in tool')); return; }
+
+    const targetPath = path.join(dir, 'tools', tool.file);
+    const PROJECT_ROOT = path.dirname(path.dirname(__dirname));
+
+    const prompt = `You are editing an existing MCP tool for VistaClair.
+
+## Current Tool Source
+
+\`\`\`javascript
+${existing.source}
+\`\`\`
+
+## Requested Change
+
+"${description}"
+
+## MCP Tool File Contract
+
+${MCP_TOOL_CONTRACT}
+
+## Output
+
+Rewrite the tool to incorporate the requested change. Keep any existing behavior that isn't explicitly being changed.
+
+Write the updated tool to: ${targetPath}
+
+Use the Write tool to create the file. Write ONLY valid JavaScript (no markdown fences).`;
+
+    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
+    const proc = spawnClaude(args, {
+      cwd: PROJECT_ROOT,
+      proxyPort: opts.proxyPort || 3456,
+      instanceId: `mcp-edit-${Date.now()}`,
+    });
+
+    const genTimeout = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
+    }, 300000);
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+
+    let stderrBuf = '';
+    proc.stdout.on('data', () => {});
+    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
+
+    proc.on('close', (code) => {
+      clearTimeout(genTimeout);
+
+      if (!fs.existsSync(targetPath)) {
+        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        reject(new Error(`Edit produced no tool file (exit ${code})${detail}`));
+        return;
+      }
+
+      const source = fs.readFileSync(targetPath, 'utf-8');
+      servers.generateServerJs();
+      resolve({ source });
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(genTimeout);
+      reject(new Error(`Edit failed: ${err.message}`));
+    });
+  });
 }
 
 // --- MCP JSON-RPC helpers (tool discovery & testing) ---
@@ -450,7 +617,7 @@ async function testTool(toolName, args) {
 
 let mcpCallSeq = 0;
 
-function logMcpCall(toolName, input, result, durationMs, source) {
+function logMcpCall(toolName, input, result, durationMs, source, instanceId) {
   if (!store || !broadcaster) return;
 
   const id = `mcp-${Date.now()}-${++mcpCallSeq}`;
@@ -460,6 +627,7 @@ function logMcpCall(toolName, input, result, durationMs, source) {
     id,
     timestamp: Date.now(),
     endpoint: `mcp://${toolName}`,
+    instanceId: instanceId || null,
     isMcp: true,
     mcpSource: source, // 'test' or 'claude-code'
     request: { tool: toolName, params: input },
@@ -481,7 +649,7 @@ function logMcpCall(toolName, input, result, durationMs, source) {
 // Called by the bridge when a tool is executed by Claude Code
 function handleBridgeReport(report) {
   if (report.type === 'tool:call') {
-    logMcpCall(report.tool, report.params, report.result, report.durationMs, 'claude-code');
+    logMcpCall(report.tool, report.params, report.result, report.durationMs, 'claude-code', report.instanceId);
   }
 }
 

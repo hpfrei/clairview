@@ -49,6 +49,11 @@ async function handleMessage(ws, msg, bc) {
           send({ type: 'rule:error', error: 'Rule ID and description are required' });
           break;
         }
+        const editRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
+        if (editRule?.builtin) {
+          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
+          break;
+        }
         send({ type: 'rule:generating', id: msg.id });
         try {
           const result = await editProxyRule(msg.id, msg.description.trim());
@@ -60,17 +65,29 @@ async function handleMessage(ws, msg, bc) {
         break;
       }
 
-      case 'rule:toggle':
+      case 'rule:toggle': {
+        const toggleRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
+        if (toggleRule?.builtin) {
+          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
+          break;
+        }
         if (caps.toggleProxyRule(PROJECT_ROOT, msg.id, msg.enabled)) {
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
         }
         break;
+      }
 
-      case 'rule:delete':
+      case 'rule:delete': {
+        const delRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
+        if (delRule?.builtin) {
+          send({ type: 'rule:error', error: 'Cannot delete built-in rule.' });
+          break;
+        }
         if (caps.deleteProxyRule(PROJECT_ROOT, msg.id)) {
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
         }
         break;
+      }
 
       case 'rule:reorder':
         if (Array.isArray(msg.ids) && caps.reorderProxyRules(PROJECT_ROOT, msg.ids)) {
@@ -81,7 +98,8 @@ async function handleMessage(ws, msg, bc) {
       case 'rule:source': {
         const source = caps.readProxyRuleSource(PROJECT_ROOT, msg.id);
         if (source !== null) {
-          send({ type: 'rule:source', id: msg.id, source });
+          const srcRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
+          send({ type: 'rule:source', id: msg.id, source, builtin: !!srcRule?.builtin });
         } else {
           send({ type: 'rule:error', error: `Rule source not found: ${msg.id}` });
         }
@@ -91,6 +109,11 @@ async function handleMessage(ws, msg, bc) {
       case 'rule:save': {
         if (!msg.id || typeof msg.source !== 'string') {
           send({ type: 'rule:error', error: 'Rule ID and source are required' });
+          break;
+        }
+        const saveRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
+        if (saveRule?.builtin) {
+          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
           break;
         }
         try {
@@ -119,8 +142,8 @@ const RULE_CONTRACT = `The file must export a single function(ctx):
 module.exports = function(ctx) {
   // ctx.body           - the request body (mutable object — modify in place)
   // ctx.isStreaming     - boolean, true if body.stream is set
-  // ctx.profileName    - string or null (name of the active profile)
-  // ctx.profileData    - resolved profile object or null
+  // ctx.profileName    - null (reserved, profiles removed)
+  // ctx.profileData    - null (reserved, profiles removed)
   // ctx.instanceId     - string or null (Claude session instance ID)
   // ctx.req            - Express request object
   // ctx.res            - Express response object (for short-circuit rules)
@@ -134,14 +157,25 @@ module.exports = function(ctx) {
   //     Sets interaction status to complete.
   // ctx.helpers.parseSSEString(str) - parse "event: ...\\ndata: ...\\n\\n" into {eventType, data}
   // ctx.helpers.trackSSEEvent(event, interaction, activeToolBlocks, broadcaster, instanceId)
+  // ctx.helpers.enhancedAskTool     - enhanced AskUserQuestion tool schema object
   //
-  // Return true if the response was already sent (short-circuit — no upstream API call).
-  // Return false or undefined to let the request continue to the next rule or upstream.
+  // Return values:
+  //   return true              → short-circuit (response already sent, skip upstream)
+  //   return undefined/false   → continue to upstream (no response hooks)
+  //   return { transformSSE?, transformBody? }
+  //                            → continue to upstream, apply hooks to the response
+  //
+  // Response hooks (returned in an object):
+  //   transformSSE(eventStr)   - called per SSE line in streaming responses.
+  //                              Must return the (possibly modified) string.
+  //   transformBody(body)      - called with the parsed JSON body for non-streaming responses.
+  //                              Must return the (possibly modified) object.
   //
   // IMPORTANT:
   // - To modify the request, mutate ctx.body directly (e.g. ctx.body.system = 'new prompt')
   // - To filter tools, modify ctx.body.tools array
   // - To short-circuit, call ctx.helpers.sendDummyResponse(ctx, {...}) then return true
+  // - To transform responses, return { transformSSE(str){...}, transformBody(obj){...} }
   // - NEVER use require() for external npm modules — only Node built-ins
   // - Keep the function synchronous unless you need to await something
 };`;
@@ -193,6 +227,28 @@ module.exports = function(ctx) {
   }
 };
 
+Transforming responses (request + response in one rule):
+module.exports = function(ctx) {
+  // request-side: filter a tool from the request
+  if (Array.isArray(ctx.body.tools)) {
+    ctx.body.tools = ctx.body.tools.filter(t => t.name !== 'OldTool');
+  }
+  // response-side: rename tool in SSE stream and non-streaming body
+  return {
+    transformSSE(eventStr) {
+      return eventStr.replace('"OldTool"', '"NewTool"');
+    },
+    transformBody(body) {
+      if (body?.content) {
+        for (const block of body.content) {
+          if (block.name === 'OldTool') block.name = 'NewTool';
+        }
+      }
+      return body;
+    },
+  };
+};
+
 ## Output
 
 Write the rule module to: ${targetPath}
@@ -206,11 +262,10 @@ The metadata JSON must have exactly these fields:
 
 Use the Write tool to create both files. Write ONLY valid JavaScript (no markdown fences) to the .js file, and ONLY valid JSON to the .meta.json file.`;
 
-    const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
+    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
     const proc = spawnClaude(args, {
       cwd: PROJECT_ROOT,
       proxyPort: opts.proxyPort || 3456,
-      profileName: 'full',
       instanceId: `rule-gen-${Date.now()}`,
     });
 
@@ -310,11 +365,10 @@ The metadata JSON must have exactly these fields:
 
 Use the Write tool to create both files. Write ONLY valid JavaScript (no markdown fences) to the .js file, and ONLY valid JSON to the .meta.json file.`;
 
-    const args = buildClaudeArgs(caps.loadProfile(PROJECT_ROOT, 'full'));
+    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
     const proc = spawnClaude(args, {
       cwd: PROJECT_ROOT,
       proxyPort: opts.proxyPort || 3456,
-      profileName: 'full',
       instanceId: `rule-edit-${Date.now()}`,
     });
 

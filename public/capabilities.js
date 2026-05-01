@@ -1052,37 +1052,21 @@ minimal  plan mode, Read/Glob/Grep</pre>
   document.getElementById('capModelCancel')?.addEventListener('click', closeModelModal);
   document.getElementById('capModelCancel2')?.addEventListener('click', closeModelModal);
 
-  // --- Refresh Models: scan provider APIs ---
-  let scanTimeout = null;
+  // --- Refresh: scan providers + update pricing ---
   document.getElementById('capRefreshModels')?.addEventListener('click', () => {
     const btn = document.getElementById('capRefreshModels');
+    const statusEl = document.getElementById('capRefreshStatus');
     if (!btn || btn.disabled) return;
     btn.disabled = true;
     btn.innerHTML = '<span class="busy-dot"></span> Scanning providers\u2026';
-    sendWs({ type: 'model:scan' });
-    if (scanTimeout) clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = 'Refresh Models';
-      const status = document.getElementById('capRefreshStatus');
-      if (status) { status.classList.remove('hidden'); status.textContent = 'Scan timed out. Try again.'; }
-    }, 30000);
+    if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = 'Scanning provider APIs for new models...'; }
+    sendWs({ type: 'model:refresh' });
   });
-
-  function showScanError(error) {
-    const btn = document.getElementById('capRefreshModels');
-    if (btn) { btn.disabled = false; btn.textContent = 'Refresh Models'; }
-    if (scanTimeout) { clearTimeout(scanTimeout); scanTimeout = null; }
-    const status = document.getElementById('capRefreshStatus');
-    if (status) { status.classList.remove('hidden'); status.textContent = 'Scan error: ' + error; }
-  }
 
   function showScanResults(results) {
     const btn = document.getElementById('capRefreshModels');
-    if (btn) { btn.disabled = false; btn.textContent = 'Refresh Models'; }
-    if (scanTimeout) { clearTimeout(scanTimeout); scanTimeout = null; }
+    const statusEl = document.getElementById('capRefreshStatus');
 
-    // Backend already auto-added new models — show summary and refresh list
     const providerKeys = Object.keys(results);
     let totalAdded = 0;
     let totalScanned = 0;
@@ -1107,108 +1091,16 @@ minimal  plan mode, Read/Glob/Grep</pre>
       }
     }
 
-    const status = document.getElementById('capRefreshStatus');
-    if (status) {
-      status.classList.remove('hidden');
+    if (statusEl) {
       const summary = totalAdded > 0
-        ? `Scanned ${totalScanned} providers. Added ${totalAdded} new model${totalAdded !== 1 ? 's' : ''} (disabled by default). Enable the ones you want, then use Refresh Pricing to fill in costs.`
-        : `Scanned ${totalScanned} providers. All models up to date.`;
-      status.innerHTML = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
-      if (totalAdded === 0) setTimeout(() => status.classList.add('hidden'), 6000);
+        ? `Scanned ${totalScanned} providers. Added ${totalAdded} new model${totalAdded !== 1 ? 's' : ''} (disabled by default). Updating pricing...`
+        : `All models up to date. Updating pricing...`;
+      statusEl.innerHTML = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
     }
+    if (btn) btn.innerHTML = '<span class="busy-dot"></span> Updating pricing…';
 
-    // Refresh the models list from server (backend already saved them)
     sendWs({ type: 'model:list' });
     sendWs({ type: 'provider:list' });
-  }
-
-  // --- Refresh Pricing via claude -p ---
-  document.getElementById('capRefreshPricing')?.addEventListener('click', () => {
-    const btn = document.getElementById('capRefreshPricing');
-    const statusEl = document.getElementById('capRefreshStatus');
-    if (!btn || !statusEl) return;
-    btn.disabled = true;
-    btn.textContent = 'Looking up prices...';
-    statusEl.classList.remove('hidden');
-    statusEl.textContent = 'Starting pricing lookup via Claude...';
-
-    // Derive project root from outputsDir (strip trailing /outputs)
-    const projectRoot = (state.outputsDir || '').replace(/\/outputs\/?$/, '');
-    const modelsPath = projectRoot + '/capabilities/models.json';
-    const anthropicPath = projectRoot + '/capabilities/anthropic-pricing.json';
-
-    // Build model list for the prompt
-    const modelList = state.models.map(m => `${m.label || m.name} (modelId: ${m.modelId}, provider: ${m.providerKey})`).join('\n');
-    const prompt = `Update the pricing data for AI models by directly editing the pricing files on disk.
-
-Steps:
-1. Read ${modelsPath} to see the current model definitions.
-2. Read ${anthropicPath} to see the current Anthropic pricing entries.
-3. Look up the current official API pricing (per million tokens, in USD) for:
-   - Each model found in models.json (third-party models listed below).
-   - All current Anthropic Claude models. You are a Claude model yourself — you know which models Anthropic currently offers. Update existing entries in anthropic-pricing.json with correct current prefix keys (e.g. claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5) and remove outdated entries that no longer match any current model.
-4. For each model in models.json, update the inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, and cacheCreateCostPerMTok fields directly in the file. Use null for cache fields if not available.
-5. For Anthropic models, update ${anthropicPath} with the same four fields per model.
-
-The third-party models to look up pricing for:
-${modelList}
-
-IMPORTANT: You MUST directly edit the files using your Edit or Write tools — do not just output JSON. After updating, briefly summarize which models were updated and their new prices.`;
-
-    const body = JSON.stringify({ type: 'chat', prompt, profile: 'full' });
-    fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }).then(async res => {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '', fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        while (buf.includes('\n\n')) {
-          const idx = buf.indexOf('\n\n');
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          let ev = null, data = null;
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event: ')) ev = line.slice(7);
-            else if (line.startsWith('data: ')) data = line.slice(6);
-          }
-          if (!ev || !data) continue;
-          try { data = JSON.parse(data); } catch { continue; }
-          if (ev === 'text') {
-            fullText += data.text || '';
-            statusEl.textContent = 'Claude is updating pricing files...';
-          } else if (ev === 'done') {
-            applyPricingResult(fullText, statusEl, btn);
-            return;
-          } else if (ev === 'error') {
-            statusEl.textContent = 'Error: ' + (data.error || 'unknown');
-            btn.disabled = false;
-            btn.textContent = 'Refresh Pricing';
-            return;
-          }
-        }
-      }
-      // Stream ended without done event
-      applyPricingResult(fullText, statusEl, btn);
-    }).catch(err => {
-      statusEl.textContent = 'Fetch error: ' + err.message;
-      btn.disabled = false;
-      btn.textContent = 'Refresh Pricing';
-    });
-  });
-
-  function applyPricingResult(text, statusEl, btn) {
-    // Claude has directly updated the files — refresh model state from server
-    sendWs({ type: 'model:list' });
-    statusEl.textContent = text ? 'Pricing files updated. Refreshing...' : 'Pricing update completed.';
-    btn.disabled = false;
-    btn.textContent = 'Refresh Pricing';
   }
 
 
@@ -1319,30 +1211,36 @@ IMPORTANT: You MUST directly edit the files using your Edit or Write tools — d
         state.providers = msg.providers || [];
         renderModelsPanel();
         break;
-      case 'model:scan:start':
-        break;
-      case 'model:scan:result':
+      case 'model:refresh:scanned':
         showScanResults(msg.results);
         break;
-      case 'model:scan:error':
-        showScanError(msg.error);
+      case 'model:refresh:status': {
+        const statusEl = document.getElementById('capRefreshStatus');
+        if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = msg.text || 'Updating...'; }
         break;
-      case 'profile:list':
-        state.profiles = msg.profiles || [];
-        renderProfileTabs();
+      }
+      case 'model:refresh:error': {
+        const statusEl = document.getElementById('capRefreshStatus');
+        const btn = document.getElementById('capRefreshModels');
+        if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = 'Error: ' + (msg.error || 'unknown'); }
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
         break;
+      }
+      case 'model:refresh:done': {
+        const statusEl = document.getElementById('capRefreshStatus');
+        const btn = document.getElementById('capRefreshModels');
+        if (statusEl) statusEl.textContent = 'Refresh complete.';
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+        setTimeout(() => { if (statusEl) statusEl.classList.add('hidden'); }, 5000);
+        break;
+      }
     }
   }
 
   function handleSettings(msg) {
-    // State sync handled by core.js syncSettings(); just re-render here
-    if (msg.capabilities || msg.profiles) {
-      renderProfileTabs();
-      updateCapabilityStats();
-      renderSkillsPanel();
-    }
+    // State sync handled by core.js syncSettings()
   }
 
   // --- Export ---
-  window.capabilitiesModule = { handleMessage, handleSettings, openProfileModal };
+  window.capabilitiesModule = { handleMessage, handleSettings };
 })();

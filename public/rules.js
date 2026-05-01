@@ -49,7 +49,7 @@
     currentEditor.layout();
   }
 
-  function createEditor(container, source, ruleId) {
+  function createEditor(container, source, ruleId, readOnly) {
     disposeEditor();
     currentEditorRuleId = ruleId;
     isEditorDirty = false;
@@ -58,7 +58,7 @@
       value: source,
       language: 'javascript',
       theme: getMonacoTheme(),
-      readOnly: false,
+      readOnly: !!readOnly,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       lineNumbers: 'on',
@@ -103,6 +103,7 @@
 
     for (const rule of state.rules) {
       const isExpanded = expandedId === rule.id;
+      const bi = !!rule.builtin;
       const item = document.createElement('div');
       item.className = 'rule-item' + (rule.enabled ? '' : ' disabled') + (isExpanded ? ' expanded' : '');
       item.dataset.id = rule.id;
@@ -110,30 +111,31 @@
       item.innerHTML = `
         <div class="rule-item-header">
           <span class="rule-drag-handle" title="Drag to reorder">&#9776;</span>
-          <label class="rule-toggle">
-            <input type="checkbox" ${rule.enabled ? 'checked' : ''} data-id="${escHtml(rule.id)}">
+          <label class="rule-toggle" title="${bi ? 'Built-in (always enabled)' : rule.enabled ? 'Enabled' : 'Disabled'}">
+            <input type="checkbox" ${rule.enabled ? 'checked' : ''} data-id="${escHtml(rule.id)}" ${bi ? 'disabled' : ''}>
             <span class="rule-toggle-slider"></span>
           </label>
           <div class="rule-item-info">
             <div class="rule-item-name">${escHtml(rule.name)}</div>
+            ${bi ? '<span class="ref-tag tag-ro" style="font-size:9px">built-in</span>' : ''}
           </div>
-          <button class="rule-del-btn" data-id="${escHtml(rule.id)}" title="Delete rule">&#10005;</button>
+          ${bi ? '' : `<button class="rule-del-btn" data-id="${escHtml(rule.id)}" title="Delete rule">&#10005;</button>`}
         </div>
         <div class="rule-item-detail" style="display:${isExpanded ? 'block' : 'none'}">
           <div class="rule-item-slug">${escHtml(rule.slug)}</div>
           <div class="rule-source-section">
             <div class="rule-source-toolbar">
               <span class="rule-source-label">Source</span>
-              <button class="rule-save-btn" data-id="${escHtml(rule.id)}" disabled>Save</button>
+              ${bi ? '' : `<button class="rule-save-btn" data-id="${escHtml(rule.id)}" disabled>Save</button>`}
             </div>
             <div class="rule-editor-container" data-id="${escHtml(rule.id)}">
               <div class="rule-editor-loading">Loading editor&hellip;</div>
             </div>
           </div>
-          <div class="rule-edit-row">
+          ${bi ? '' : `<div class="rule-edit-row">
             <textarea class="rule-edit-input" data-id="${escHtml(rule.id)}" rows="3" placeholder="Describe a change to this rule&hellip;"></textarea>
             <button class="rule-edit-submit" data-id="${escHtml(rule.id)}">Apply with AI</button>
-          </div>
+          </div>`}
         </div>`;
       list.appendChild(item);
     }
@@ -292,7 +294,7 @@
         const container = document.querySelector(`.rule-editor-container[data-id="${msg.id}"]`);
         if (!container || !monacoReady) break;
         container.innerHTML = '';
-        createEditor(container, msg.source, msg.id);
+        createEditor(container, msg.source, msg.id, msg.builtin);
         break;
       }
       case 'rule:saved':

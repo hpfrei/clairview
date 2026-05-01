@@ -22,11 +22,10 @@
   --status-disconnected-bg: #3a1a1a;
   --chat-user-bg: #2a3a55;
   --chat-error-bg: #3a1a1a;
-  --chat-question-bg: #2a2235;
   --request-panel-bg: #2a2518;
   --response-panel-bg: #182a1c;
   --scrollbar-track: var(--bg);
-  --scrollbar-thumb: var(--border);
+  --scrollbar-thumb: #7744bb;
   --scrollbar-thumb-hover: var(--text-dim);
 
   --paper-bg: #1e2030;

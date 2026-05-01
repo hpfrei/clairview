@@ -1,5 +1,12 @@
 [
   {
+    "id": "auq-mcp-rewrite",
+    "name": "AskUserQuestion MCP Rewrite",
+    "slug": "Rewrites AskUserQuestion ↔ vista-AskUserQuestion between CLI and API for the MCP tool handler",
+    "enabled": true,
+    "builtin": true
+  },
+  {
     "id": "unsafe-tool-filter",
     "name": "Unsafe Tool Filter",
     "slug": "Strips dangerous or unwanted tools from the API request before they reach the LLM",

@@ -44,7 +44,7 @@ class CliSessionManager {
   _onSessionExit(tabId) {
     const session = this.sessions.get(tabId);
     if (session?.cwd) {
-      this.saveToHistory({ cwd: session.cwd, title: session.title, settings: session.getSettings() });
+      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings() });
     }
     this.sessions.delete(tabId);
     this.broadcastTabs();
@@ -59,13 +59,19 @@ class CliSessionManager {
   saveToHistory(entry) {
     const history = this._loadHistory();
     history.unshift({
-      id: `sess-${Date.now()}`,
+      id: entry.sessId || `sess-${Date.now()}`,
       cwd: entry.cwd,
       title: entry.title || null,
       settings: entry.settings || {},
       savedAt: Date.now(),
     });
-    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+    if (history.length > MAX_HISTORY) {
+      const evicted = history.slice(MAX_HISTORY);
+      for (const e of evicted) {
+        this.store.deleteSessionData(e.id);
+      }
+      history.length = MAX_HISTORY;
+    }
     writeJSON(HISTORY_FILE, history);
   }
 
@@ -80,6 +86,7 @@ class CliSessionManager {
   deleteSavedSession(id) {
     const history = this._loadHistory().filter(s => s.id !== id);
     writeJSON(HISTORY_FILE, history);
+    this.store.deleteSessionData(id);
   }
 
   // --- Active sessions ---
@@ -122,7 +129,7 @@ class CliSessionManager {
     const session = this.sessions.get(tabId);
     if (session) {
       if (session.cwd) {
-        this.saveToHistory({ cwd: session.cwd, title: session.title, settings: session.getSettings() });
+        this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings() });
       }
       session.kill();
       this.sessions.delete(tabId);

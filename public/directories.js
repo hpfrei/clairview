@@ -1,6 +1,6 @@
 (function directoriesModule() {
   'use strict';
-  const { escHtml } = window.dashboard;
+  const { escHtml, sendWs } = window.dashboard;
 
   const tabStrip = document.getElementById('dirTabStrip');
   const tabNewBtn = document.getElementById('dirTabNew');
@@ -119,6 +119,16 @@
     });
     sortBar.appendChild(searchBtn);
 
+    const cmdBtn = document.createElement('button');
+    cmdBtn.className = 'dir-sort-btn dir-cmd-btn';
+    cmdBtn.textContent = '>_';
+    cmdBtn.title = 'Toggle terminal';
+    cmdBtn.addEventListener('click', () => {
+      const tab = tabs.get(tabId);
+      if (tab) openTerminal(tab);
+    });
+    sortBar.appendChild(cmdBtn);
+
     header.appendChild(crumbs);
     header.appendChild(sortBar);
 
@@ -221,6 +231,7 @@
   function removeTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return;
+    closeTerminal(tab);
     if (tab.editor) { tab.editor.dispose(); tab.editor = null; }
     tab.wrap.remove();
     tabs.delete(tabId);
@@ -287,6 +298,18 @@
       sep.className = 'dir-breadcrumb-sep';
       sep.textContent = '|';
       crumbsEl.appendChild(sep);
+    }
+
+    crumbsEl._absPath = absPath;
+    if (!crumbsEl._copyHandler) {
+      crumbsEl._copyHandler = e => {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && crumbsEl.contains(sel.anchorNode)) {
+          e.preventDefault();
+          e.clipboardData.setData('text/plain', crumbsEl._absPath);
+        }
+      };
+      crumbsEl.addEventListener('copy', crumbsEl._copyHandler);
     }
 
     const parts = absPath.split('/').filter(Boolean);
@@ -453,6 +476,186 @@
         content.innerHTML = `<div class="dir-viewer-empty">Cannot preview .${escHtml(ext)} files</div>`;
       }
     }
+  }
+
+  // ── Terminal panel ─────────────────────────────────────────────────
+
+  const shellTabs = new Map();
+
+  function getCliTheme() {
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'bright';
+    return isDark
+      ? { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' }
+      : { background: '#f8f8f8', foreground: '#1a1a1a', cursor: '#3355aa', selectionBackground: 'rgba(50,80,170,0.2)' };
+  }
+
+  function openTerminal(tab) {
+    if (tab._shellOpen) return;
+    tab._shellOpen = true;
+
+    const wrap = tab.wrap;
+    wrap.style.flexDirection = 'column';
+
+    const browserContent = document.createElement('div');
+    browserContent.className = 'dir-browser-content';
+    while (wrap.firstChild) browserContent.appendChild(wrap.firstChild);
+    wrap.appendChild(browserContent);
+    tab._browserContent = browserContent;
+
+    const hResizer = document.createElement('div');
+    hResizer.className = 'dir-h-resizer';
+    wrap.appendChild(hResizer);
+    tab._hResizer = hResizer;
+
+    const termPanel = document.createElement('div');
+    termPanel.className = 'dir-terminal-panel';
+    termPanel.style.height = '200px';
+    wrap.appendChild(termPanel);
+    tab._termPanel = termPanel;
+
+    const termHeader = document.createElement('div');
+    termHeader.className = 'dir-terminal-header';
+    const termTitle = document.createElement('span');
+    termTitle.className = 'dir-terminal-title';
+    termTitle.textContent = 'Terminal';
+    const termClose = document.createElement('button');
+    termClose.className = 'dir-terminal-close';
+    termClose.title = 'Close terminal';
+    termClose.textContent = '×';
+    termClose.addEventListener('click', () => closeTerminal(tab));
+    termHeader.appendChild(termTitle);
+    termHeader.appendChild(termClose);
+    termPanel.appendChild(termHeader);
+
+    let startY, startH;
+    function onMove(e) {
+      const dy = startY - e.clientY;
+      const newH = Math.max(60, Math.min(startH + dy, wrap.offsetHeight - 120));
+      termPanel.style.height = newH + 'px';
+      if (tab._termFitAddon) try { tab._termFitAddon.fit(); } catch {}
+    }
+    function onUp() {
+      hResizer.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    hResizer.addEventListener('mousedown', e => {
+      e.preventDefault();
+      startY = e.clientY;
+      startH = termPanel.offsetHeight;
+      hResizer.classList.add('dragging');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+      theme: getCliTheme(),
+      convertEol: true,
+      scrollback: 5000,
+      allowProposedApi: true,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    try { terminal.loadAddon(new WebLinksAddon.WebLinksAddon()); } catch {}
+    const termBody = document.createElement('div');
+    termBody.className = 'dir-terminal-body';
+    termPanel.appendChild(termBody);
+
+    terminal.open(termBody);
+    tab._terminal = terminal;
+    tab._termFitAddon = fitAddon;
+
+    const ro = new ResizeObserver(() => {
+      if (termBody.offsetWidth > 0) {
+        try { fitAddon.fit(); } catch {}
+      }
+    });
+    ro.observe(termBody);
+    tab._termResizeObserver = ro;
+
+    tab._pendingShellSpawn = true;
+    sendWs({ type: 'cli:newTab' });
+  }
+
+  function finishShellSpawn(tab, cliTabId) {
+    tab._shellTabId = cliTabId;
+    shellTabs.set(cliTabId, tab);
+    tab._pendingShellSpawn = false;
+
+    tab._terminal.onData(data => {
+      sendWs({ type: 'cli:input', tabId: cliTabId, data });
+    });
+    tab._terminal.onResize(({ cols, rows }) => {
+      sendWs({ type: 'cli:resize', tabId: cliTabId, cols, rows });
+    });
+
+    const { cols, rows } = { cols: tab._terminal.cols, rows: tab._terminal.rows };
+    sendWs({ type: 'cli:spawn', tabId: cliTabId, cwd: tab.cwd || '/', cols, rows, shell: true });
+
+    setTimeout(() => {
+      try { tab._termFitAddon.fit(); } catch {}
+      tab._terminal.focus();
+    }, 100);
+  }
+
+  function closeTerminal(tab) {
+    if (!tab._shellOpen) return;
+    tab._shellOpen = false;
+
+    if (tab._shellTabId) {
+      sendWs({ type: 'cli:closeTab', tabId: tab._shellTabId });
+      shellTabs.delete(tab._shellTabId);
+      tab._shellTabId = null;
+    }
+
+    if (tab._termResizeObserver) {
+      tab._termResizeObserver.disconnect();
+      tab._termResizeObserver = null;
+    }
+    if (tab._terminal) {
+      tab._terminal.dispose();
+      tab._terminal = null;
+      tab._termFitAddon = null;
+    }
+
+    const wrap = tab.wrap;
+    if (tab._termPanel) { tab._termPanel.remove(); tab._termPanel = null; }
+    if (tab._hResizer) { tab._hResizer.remove(); tab._hResizer = null; }
+
+    if (tab._browserContent) {
+      while (tab._browserContent.firstChild) wrap.appendChild(tab._browserContent.firstChild);
+      tab._browserContent.remove();
+      tab._browserContent = null;
+    }
+    wrap.style.flexDirection = '';
+  }
+
+  function handleShellMessage(msg) {
+    if (msg.type === 'cli:newTab' && msg.tabId) {
+      for (const [, tab] of tabs) {
+        if (tab._pendingShellSpawn) {
+          finishShellSpawn(tab, msg.tabId);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    const tab = msg.tabId ? shellTabs.get(msg.tabId) : null;
+    if (!tab) return false;
+
+    switch (msg.type) {
+      case 'cli:output':
+        if (tab._terminal) tab._terminal.write(msg.data);
+        return true;
+      case 'cli:exit':
+        closeTerminal(tab);
+        return true;
+    }
+    return true;
   }
 
   // ── Search ─────────────────────────────────────────────────────────
@@ -759,5 +962,5 @@
     });
   }
 
-  window.directoriesModule = { tabs };
+  window.directoriesModule = { tabs, handleShellMessage };
 })();

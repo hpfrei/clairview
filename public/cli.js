@@ -1,5 +1,5 @@
 (function () {
-  const { sendWs, state, escHtml } = window.dashboard;
+  const { sendWs, state, escHtml, askFormBuildHTML, askFormBind } = window.dashboard;
   const tabStrip = document.getElementById('cliTabStrip');
   const tabNewBtn = document.getElementById('cliTabNew');
   const container = document.getElementById('cliContainer');
@@ -8,6 +8,7 @@
 
   const tabs = new Map();
   let activeTabId = null;
+  const pendingAskOverlays = new Map();
 
   function getTheme() {
     const isDark = document.documentElement.getAttribute('data-theme') !== 'bright';
@@ -102,7 +103,7 @@
 
     for (const [tabId, tab] of tabs) {
       const btn = document.createElement('button');
-      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '');
+      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '');
       btn.dataset.tabId = tabId;
 
       const label = document.createElement('span');
@@ -194,6 +195,7 @@
   }
 
   function removeTab(tabId) {
+    dismissAskOverlay(tabId);
     const tab = tabs.get(tabId);
     if (tab) {
       tab.terminal.dispose();
@@ -615,6 +617,152 @@
     if (cliHeaderTab) cliHeaderTab.classList.toggle('instance-running', anyStreaming);
   }
 
+  // --- AskUserQuestion overlay ---
+
+  function showAskOverlay(tabId, forms) {
+    const tab = tabs.get(tabId);
+    if (!tab) return;
+    dismissAskOverlay(tabId);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'cli-ask-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'cli-ask-modal';
+
+    const isSingle = forms.length === 1;
+    const binders = [];
+
+    if (!isSingle) {
+      const tabBar = document.createElement('div');
+      tabBar.className = 'cli-ask-tabs';
+      forms.forEach((f, idx) => {
+        const t = document.createElement('button');
+        t.className = 'cli-ask-tab' + (idx === 0 ? ' active' : '');
+        t.textContent = f.formData.title || `Question ${idx + 1}`;
+        t.addEventListener('click', () => {
+          tabBar.querySelectorAll('.cli-ask-tab').forEach(b => b.classList.remove('active'));
+          t.classList.add('active');
+          body.querySelectorAll('.cli-ask-form-panel').forEach(p => p.classList.remove('active'));
+          body.children[idx].classList.add('active');
+        });
+        tabBar.appendChild(t);
+      });
+      modal.appendChild(tabBar);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'cli-ask-body';
+
+    forms.forEach((f, idx) => {
+      const panel = document.createElement('div');
+      if (isSingle) {
+        panel.style.display = 'block';
+      } else {
+        panel.className = 'cli-ask-form-panel' + (idx === 0 ? ' active' : '');
+        panel.classList.add('ask-external-submit');
+      }
+      panel.innerHTML = askFormBuildHTML(f.formData);
+
+      const binder = askFormBind(panel, f.formData, isSingle ? {
+        onSubmit: (answer, files) => {
+          sendWs({ type: 'ask:answer', toolUseId: f.toolUseId, answer, files });
+          dismissAskOverlay(tabId);
+        },
+        onCancel: () => {
+          sendWs({ type: 'ask:answer', toolUseId: f.toolUseId, answer: [{ id: '_cancelled', question: '', answer: 'cancelled' }] });
+          dismissAskOverlay(tabId);
+        },
+      } : {
+        onSubmit: () => {},
+        onCancel: () => {},
+      });
+      binders.push({ binder, form: f });
+      body.appendChild(panel);
+    });
+
+    modal.appendChild(body);
+
+    if (!isSingle) {
+      const footer = document.createElement('div');
+      footer.className = 'cli-ask-footer';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ask-cancel-btn';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => {
+        for (const { binder, form } of binders) {
+          binder.disableForm();
+          sendWs({ type: 'ask:answer', toolUseId: form.toolUseId, answer: [{ id: '_cancelled', question: '', answer: 'cancelled' }] });
+        }
+        dismissAskOverlay(tabId);
+      });
+      footer.appendChild(cancelBtn);
+
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'ask-submit-btn';
+      submitBtn.textContent = 'Submit All';
+      submitBtn.disabled = true;
+
+      const updateReady = () => {
+        submitBtn.disabled = !binders.every(b => b.binder.checkReady());
+      };
+
+      const observer = new MutationObserver(updateReady);
+      observer.observe(body, { subtree: true, attributes: true, childList: true, characterData: true });
+      body.addEventListener('input', updateReady);
+      body.addEventListener('change', updateReady);
+      setTimeout(updateReady, 0);
+
+      submitBtn.addEventListener('click', () => {
+        for (const { binder, form } of binders) {
+          const answer = binder.collectAnswers();
+          const files = binder.getFileData();
+          sendWs({ type: 'ask:answer', toolUseId: form.toolUseId, answer, files });
+          binder.disableForm();
+        }
+        dismissAskOverlay(tabId);
+      });
+      footer.appendChild(submitBtn);
+      modal.appendChild(footer);
+    }
+
+    overlay.appendChild(modal);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.querySelector('.cli-ask-modal')?.scrollTo(0, 0);
+    });
+    tab.wrap.appendChild(overlay);
+    pendingAskOverlays.set(tabId, { overlayEl: overlay });
+    renderTabStrip();
+  }
+
+  function dismissAskOverlay(tabId) {
+    const pending = pendingAskOverlays.get(tabId);
+    if (pending) {
+      pending.overlayEl.remove();
+      pendingAskOverlays.delete(tabId);
+      renderTabStrip();
+    }
+  }
+
+  function handleAskMessage(msg) {
+    switch (msg.type) {
+      case 'ask:question': {
+        const tabId = msg.tabId;
+        if (!tabId || !tabs.has(tabId)) return;
+        showAskOverlay(tabId, msg.forms || []);
+        if (activeTabId !== tabId) switchTab(tabId);
+        // Also switch to the CLI view if we're on another view
+        if (typeof switchView === 'function') switchView('claude');
+        else document.querySelector('[data-view="claude"]')?.click();
+        break;
+      }
+      case 'ask:answered':
+      case 'ask:timeout': {
+        if (msg.tabId) dismissAskOverlay(msg.tabId);
+        break;
+      }
+    }
+  }
+
   // Expose module
-  window.cliModule = { handleMessage, tabs, updateStreamingState, switchTab };
+  window.cliModule = { handleMessage, handleAskMessage, tabs, updateStreamingState, switchTab };
 })();

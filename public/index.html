@@ -31,34 +31,24 @@
 <body>
   <header>
     <div class="header-left">
-      <h1 class="header-tab header-brand active" data-view="home" id="brandBtn"><svg class="brand-logo" width="28" height="28" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#f5f5f0"/><ellipse cx="32" cy="32" rx="22" ry="14" stroke="#2255aa" stroke-width="2.5"/><circle cx="32" cy="32" r="9" stroke="#7744bb" stroke-width="2"/><circle cx="32" cy="32" r="5" fill="#2255aa"/><circle cx="29" cy="30" r="1.8" fill="#fff" opacity="0.9"/><line x1="10" y1="22" x2="16" y2="26" stroke="#cc3344" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="8" y1="32" x2="14" y2="32" stroke="#1a8a3a" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="10" y1="42" x2="16" y2="38" stroke="#1088aa" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="48" y1="26" x2="54" y2="22" stroke="#c07020" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="50" y1="32" x2="56" y2="32" stroke="#7744bb" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/><line x1="48" y1="38" x2="54" y2="42" stroke="#2255aa" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/></svg> vistaclair</h1>
+      <h1 class="header-tab header-brand active" data-view="home" id="brandBtn"><svg class="brand-logo" width="28" height="28" viewBox="0 0 64 64" fill="none"><defs><linearGradient id="vc-g" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#cc3344"/><stop offset="25%" stop-color="#c07020"/><stop offset="50%" stop-color="#1a8a3a"/><stop offset="75%" stop-color="#2255aa"/><stop offset="100%" stop-color="#7744bb"/></linearGradient></defs><ellipse cx="32" cy="32" rx="29" ry="18" fill="#fff" stroke="#aaa" stroke-width="1.5"/><circle cx="32" cy="32" r="13" fill="url(#vc-g)"/><circle cx="32" cy="32" r="5.5" fill="#1a1a2e"/><circle cx="28" cy="28" r="2.5" fill="#fff"/></svg> vistaclair</h1>
       <nav class="header-tabs" id="headerTabs">
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab" data-view="claude">CLIs</button>
-        <button class="header-tab" data-view="capabilities">Tools &amp; MCP</button>
-        <button class="header-tab" data-view="models">Models</button>
-        <button class="header-tab" data-view="rules">Rules</button>
         <button class="header-tab" data-view="directories">Directories</button>
+        <span class="header-tab-sep"></span>
+        <button class="header-tab header-tab-config" data-view="models">Models</button>
+        <button class="header-tab header-tab-config" data-view="rules">Rules</button>
+        <button class="header-tab header-tab-config" data-view="capabilities">Tools &amp; MCP</button>
       </nav>
     </div>
     <div class="header-actions">
-      <button class="task-launcher hidden" id="taskLauncher" title="Show tasks &amp; todos">&#9745;</button>
-      <button id="sessionPickerBtn" class="session-picker-btn" title="Click to manage sessions"></button>
-      <button id="newSessionBtn" class="session-new-btn" title="New session">+ New</button>
-      <button class="restart-server-btn" id="restartServerBtn" title="Restart server">&#8635; Restart</button>
+      <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
     </div>
   </header>
   <div class="header-gradient-bar"></div>
-
-  <div class="task-panel hidden" id="taskPanel">
-    <div class="task-panel-header">
-      <span>Tasks</span>
-      <button class="task-panel-close" id="taskPanelClose" title="Collapse">&times;</button>
-    </div>
-    <div class="task-panel-list" id="taskPanelList"></div>
-  </div>
 
   <!-- ===== HOME VIEW ===== -->
   <div id="view-home">
@@ -152,7 +142,7 @@
       <button class="view-tab" data-section="skills">Skills <span class="view-tab-count" id="capSkillCount">8</span></button>
       <button class="view-tab" data-section="agents">Agents <span class="view-tab-count" id="capAgentCount">0</span></button>
       <button class="view-tab" data-section="hooks">Hooks <span class="view-tab-count" id="capHookCount">0</span></button>
-      <button class="view-tab" data-section="mcp">MCP Tools <span class="view-tab-count" id="capMcpCount">0</span></button>
+      <button class="view-tab" data-section="mcp">MCP <span class="view-tab-count" id="capMcpCount">0</span></button>
     </div>
     <div class="view-body ref-container">
 
@@ -1328,8 +1318,7 @@ jq -r '.tool_input.command' |
   <!-- ===== MODELS VIEW ===== -->
   <div id="view-models" class="hidden" style="display:none">
     <div class="view-nav" id="modelsNav">
-      <button class="cap-action-btn view-nav-action" id="capRefreshModels" title="Reload models from disk">Refresh Models</button>
-      <button class="cap-action-btn view-nav-action" id="capRefreshPricing" title="Look up current API pricing for all models">Refresh Pricing</button>
+      <button class="cap-action-btn view-nav-action" id="capRefreshModels" title="Scan providers for new models and update pricing">Refresh</button>
     </div>
     <div class="view-body" id="modelsContent">
       <div id="capRefreshStatus" class="hidden" style="padding:8px 12px;font-size:11px;color:var(--text-dim);"></div>
@@ -1415,13 +1404,11 @@ jq -r '.tool_input.command' |
     </div>
   </div>
 
-  <div id="mcp-modal-root"></div>
   <script src="core.js"></script>
   <script src="dir-picker.js"></script>
   <script src="inspector.js"></script>
   <script src="cli.js"></script>
   <script src="capabilities.js"></script>
-  <script src="tasks.js"></script>
   <script src="mcp.js"></script>
   <script src="home.js"></script>
   <script src="rules.js"></script>
