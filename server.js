@@ -15,22 +15,24 @@ const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
 
-// Check and auto-install native dependencies
-function checkDependencies() {
+// Check and auto-install native dependencies, then restart so they load
+(function checkDependencies() {
   const { execSync } = require('child_process');
   const missing = [];
   try { require.resolve('node-pty'); } catch { missing.push('node-pty'); }
   if (missing.length === 0) return;
-  console.log(`\n  Installing missing dependencies: ${missing.join(', ')}...`);
+  console.log(`Installing missing dependencies: ${missing.join(', ')}...`);
   try {
     execSync(`npm install --no-save ${missing.join(' ')}`, { cwd: __dirname, stdio: 'inherit' });
-    console.log('  Dependencies installed successfully.\n');
   } catch (err) {
-    console.error(`  Failed to install dependencies: ${err.message}`);
-    console.error('  CLI terminal feature will be unavailable. Run manually: npm install ' + missing.join(' '));
+    console.error(`Failed to install dependencies: ${err.message}`);
+    console.error('CLI terminal feature will be unavailable. Run manually: npm install ' + missing.join(' '));
+    return;
   }
-}
-checkDependencies();
+  console.log('Dependencies installed. Restarting...\n');
+  const child = require('child_process').spawnSync(process.execPath, process.argv.slice(1), { cwd: __dirname, stdio: 'inherit' });
+  process.exit(child.status ?? 1);
+})();
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const PORT_ARG = process.argv.slice(2).find(a => /^\d+$/.test(a));
@@ -79,6 +81,14 @@ dashboardApp.post('/login', (req, res) => {
   } else {
     res.redirect('/login?error=1');
   }
+});
+
+dashboardApp.get('/login/auto', (req, res) => {
+  if (req.query.token === AUTH_TOKEN) {
+    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
+    return res.redirect('/');
+  }
+  res.redirect('/login');
 });
 
 // Hook reporter endpoint (auth via body token, no cookie needed)
@@ -270,6 +280,14 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
     console.log('  Usage:');
     console.log(`    ANTHROPIC_BASE_URL=http://localhost:${PROXY_PORT} claude -p "your prompt"`);
     console.log('');
+
+    // Auto-open dashboard in the default browser (skip with NO_OPEN=1)
+    if (!process.env.NO_OPEN) {
+      const url = `http://localhost:${DASHBOARD_PORT}/login/auto?token=${AUTH_TOKEN}`;
+      const { exec } = require('child_process');
+      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      exec(`${cmd} "${url}"`);
+    }
   });
 });
 
