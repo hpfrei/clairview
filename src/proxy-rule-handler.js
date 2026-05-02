@@ -140,11 +140,10 @@ async function handleMessage(ws, msg, bc) {
 const RULE_CONTRACT = `The file must export a single function(ctx):
 
 module.exports = function(ctx) {
-  // ctx.body           - the request body (mutable object — modify in place)
+  // ctx.body           - the Anthropic Messages API request body (mutable — modify in place)
   // ctx.isStreaming     - boolean, true if body.stream is set
-  // ctx.profileName    - null (reserved, profiles removed)
-  // ctx.profileData    - null (reserved, profiles removed)
-  // ctx.instanceId     - string or null (Claude session instance ID)
+  // ctx.instanceId     - string or null (Claude session instance ID from the URL path)
+  // ctx.isInternalInstance - true if the CLI was spawned by the dashboard, false for external CLIs connecting to the proxy
   // ctx.req            - Express request object
   // ctx.res            - Express response object (for short-circuit rules)
   // ctx.interaction    - interaction tracking object
@@ -178,6 +177,79 @@ module.exports = function(ctx) {
   // - To transform responses, return { transformSSE(str){...}, transformBody(obj){...} }
   // - NEVER use require() for external npm modules — only Node built-ins
   // - Keep the function synchronous unless you need to await something
+};
+
+## Anthropic Messages API — request body shape
+
+ctx.body follows the Anthropic /v1/messages format:
+- model: string (e.g. "claude-sonnet-4-20250514")
+- max_tokens: number
+- system: string OR array of { type: "text", text: "..." } blocks (handle BOTH forms)
+- messages: array of { role: "user"|"assistant", content: string | array of content blocks }
+  Content blocks: { type: "text", text }, { type: "image", source: { type, data, media_type } },
+                  { type: "tool_use", id, name, input }, { type: "tool_result", tool_use_id, content }
+- tools: array of { name, description, input_schema } — the tools available to the model
+- stream: boolean
+
+## Existing rules (read for reference)
+
+Existing rule files live in capabilities/proxy-rules/*.js — read them to see real-world patterns.
+Key examples:
+- auq-mcp-rewrite.js: renames tools in requests and responses (uses transformSSE + transformBody)
+- unsafe-tool-filter.js: filters tools from ctx.body.tools
+- title-schema-shortcut.js: short-circuits with sendDummyResponse based on output_config`;
+
+const RULE_EXAMPLES = `Filtering tools:
+module.exports = function(ctx) {
+  if (Array.isArray(ctx.body.tools)) {
+    ctx.body.tools = ctx.body.tools.filter(t => t.name !== 'DangerousTool');
+  }
+};
+
+Short-circuiting (skipping the API call):
+module.exports = function(ctx) {
+  if (someCondition(ctx.body)) {
+    ctx.helpers.sendDummyResponse(ctx, { text: '{"result":"handled"}' });
+    return true;
+  }
+};
+
+Modifying system prompt (handle both string and array forms):
+module.exports = function(ctx) {
+  const extra = '\\nAlways respond in French.';
+  if (typeof ctx.body.system === 'string') {
+    ctx.body.system += extra;
+  } else if (Array.isArray(ctx.body.system)) {
+    ctx.body.system.push({ type: 'text', text: extra });
+  }
+};
+
+Scoping to internal CLIs only (skip external CLIs connecting to the proxy):
+module.exports = function(ctx) {
+  if (!ctx.isInternalInstance) return;
+  // ... rule logic that should only apply to dashboard-spawned CLIs
+};
+
+Transforming responses (request + response in one rule):
+module.exports = function(ctx) {
+  // request-side: filter a tool from the request
+  if (Array.isArray(ctx.body.tools)) {
+    ctx.body.tools = ctx.body.tools.filter(t => t.name !== 'OldTool');
+  }
+  // response-side: rename tool in SSE stream and non-streaming body
+  return {
+    transformSSE(eventStr) {
+      return eventStr.replace('"OldTool"', '"NewTool"');
+    },
+    transformBody(body) {
+      if (body?.content) {
+        for (const block of body.content) {
+          if (block.name === 'OldTool') block.name = 'NewTool';
+        }
+      }
+      return body;
+    },
+  };
 };`;
 
 function generateProxyRule(description) {
@@ -205,49 +277,7 @@ ${RULE_CONTRACT}
 
 ## Examples
 
-Filtering tools:
-module.exports = function(ctx) {
-  if (Array.isArray(ctx.body.tools)) {
-    ctx.body.tools = ctx.body.tools.filter(t => t.name !== 'DangerousTool');
-  }
-};
-
-Short-circuiting (skipping the API call):
-module.exports = function(ctx) {
-  if (someCondition(ctx.body)) {
-    ctx.helpers.sendDummyResponse(ctx, { text: '{"result":"handled"}' });
-    return true;
-  }
-};
-
-Modifying system prompt:
-module.exports = function(ctx) {
-  if (ctx.body.system && typeof ctx.body.system === 'string') {
-    ctx.body.system += '\\n\\nAlways respond in French.';
-  }
-};
-
-Transforming responses (request + response in one rule):
-module.exports = function(ctx) {
-  // request-side: filter a tool from the request
-  if (Array.isArray(ctx.body.tools)) {
-    ctx.body.tools = ctx.body.tools.filter(t => t.name !== 'OldTool');
-  }
-  // response-side: rename tool in SSE stream and non-streaming body
-  return {
-    transformSSE(eventStr) {
-      return eventStr.replace('"OldTool"', '"NewTool"');
-    },
-    transformBody(body) {
-      if (body?.content) {
-        for (const block of body.content) {
-          if (block.name === 'OldTool') block.name = 'NewTool';
-        }
-      }
-      return body;
-    },
-  };
-};
+${RULE_EXAMPLES}
 
 ## Output
 
@@ -349,6 +379,10 @@ ${existingSource}
 ## Module Contract
 
 ${RULE_CONTRACT}
+
+## Examples
+
+${RULE_EXAMPLES}
 
 ## Output
 

@@ -1,5 +1,5 @@
 // ============================================================
-// HOME VIEW — Overview, architecture, tools, API docs
+// HOME VIEW — Overview, proxy, MCP, API docs
 // ============================================================
 (function homeModule() {
   'use strict';
@@ -22,120 +22,199 @@
   const overviewMd = `
 # vistaclair
 
-A development dashboard that wraps **Claude Code** with real-time inspection, multi-session chat, custom MCP tools, multi-provider model routing, and a REST API.
-
-## What it does
-
-- **Chat** with Claude through multiple parallel browser tabs, each with its own working directory, profile, and model -- fully isolated sessions that never interfere with each other
-- **Inspect** every API call in real time -- request bodies, response streams, token usage, cost tracking, and timing -- across all sessions and providers
-- **Route to any model** -- use Anthropic Claude directly, or route through OpenAI, Google Gemini, DeepSeek, Kimi/Moonshot, or any OpenAI-compatible endpoint via provider translation
-- **Custom MCP tools** that Claude can call during any session -- you write the handler, Claude gets the capability
-- **AskUserQuestion** -- chat sessions can pause and ask you for input, then resume with the answer
-- **REST API** -- programmatically start chats and answer questions via Server-Sent Events
+A browser dashboard that **wraps Claude Code CLI**. It proxies all API traffic, giving you real-time inspection, multi-provider routing, custom tools, and interactive prompts — all from any browser. Set up a tunnel and you can control your development machine from anywhere: phone, tablet, another PC.
 
 \`\`\`svg
-<svg viewBox="0 0 800 380" xmlns="http://www.w3.org/2000/svg" style="max-width:800px;font-family:system-ui,sans-serif">
+<svg viewBox="0 0 780 270" xmlns="http://www.w3.org/2000/svg" style="max-width:780px;font-family:system-ui,sans-serif">
   <defs>
-    <marker id="ha" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
-    <marker id="hg" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--green)"/></marker>
+    <marker id="ov1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
   </defs>
 
-  <!-- Browser tabs -->
-  <rect x="20" y="20" width="160" height="70" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
-  <text x="100" y="46" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">Browser UI</text>
-  <text x="100" y="63" text-anchor="middle" fill="var(--text-dim)" font-size="10">chat tabs / inspector</text>
-  <text x="100" y="78" text-anchor="middle" fill="var(--text-dim)" font-size="10">profiles / models / rules</text>
+  <!-- You -->
+  <rect x="15" y="55" width="120" height="95" rx="10" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <text x="75" y="82" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">Any browser</text>
+  <text x="75" y="100" text-anchor="middle" fill="var(--text-dim)" font-size="10">laptop · phone · tablet</text>
+  <text x="75" y="134" text-anchor="middle" fill="var(--text-dim)" font-size="9">or REST API client</text>
 
-  <!-- API client -->
-  <rect x="20" y="110" width="160" height="40" rx="8" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="100" y="135" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="500">REST API client</text>
+  <!-- Tunnel arrow -->
+  <line x1="135" y1="100" x2="248" y2="100" stroke="var(--text-dim)" stroke-width="1.5" stroke-dasharray="8,4" marker-end="url(#ov1)"/>
+  <text x="192" y="90" text-anchor="middle" fill="var(--text-dim)" font-size="9">tunnel / VPN / LAN</text>
 
-  <!-- Server -->
-  <rect x="280" y="10" width="240" height="90" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
-  <text x="400" y="34" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">vistaclair server</text>
-  <text x="400" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="10">dashboard :3457  |  proxy :3456</text>
-  <text x="400" y="67" text-anchor="middle" fill="var(--text-dim)" font-size="10">session manager  |  proxy rules</text>
-  <text x="400" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="10">MCP server  |  cost tracker</text>
+  <!-- vistaclair server -->
+  <rect x="250" y="15" width="260" height="180" rx="10" fill="none" stroke="var(--green)" stroke-width="2.5"/>
+  <text x="380" y="42" text-anchor="middle" fill="var(--green)" font-size="15" font-weight="700">vistaclair</text>
+  <text x="380" y="60" text-anchor="middle" fill="var(--text-dim)" font-size="10">wraps Claude Code on your PC</text>
 
-  <!-- Anthropic API -->
-  <rect x="620" y="15" width="160" height="40" rx="8" fill="none" stroke="var(--purple)" stroke-width="2"/>
-  <text x="700" y="40" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">Anthropic API</text>
+  <rect x="262" y="72" width="115" height="28" rx="5" fill="none" stroke="var(--accent)" stroke-width="1"/>
+  <text x="319" y="90" text-anchor="middle" fill="var(--text)" font-size="10">Inspector</text>
 
-  <!-- Third-party APIs -->
-  <rect x="620" y="65" width="160" height="40" rx="8" fill="none" stroke="var(--text-dim)" stroke-width="1.5"/>
-  <text x="700" y="85" text-anchor="middle" fill="var(--text-dim)" font-size="11">OpenAI / Gemini / ...</text>
+  <rect x="385" y="72" width="115" height="28" rx="5" fill="none" stroke="var(--accent)" stroke-width="1"/>
+  <text x="442" y="90" text-anchor="middle" fill="var(--text)" font-size="10">Chat tabs</text>
 
-  <!-- Arrows: browser/api to server -->
-  <line x1="180" y1="55" x2="280" y2="55" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ha)"/>
-  <text x="230" y="48" text-anchor="middle" fill="var(--text-dim)" font-size="9">WebSocket</text>
-  <line x1="180" y1="130" x2="280" y2="65" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
-  <text x="218" y="106" text-anchor="middle" fill="var(--text-dim)" font-size="9">SSE</text>
+  <rect x="262" y="108" width="115" height="28" rx="5" fill="none" stroke="var(--accent)" stroke-width="1"/>
+  <text x="319" y="126" text-anchor="middle" fill="var(--text)" font-size="10">CLI · Directories</text>
 
-  <!-- Arrows: server to APIs -->
-  <line x1="520" y1="35" x2="620" y2="35" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ha)"/>
-  <line x1="520" y1="75" x2="620" y2="82" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
-  <text x="570" y="28" text-anchor="middle" fill="var(--text-dim)" font-size="9">direct</text>
-  <text x="570" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="9">translated</text>
+  <rect x="385" y="108" width="115" height="28" rx="5" fill="none" stroke="var(--accent)" stroke-width="1"/>
+  <text x="442" y="126" text-anchor="middle" fill="var(--text)" font-size="10">MCP · Rules</text>
 
-  <!-- Claude -p processes -->
-  <rect x="220" y="140" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="285" y="160" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="285" y="175" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat session 1</text>
+  <text x="380" y="182" text-anchor="middle" fill="var(--text-dim)" font-size="9">dashboard :3457  ·  proxy :3456</text>
 
-  <rect x="370" y="140" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="435" y="160" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="435" y="175" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat session 2</text>
+  <!-- Claude processes -->
+  <rect x="270" y="210" width="100" height="35" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="320" y="232" text-anchor="middle" fill="var(--text)" font-size="10">claude -p</text>
 
-  <rect x="220" y="200" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="285" y="220" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="285" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat session 3</text>
+  <rect x="390" y="210" width="100" height="35" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="440" y="232" text-anchor="middle" fill="var(--text)" font-size="10">claude -p</text>
 
-  <rect x="370" y="200" width="130" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="435" y="220" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="435" y="235" text-anchor="middle" fill="var(--text-dim)" font-size="9">API session</text>
+  <line x1="340" y1="195" x2="320" y2="210" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ov1)"/>
+  <line x1="420" y1="195" x2="440" y2="210" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ov1)"/>
 
-  <!-- Arrows: server to claude processes -->
-  <line x1="340" y1="100" x2="285" y2="140" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
-  <line x1="400" y1="100" x2="435" y2="140" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
-  <line x1="340" y1="100" x2="285" y2="200" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ha)"/>
-  <line x1="400" y1="100" x2="435" y2="200" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ha)"/>
+  <!-- Arrows to APIs -->
+  <line x1="510" y1="70" x2="588" y2="58" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ov1)"/>
+  <line x1="510" y1="110" x2="588" y2="115" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ov1)"/>
+  <text x="550" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="8">direct</text>
+  <text x="550" y="107" text-anchor="middle" fill="var(--text-dim)" font-size="8">translated</text>
 
-  <!-- Profile-scoped URLs label -->
-  <rect x="530" y="145" width="240" height="55" rx="6" fill="none" stroke="var(--green)" stroke-width="1" stroke-dasharray="4"/>
-  <text x="650" y="163" text-anchor="middle" fill="var(--text-dim)" font-size="9">each process has its own profile URL:</text>
-  <text x="650" y="178" text-anchor="middle" fill="var(--green)" font-size="9" font-weight="600">localhost:3456/p/{profile}/v1/messages</text>
-  <text x="650" y="191" text-anchor="middle" fill="var(--text-dim)" font-size="9">concurrent sessions never interfere</text>
+  <!-- LLM APIs -->
+  <rect x="590" y="38" width="170" height="35" rx="6" fill="none" stroke="var(--purple)" stroke-width="2"/>
+  <text x="675" y="60" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Anthropic API</text>
+
+  <rect x="590" y="93" width="170" height="45" rx="6" fill="none" stroke="var(--text-dim)" stroke-width="1.5"/>
+  <text x="675" y="113" text-anchor="middle" fill="var(--text-dim)" font-size="10">OpenAI · Gemini</text>
+  <text x="675" y="128" text-anchor="middle" fill="var(--text-dim)" font-size="10">DeepSeek · Ollama · ...</text>
 
   <!-- AskUserQuestion -->
-  <rect x="80" y="290" width="200" height="45" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1.5" stroke-dasharray="4"/>
-  <text x="180" y="317" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">AskUserQuestion (intercepted)</text>
-  <line x1="285" y1="245" x2="250" y2="290" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ha)"/>
-  <line x1="435" y1="245" x2="260" y2="300" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ha)"/>
-  <line x1="180" y1="290" x2="100" y2="90" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ha)"/>
-  <text x="90" y="200" fill="var(--text-dim)" font-size="9">shown in UI</text>
-
-  <!-- MCP -->
-  <rect x="520" y="225" width="180" height="45" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
-  <text x="610" y="245" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">MCP Tools</text>
-  <text x="610" y="259" text-anchor="middle" fill="var(--text-dim)" font-size="9">custom + built-in tools</text>
-  <line x1="500" y1="220" x2="520" y2="235" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ha)"/>
-
-
+  <rect x="80" y="230" width="160" height="30" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1.5" stroke-dasharray="4"/>
+  <text x="160" y="250" text-anchor="middle" fill="var(--text)" font-size="10">AskUserQuestion</text>
+  <line x1="270" y1="240" x2="240" y2="245" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ov1)"/>
+  <line x1="80" y1="240" x2="75" y2="150" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="3" marker-end="url(#ov1)"/>
+  <text x="50" y="200" fill="var(--text-dim)" font-size="8">shown</text>
+  <text x="50" y="210" fill="var(--text-dim)" font-size="8">in UI</text>
 </svg>
 \`\`\`
 
+---
+
+## Debug Claude Code in real time
+
+The **Inspector** records every API call between Claude Code and the LLM. See request bodies, response streams, tool calls, token usage, cost, and timing — across all sessions and providers. When something goes wrong, you see exactly what happened.
+
+\`\`\`svg
+<svg viewBox="0 0 680 175" xmlns="http://www.w3.org/2000/svg" style="max-width:680px;font-family:system-ui,sans-serif">
+  <!-- Timeline -->
+  <line x1="40" y1="15" x2="40" y2="160" stroke="var(--text-dim)" stroke-width="1.5" opacity="0.4"/>
+
+  <!-- Event 1: API call -->
+  <circle cx="40" cy="28" r="6" fill="var(--green)" opacity="0.9"/>
+  <rect x="60" y="14" width="600" height="28" rx="5" fill="none" stroke="var(--green)" stroke-width="1"/>
+  <text x="72" y="33" fill="var(--text)" font-size="11" font-weight="500">POST /v1/messages</text>
+  <text x="310" y="33" fill="var(--text-dim)" font-size="10">claude-sonnet-4-5-20250514</text>
+  <text x="540" y="33" fill="var(--text-dim)" font-size="10">12.4k tok · $0.042 · 2.3s</text>
+
+  <!-- Event 2: Tool use -->
+  <circle cx="40" cy="64" r="6" fill="var(--purple)" opacity="0.9"/>
+  <rect x="60" y="50" width="600" height="28" rx="5" fill="none" stroke="var(--purple)" stroke-width="1"/>
+  <text x="72" y="69" fill="var(--text)" font-size="11" font-weight="500">tool_use: Edit</text>
+  <text x="310" y="69" fill="var(--text-dim)" font-size="10">src/auth.js — 3 lines changed</text>
+  <text x="540" y="69" fill="var(--green)" font-size="10">success</text>
+
+  <!-- Event 3: Another API call -->
+  <circle cx="40" cy="100" r="6" fill="var(--green)" opacity="0.9"/>
+  <rect x="60" y="86" width="600" height="28" rx="5" fill="none" stroke="var(--green)" stroke-width="1"/>
+  <text x="72" y="105" fill="var(--text)" font-size="11" font-weight="500">POST /v1/messages</text>
+  <text x="310" y="105" fill="var(--text-dim)" font-size="10">claude-sonnet-4-5-20250514</text>
+  <text x="540" y="105" fill="var(--text-dim)" font-size="10">8.1k tok · $0.028 · 1.8s</text>
+
+  <!-- Event 4: AskUserQuestion -->
+  <circle cx="40" cy="136" r="6" fill="var(--yellow,#fa0)" opacity="0.9"/>
+  <rect x="60" y="122" width="600" height="28" rx="5" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="4"/>
+  <text x="72" y="141" fill="var(--text)" font-size="11" font-weight="500">AskUserQuestion</text>
+  <text x="310" y="141" fill="var(--text-dim)" font-size="10">"Which database should I use?"</text>
+  <text x="540" y="141" fill="var(--yellow,#fa0)" font-size="10">waiting for answer…</text>
+
+  <!-- Legend -->
+  <text x="40" y="170" fill="var(--text-dim)" font-size="9">Every event is clickable — expand to see full request/response payloads, headers, and streaming chunks</text>
+</svg>
+\`\`\`
+
+---
+
+## Proxy rules and MCP tools — made from a prompt
+
+Describe a rule in plain English in the **Rules** tab — vistaclair generates JavaScript middleware that intercepts every API call flowing through the proxy. Block tools, swap models, inject system prompts, or transform requests. Rules are hot-reloaded and toggleable.
+
+**MCP tools** work similarly: define parameters and write a handler in the **MCP** tab. Claude gets the new capability instantly — no server restart, no config files.
+
+\`\`\`svg
+<svg viewBox="0 0 700 110" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
+  <defs>
+    <marker id="ov2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
+  </defs>
+
+  <!-- Prompt -->
+  <rect x="10" y="15" width="200" height="65" rx="8" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="110" y="38" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">"Block rm, sudo, and</text>
+  <text x="110" y="53" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500"> any destructive tools"</text>
+  <text x="110" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="9">your prompt in natural language</text>
+
+  <!-- Arrow -->
+  <line x1="210" y1="48" x2="278" y2="48" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ov2)"/>
+  <text x="244" y="40" text-anchor="middle" fill="var(--text-dim)" font-size="8">generates</text>
+
+  <!-- Generated rule -->
+  <rect x="280" y="10" width="190" height="75" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
+  <text x="375" y="34" text-anchor="middle" fill="var(--green)" font-size="12" font-weight="600">Proxy Rule</text>
+  <text x="375" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="9">JavaScript middleware</text>
+  <text x="375" y="66" text-anchor="middle" fill="var(--text-dim)" font-size="9">hot-reloaded · toggleable</text>
+
+  <!-- Arrow -->
+  <line x1="470" y1="48" x2="518" y2="48" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ov2)"/>
+  <text x="494" y="40" text-anchor="middle" fill="var(--text-dim)" font-size="8">applied to</text>
+
+  <!-- Proxy -->
+  <rect x="520" y="18" width="160" height="60" rx="8" fill="none" stroke="var(--text-dim)" stroke-width="1.5"/>
+  <text x="600" y="42" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="500">Proxy :3456</text>
+  <text x="600" y="58" text-anchor="middle" fill="var(--text-dim)" font-size="9">intercepts every API call</text>
+
+  <!-- Bottom note -->
+  <text x="350" y="105" text-anchor="middle" fill="var(--text-dim)" font-size="9">Same flow for MCP tools: describe parameters → write handler → Claude gets the capability</text>
+</svg>
+\`\`\`
+
+---
+
+## What you can do
+
+- **Work remotely** — set up a tunnel (cloudflared, ngrok, bore) and control your home dev machine from any browser. Your codebase stays on your machine; you just control it remotely.
+- **Run multiple sessions** — open several chat tabs, each with its own working directory and model mapping. Let one refactor auth while another writes tests.
+- **Switch models** — route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local Ollama with a dropdown change. Automatic protocol translation.
+- **Use the CLI terminal** — the **CLIs** tab is a full Claude Code terminal running on your server. Start sessions, run commands — no local install needed on the client.
+- **Manage directories** — the **Directories** tab lets you browse, create, and switch between project folders. Each chat session gets its own sandboxed working directory.
+- **AskUserQuestion** — when Claude Code needs input mid-task, the question appears in your browser. Answer it and Claude continues. Works across all sessions.
+- **REST API** — \`POST /api/run\` to start chats programmatically and stream results via SSE. Build automations on top.
+
 ## Quick start
 
-1. **Chat tab** -- type a prompt, pick a profile (model + permissions), set a working directory. Open multiple tabs for parallel conversations -- each is fully isolated.
-2. **Inspector tab** -- see every API call from all sessions with full request/response detail, token counts, and cost.
-3. **Profiles tab** -- one tab per profile with inline editing of model, effort, permission mode, tools, and system prompts. Builtin profiles (\`full\`, \`safe\`, \`readonly\`, \`minimal\`) are read-only.
-4. **Tools tab** -- browse all tools, skills, agents, hooks, and MCP tools available to the active profile.
-5. **Models tab** -- browse models by provider, set API keys per provider, add custom model definitions.
-6. **REST API** -- \`POST /api/run\` to start chats programmatically and stream results via SSE.
+1. \`git clone https://github.com/hpfrei/vistaclair.git && cd vistaclair\`
+2. \`npm install\`
+3. \`npm start\` — open **localhost:3457**
+
+### Remote access via tunnel
+
+Expose vistaclair through a tunnel and access it from any device. The auth token protects access; the proxy (:3456) stays localhost-only.
+
+\`\`\`bash
+# Pick one:
+cloudflared tunnel --url http://localhost:3457
+npx bore local 3457 --to bore.pub
+ssh -R 80:localhost:3457 serveo.net
+\`\`\`
 `;
 
-  const architectureMd = `
-# Architecture
+  const proxyMd = `
+# Proxy
+
+The transparent proxy sits between Claude Code and the LLM. Every API call flows through it — recorded for the Inspector, routed to the right provider, with AskUserQuestion intercepted along the way. This is the core of vistaclair.
 
 ## Server components
 
@@ -143,92 +222,92 @@ vistaclair runs two servers from a single Node.js process:
 
 | Component | Port | Purpose |
 |-----------|------|---------|
-| **Proxy** | \`:3456\` (localhost only) | Intercepts all Claude API calls for inspection and model routing. Also intercepts AskUserQuestion tool calls. |
+| **Proxy** | \`:3456\` (localhost only) | Intercepts all Claude API calls for inspection and model routing. Intercepts AskUserQuestion tool calls. |
 | **Dashboard** | \`:3457\` (all interfaces) | WebSocket server for real-time UI updates, REST API, serves the web UI. Auth-protected. |
 
 Internal services (no separate port):
 
 | Component | Purpose |
 |-----------|---------|
-| **Session Manager** | One \`claude -p\` process per chat tab, with independent cwd and profile. Sessions persist across browser reconnects. |
+| **Session Manager** | One \`claude -p\` process per chat tab, with independent cwd and model mapping. Sessions persist across browser reconnects. |
 | **MCP Server** | Integrated tool server auto-registered with every \`claude -p\` process. Custom tools + built-in chat tools. |
 | **Cost Tracker** | Records token usage and cost per interaction, per model, per provider. Visible in the Inspector. |
 
 ## Per-session model routing
 
-Every \`claude -p\` process gets its profile baked into its base URL at spawn time:
+Every \`claude -p\` process gets its instance ID baked into its base URL at spawn time:
 
 \`\`\`
-ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
+ANTHROPIC_BASE_URL = http://localhost:3456/i/{instanceId}
 \`\`\`
 
-This means profile selection is **immutable for the process lifetime** -- switching profiles in the browser UI will never affect a running session. Concurrent chats and API calls are fully isolated.
+Each session has a \`modelMap\` that maps Claude tiers (\`opus\`, \`sonnet\`, \`haiku\`) to specific models from any provider. A \`null\` entry means forward to Anthropic as-is. The instance ID is **immutable for the process lifetime** — changing model settings in one tab never affects another.
 
 \`\`\`svg
 <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" style="max-width:760px;font-family:system-ui,sans-serif">
-  <defs><marker id="a2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
+  <defs><marker id="px1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
 
-  <!-- Claude process -->
+  <!-- Claude process 1 -->
   <rect x="10" y="30" width="130" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
   <text x="75" y="52" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="75" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="9">profile: gemini-fast</text>
+  <text x="75" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="9">instance: cli-tab-1</text>
 
   <!-- Proxy -->
   <rect x="210" y="15" width="190" height="80" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
   <text x="305" y="38" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Proxy :3456</text>
-  <text x="305" y="55" text-anchor="middle" fill="var(--text-dim)" font-size="9">extracts profile from URL</text>
-  <text x="305" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="9">loads modelDef + provider</text>
+  <text x="305" y="55" text-anchor="middle" fill="var(--text-dim)" font-size="9">extracts instance ID from URL</text>
+  <text x="305" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="9">looks up session modelMap</text>
   <text x="305" y="81" text-anchor="middle" fill="var(--text-dim)" font-size="9">records for inspector</text>
 
-  <!-- Path 1: third-party -->
+  <!-- Third-party -->
   <rect x="500" y="15" width="150" height="40" rx="6" fill="none" stroke="var(--text-dim)" stroke-width="1.5"/>
   <text x="575" y="40" text-anchor="middle" fill="var(--text)" font-size="11">Gemini / OpenAI / ...</text>
-  <line x1="400" y1="40" x2="500" y2="35" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a2)"/>
+  <line x1="400" y1="40" x2="500" y2="35" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px1)"/>
   <text x="450" y="28" text-anchor="middle" fill="var(--text-dim)" font-size="8">translate request</text>
 
-  <!-- Path 2: Anthropic -->
+  <!-- Anthropic -->
   <rect x="500" y="65" width="150" height="40" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
   <text x="575" y="90" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Anthropic API</text>
-  <line x1="400" y1="70" x2="500" y2="80" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a2)"/>
+  <line x1="400" y1="70" x2="500" y2="80" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px1)"/>
   <text x="450" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="8">forward as-is</text>
 
-  <!-- Arrow: claude to proxy -->
-  <line x1="140" y1="55" x2="210" y2="55" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a2)"/>
-  <text x="175" y="48" text-anchor="middle" fill="var(--green)" font-size="7">/p/gemini-fast/v1/messages</text>
+  <!-- Arrow -->
+  <line x1="140" y1="55" x2="210" y2="55" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px1)"/>
+  <text x="175" y="48" text-anchor="middle" fill="var(--green)" font-size="7">/i/cli-tab-1/v1/messages</text>
 
-  <!-- Decision box -->
-  <text x="305" y="120" text-anchor="middle" fill="var(--text-dim)" font-size="10">Profile has modelDef?  yes → translate to provider   |   no → forward to Anthropic</text>
+  <!-- Decision -->
+  <text x="305" y="120" text-anchor="middle" fill="var(--text-dim)" font-size="10">modelMap has entry?  yes → translate to provider   |   no → forward to Anthropic</text>
 
-  <!-- Second example: direct Anthropic -->
+  <!-- Second example -->
   <rect x="10" y="155" width="130" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
   <text x="75" y="177" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="75" y="193" text-anchor="middle" fill="var(--text-dim)" font-size="9">profile: full</text>
+  <text x="75" y="193" text-anchor="middle" fill="var(--text-dim)" font-size="9">instance: cli-tab-2</text>
 
   <rect x="210" y="150" width="190" height="60" rx="8" fill="none" stroke="var(--green)" stroke-width="1.5"/>
   <text x="305" y="175" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Proxy :3456</text>
-  <text x="305" y="192" text-anchor="middle" fill="var(--text-dim)" font-size="9">profile: full → no modelDef</text>
+  <text x="305" y="192" text-anchor="middle" fill="var(--text-dim)" font-size="9">modelMap: all null</text>
 
   <rect x="500" y="155" width="150" height="40" rx="6" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
   <text x="575" y="180" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Anthropic API</text>
 
-  <line x1="140" y1="180" x2="210" y2="180" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a2)"/>
-  <text x="175" y="173" text-anchor="middle" fill="var(--green)" font-size="7">/p/full/v1/messages</text>
-  <line x1="400" y1="175" x2="500" y2="175" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a2)"/>
+  <line x1="140" y1="180" x2="210" y2="180" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px1)"/>
+  <text x="175" y="173" text-anchor="middle" fill="var(--green)" font-size="7">/i/cli-tab-2/v1/messages</text>
+  <line x1="400" y1="175" x2="500" y2="175" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px1)"/>
   <text x="450" y="168" text-anchor="middle" fill="var(--text-dim)" font-size="8">forward as-is</text>
 
   <!-- Isolation note -->
   <rect x="120" y="235" width="520" height="30" rx="6" fill="none" stroke="var(--yellow,#fa0)" stroke-width="1" stroke-dasharray="4"/>
-  <text x="380" y="255" text-anchor="middle" fill="var(--text-dim)" font-size="10">Both sessions run concurrently. Switching profiles in the UI never affects running processes.</text>
+  <text x="380" y="255" text-anchor="middle" fill="var(--text-dim)" font-size="10">Both sessions run concurrently. Each has its own modelMap — changing settings in one never affects the other.</text>
 </svg>
 \`\`\`
 
 ## How a chat message flows
 
 1. You type a message in the **Chat tab** and click Send
-2. The **Dashboard** receives it over WebSocket and spawns \`claude -p\` with \`ANTHROPIC_BASE_URL=http://localhost:3456/p/{profile}\`
+2. The **Dashboard** receives it over WebSocket and spawns \`claude -p\` with \`ANTHROPIC_BASE_URL=http://localhost:3456/i/{instanceId}\`
 3. \`claude -p\` sends API requests to the proxy (thinking it's talking to Anthropic)
-4. The **Proxy** intercepts the request, loads the profile, and either:
-   - **Forwards** to the real Anthropic API (if no \`modelDef\` in the profile), or
+4. The **Proxy** intercepts the request, looks up the session's \`modelMap\`, and either:
+   - **Forwards** to the real Anthropic API (if no mapping for the requested model tier), or
    - **Translates** to the target provider's format (OpenAI, Gemini, etc.) and sends it there
 5. The response streams back through the proxy (which records it for the Inspector)
 6. \`claude -p\` streams text to stdout, which the Dashboard broadcasts over WebSocket to the browser
@@ -237,76 +316,139 @@ This means profile selection is **immutable for the process lifetime** -- switch
 
 When \`claude -p\` calls the \`AskUserQuestion\` tool during a chat session:
 
-1. The **proxy** intercepts the tool call in the API response stream
-2. When \`claude -p\` sends back the error tool_result, the proxy **pauses** the request
-3. The proxy **broadcasts** \`ask:question\` to the dashboard UI (with session context)
-4. The UI renders the question with options + free text input
-5. User answers, UI sends \`ask:answer\` back via WebSocket
-6. Proxy **rewrites** the tool_result with the real answer and continues the API call
-7. Claude resumes as if the tool succeeded normally
+\`\`\`svg
+<svg viewBox="0 0 700 160" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
+  <defs><marker id="px2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker>
+  <marker id="px3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--yellow,#fa0)"/></marker></defs>
+
+  <!-- Claude -->
+  <rect x="10" y="30" width="100" height="45" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="60" y="50" text-anchor="middle" fill="var(--text)" font-size="10" font-weight="500">claude -p</text>
+  <text x="60" y="65" text-anchor="middle" fill="var(--text-dim)" font-size="8">calls AUQ</text>
+
+  <line x1="110" y1="52" x2="178" y2="52" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#px2)"/>
+
+  <!-- Proxy -->
+  <rect x="180" y="20" width="150" height="65" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
+  <text x="255" y="42" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600">Proxy</text>
+  <text x="255" y="58" text-anchor="middle" fill="var(--text-dim)" font-size="9">intercepts tool call</text>
+  <text x="255" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="9">pauses request</text>
+
+  <line x1="330" y1="52" x2="398" y2="52" stroke="var(--yellow,#fa0)" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#px3)"/>
+
+  <!-- Browser -->
+  <rect x="400" y="25" width="130" height="55" rx="8" fill="none" stroke="var(--yellow,#fa0)" stroke-width="2"/>
+  <text x="465" y="48" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600">Browser UI</text>
+  <text x="465" y="64" text-anchor="middle" fill="var(--text-dim)" font-size="9">shows question</text>
+
+  <!-- Answer arrow back -->
+  <path d="M465 80 Q465 120, 255 120 Q180 120, 60 90" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#px2)"/>
+  <text x="300" y="115" text-anchor="middle" fill="var(--green)" font-size="9">user answers → proxy rewrites → claude resumes</text>
+
+  <!-- Labels -->
+  <text x="350" y="150" text-anchor="middle" fill="var(--text-dim)" font-size="9">Claude continues as if the tool succeeded normally. Works with both browser and REST API sessions.</text>
+</svg>
+\`\`\`
+
+## Proxy rules
+
+Rules are AI-generated middleware that intercept every request flowing through the proxy. Describe what you want in plain English in the **Rules** tab — vistaclair generates JavaScript that runs before model routing.
+
+\`\`\`svg
+<svg viewBox="0 0 680 90" xmlns="http://www.w3.org/2000/svg" style="max-width:680px;font-family:system-ui,sans-serif">
+  <defs><marker id="px4" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="var(--text-dim)"/></marker></defs>
+
+  <!-- Pipeline -->
+  <rect x="10" y="20" width="100" height="40" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="60" y="44" text-anchor="middle" fill="var(--text)" font-size="10">API request</text>
+
+  <line x1="110" y1="40" x2="138" y2="40" stroke="var(--text-dim)" stroke-width="1.2" marker-end="url(#px4)"/>
+
+  <rect x="140" y="15" width="110" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="195" y="36" text-anchor="middle" fill="var(--text)" font-size="9" font-weight="500">Rule 1</text>
+  <text x="195" y="50" text-anchor="middle" fill="var(--text-dim)" font-size="8">block tools</text>
+
+  <line x1="250" y1="40" x2="278" y2="40" stroke="var(--text-dim)" stroke-width="1.2" marker-end="url(#px4)"/>
+
+  <rect x="280" y="15" width="110" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="335" y="36" text-anchor="middle" fill="var(--text)" font-size="9" font-weight="500">Rule 2</text>
+  <text x="335" y="50" text-anchor="middle" fill="var(--text-dim)" font-size="8">swap model</text>
+
+  <line x1="390" y1="40" x2="418" y2="40" stroke="var(--text-dim)" stroke-width="1.2" marker-end="url(#px4)"/>
+
+  <rect x="420" y="15" width="110" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="475" y="36" text-anchor="middle" fill="var(--text)" font-size="9" font-weight="500">Rule 3</text>
+  <text x="475" y="50" text-anchor="middle" fill="var(--text-dim)" font-size="8">inject prompt</text>
+
+  <line x1="530" y1="40" x2="558" y2="40" stroke="var(--text-dim)" stroke-width="1.2" marker-end="url(#px4)"/>
+
+  <rect x="560" y="20" width="100" height="40" rx="6" fill="none" stroke="var(--green)" stroke-width="2"/>
+  <text x="610" y="44" text-anchor="middle" fill="var(--green)" font-size="10" font-weight="500">Provider</text>
+
+  <text x="340" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="9">Rules run in order, hot-reloaded. Toggle on/off or drag to reorder in the Rules tab.</text>
+</svg>
+\`\`\`
 
 `;
 
-  const toolsMd = `
+  const mcpMd = `
 # MCP Tools
 
-Custom tools extend what Claude can do. You write a JavaScript handler, and Claude can call it like any built-in tool during chat sessions.
+Custom tools extend what Claude can do. You write a JavaScript handler in the browser, and Claude can call it like any built-in tool during chat sessions. No server restart needed — changes are picked up instantly.
 
 \`\`\`svg
-<svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
-  <defs><marker id="a4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
+<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
+  <defs><marker id="mc1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
 
   <!-- Claude process -->
-  <rect x="10" y="65" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="70" y="87" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="70" y="103" text-anchor="middle" fill="var(--text-dim)" font-size="9">any session</text>
+  <rect x="10" y="50" width="120" height="55" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="70" y="74" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
+  <text x="70" y="92" text-anchor="middle" fill="var(--text-dim)" font-size="9">any session</text>
 
   <!-- MCP Server -->
-  <rect x="210" y="30" width="180" height="120" rx="8" fill="none" stroke="var(--purple)" stroke-width="2"/>
-  <text x="300" y="55" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">MCP Server</text>
-  <text x="300" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="9">auto-registered with claude -p</text>
-  <text x="300" y="86" text-anchor="middle" fill="var(--text-dim)" font-size="9">stdio transport (JSON-RPC)</text>
-  <text x="300" y="100" text-anchor="middle" fill="var(--text-dim)" font-size="9">Zod schema validation</text>
-  <text x="300" y="114" text-anchor="middle" fill="var(--text-dim)" font-size="9">connectable by external clients</text>
+  <rect x="210" y="20" width="180" height="120" rx="8" fill="none" stroke="var(--purple)" stroke-width="2"/>
+  <text x="300" y="46" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">MCP Server</text>
+  <text x="300" y="64" text-anchor="middle" fill="var(--text-dim)" font-size="9">auto-registered with claude -p</text>
+  <text x="300" y="78" text-anchor="middle" fill="var(--text-dim)" font-size="9">stdio transport (JSON-RPC)</text>
+  <text x="300" y="92" text-anchor="middle" fill="var(--text-dim)" font-size="9">Zod schema validation</text>
+  <text x="300" y="106" text-anchor="middle" fill="var(--text-dim)" font-size="9">connectable by external clients</text>
 
   <!-- Custom handler -->
-  <rect x="470" y="20" width="170" height="45" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="555" y="40" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Custom handlers</text>
-  <text x="555" y="55" text-anchor="middle" fill="var(--text-dim)" font-size="9">your JavaScript code</text>
+  <rect x="470" y="15" width="170" height="50" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="555" y="36" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Custom handlers</text>
+  <text x="555" y="52" text-anchor="middle" fill="var(--text-dim)" font-size="9">your JavaScript code</text>
 
   <!-- Built-in tools -->
-  <rect x="470" y="75" width="170" height="45" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
-  <text x="555" y="95" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Built-in tools</text>
-  <text x="555" y="110" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat, ...</text>
+  <rect x="470" y="75" width="170" height="50" rx="6" fill="none" stroke="var(--green)" stroke-width="1.5"/>
+  <text x="555" y="96" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Built-in tools</text>
+  <text x="555" y="112" text-anchor="middle" fill="var(--text-dim)" font-size="9">chat (delegation)</text>
 
   <!-- Arrows -->
-  <line x1="130" y1="90" x2="210" y2="90" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a4)"/>
-  <text x="170" y="83" text-anchor="middle" fill="var(--text-dim)" font-size="8">tool_use</text>
-  <line x1="390" y1="55" x2="470" y2="43" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
-  <line x1="390" y1="90" x2="470" y2="97" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a4)"/>
+  <line x1="130" y1="78" x2="210" y2="78" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#mc1)"/>
+  <text x="170" y="70" text-anchor="middle" fill="var(--text-dim)" font-size="8">tool_use</text>
+  <line x1="390" y1="45" x2="470" y2="40" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#mc1)"/>
+  <line x1="390" y1="90" x2="470" y2="97" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#mc1)"/>
 
   <!-- Notes -->
-  <text x="350" y="210" text-anchor="middle" fill="var(--text-dim)" font-size="10">Custom tools are defined in Profiles > MCP Tools</text>
-  <text x="350" y="228" text-anchor="middle" fill="var(--text-dim)" font-size="10">External MCP clients can connect via stdio to access all tools  |  Tool calls appear in Inspector</text>
+  <text x="350" y="170" text-anchor="middle" fill="var(--text-dim)" font-size="10">Tools are defined in MCP tab. External MCP clients can connect via stdio bridge.</text>
+  <text x="350" y="188" text-anchor="middle" fill="var(--text-dim)" font-size="10">Tool calls appear in the Inspector alongside all other API events.</text>
 </svg>
 \`\`\`
 
 ## How it works
 
-1. Tools are defined in the **Profiles > MCP Tools** panel. Each tool has a name, description, typed parameters (via Zod schemas), and a handler body.
+1. Tools are defined in the **MCP** tab. Each tool has a name, description, typed parameters (Zod schemas), and a handler body.
 2. The integrated MCP server registers itself with every \`claude -p\` process automatically at startup.
 3. When Claude decides to call your tool, the MCP server validates the input against the schema and executes the handler.
 4. The handler returns a result (text, images, or errors) and Claude continues with the response.
 
 ## Built-in tools
 
-These are always available in every session and cannot be modified:
-
 | Tool | Purpose |
 |------|---------|
-| \`chat\` | Run a prompt through Claude Code via the dashboard. Supports multi-turn via \`session_id\`. Can specify \`profile\` and \`cwd\`. |
+| \`chat\` | Run a prompt through Claude Code via the dashboard. Supports multi-turn via \`session_id\`. Can specify \`cwd\`. |
 
-The \`chat\` tool is particularly useful for delegation -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator session using the \`chat\` tool to delegate research to a \`readonly\` session).
+The \`chat\` tool is useful for delegation — a Claude session can spawn sub-conversations with different working directories (e.g. an orchestrator using \`chat\` to delegate research to a sub-session).
 
 ## Writing a tool handler
 
@@ -330,9 +472,7 @@ Handlers have access to:
 
 The integrated MCP server uses **stdio transport**, so any MCP-compatible client can connect by spawning the bridge process.
 
-### Option 1: Use the auto-generated config
-
-When vistaclair starts, it writes a \`.mcp.json\` file in the working directory with the correct connection details. Point your MCP client at this file, or copy the relevant entry:
+When vistaclair starts, it writes a \`.mcp.json\` file with the correct connection details:
 
 \`\`\`json
 {
@@ -349,18 +489,14 @@ When vistaclair starts, it writes a \`.mcp.json\` file in the working directory 
 }
 \`\`\`
 
-### Option 2: Spawn manually
+Or spawn manually:
 
 \`\`\`bash
 VISTACLAIR_AUTH_TOKEN="<token>" VISTACLAIR_DASHBOARD_PORT=3457 \\
   node /path/to/claude-doc/lib/mcp-bridge.js integrated
 \`\`\`
 
-The bridge communicates over stdin/stdout using the MCP JSON-RPC protocol. The auth token is printed to the console when vistaclair starts, or set via the \`AUTH_TOKEN\` environment variable.
-
-### What external clients get
-
-Connected clients have access to all tools on the integrated server: custom tools and built-in tools (\`chat\`, etc.). Tool calls from external clients appear in the Inspector alongside calls from browser sessions.
+Connected clients have access to all tools — custom and built-in. Tool calls from external clients appear in the Inspector.
 `;
 
   const apiMd = `
@@ -368,45 +504,41 @@ Connected clients have access to all tools on the integrated server: custom tool
 
 vistaclair exposes a REST API on the dashboard port (\`:3457\`) for programmatic access. All endpoints require authentication via cookie (\`token=<TOKEN>\`), header (\`Authorization: Bearer <TOKEN>\`), or the internal header (\`X-Vistaclair-Internal: true\` from localhost).
 
-The auth token is printed to the console when the server starts, or can be set via the \`AUTH_TOKEN\` environment variable.
-
-> **Body size limit:** 50 MB (base64-encoded files count toward this).
-
 \`\`\`svg
-<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
-  <defs><marker id="a5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
+<svg viewBox="0 0 700 175" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
+  <defs><marker id="ap1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
 
   <!-- Client -->
-  <rect x="10" y="50" width="130" height="60" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="75" y="72" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Your script</text>
-  <text x="75" y="88" text-anchor="middle" fill="var(--text-dim)" font-size="9">curl / fetch / SDK</text>
-  <text x="75" y="100" text-anchor="middle" fill="var(--text-dim)" font-size="9">POST /api/run</text>
+  <rect x="10" y="40" width="130" height="65" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <text x="75" y="64" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Your script</text>
+  <text x="75" y="80" text-anchor="middle" fill="var(--text-dim)" font-size="9">curl / fetch / SDK</text>
+  <text x="75" y="94" text-anchor="middle" fill="var(--text-dim)" font-size="9">POST /api/run</text>
 
   <!-- Dashboard -->
-  <rect x="220" y="40" width="180" height="80" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
-  <text x="310" y="65" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Dashboard :3457</text>
-  <text x="310" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="9">validates auth + params</text>
-  <text x="310" y="96" text-anchor="middle" fill="var(--text-dim)" font-size="9">spawns claude -p</text>
-  <text x="310" y="108" text-anchor="middle" fill="var(--text-dim)" font-size="9">streams SSE events back</text>
+  <rect x="220" y="30" width="180" height="85" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
+  <text x="310" y="55" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Dashboard :3457</text>
+  <text x="310" y="73" text-anchor="middle" fill="var(--text-dim)" font-size="9">validates auth + params</text>
+  <text x="310" y="87" text-anchor="middle" fill="var(--text-dim)" font-size="9">spawns claude -p</text>
+  <text x="310" y="101" text-anchor="middle" fill="var(--text-dim)" font-size="9">streams SSE events back</text>
 
   <!-- Claude -->
-  <rect x="480" y="50" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="540" y="72" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="540" y="88" text-anchor="middle" fill="var(--text-dim)" font-size="9">with profile URL</text>
+  <rect x="480" y="45" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
+  <text x="540" y="68" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
+  <text x="540" y="84" text-anchor="middle" fill="var(--text-dim)" font-size="9">with instance URL</text>
 
   <!-- Arrows -->
-  <line x1="140" y1="80" x2="220" y2="80" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#a5)"/>
-  <text x="180" y="73" text-anchor="middle" fill="var(--text-dim)" font-size="8">JSON body</text>
-  <line x1="400" y1="75" x2="480" y2="75" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#a5)"/>
-  <text x="440" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="8">spawn</text>
+  <line x1="140" y1="72" x2="220" y2="72" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ap1)"/>
+  <text x="180" y="65" text-anchor="middle" fill="var(--text-dim)" font-size="8">JSON body</text>
+  <line x1="400" y1="68" x2="480" y2="68" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ap1)"/>
+  <text x="440" y="62" text-anchor="middle" fill="var(--text-dim)" font-size="8">spawn</text>
 
   <!-- SSE arrow back -->
-  <line x1="220" y1="100" x2="140" y2="100" stroke="var(--accent)" stroke-width="1" marker-end="url(#a5)"/>
-  <text x="180" y="115" text-anchor="middle" fill="var(--accent)" font-size="8">SSE stream</text>
+  <line x1="220" y1="95" x2="140" y2="95" stroke="var(--accent)" stroke-width="1" marker-end="url(#ap1)"/>
+  <text x="180" y="108" text-anchor="middle" fill="var(--accent)" font-size="8">SSE stream</text>
 
   <!-- Note -->
-  <text x="350" y="165" text-anchor="middle" fill="var(--text-dim)" font-size="10">Profile-scoped routing applies: API calls get the same per-session isolation as browser chats</text>
-  <text x="350" y="182" text-anchor="middle" fill="var(--text-dim)" font-size="10">All events visible in Inspector alongside browser sessions</text>
+  <text x="350" y="145" text-anchor="middle" fill="var(--text-dim)" font-size="10">Instance-scoped routing applies: API calls get the same per-session model mapping as browser chats</text>
+  <text x="350" y="163" text-anchor="middle" fill="var(--text-dim)" font-size="10">All events visible in Inspector alongside browser sessions</text>
 </svg>
 \`\`\`
 
@@ -414,453 +546,60 @@ The auth token is printed to the console when the server starts, or can be set v
 
 ## POST /api/run
 
-Start a chat. By default returns a **Server-Sent Events** stream. Set \`"stream": false\` to block until completion and get a single JSON response instead.
-
-### Chat mode
+Start a chat. Returns a **Server-Sent Events** stream by default.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | \`type\` | string | yes | \`"chat"\` |
 | \`prompt\` | string | yes | The user message to send to Claude |
-| \`stream\` | boolean | no | \`false\` to return a single JSON response instead of SSE. Default: \`true\`. |
+| \`stream\` | boolean | no | \`false\` for a single JSON response instead of SSE. Default: \`true\`. |
 | \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`). Defaults to \`outputs/\`. |
-| \`profile\` | string | no | Profile name (\`"full"\`, \`"safe"\`, \`"readonly"\`, or custom). Does not change the global active profile. |
-| \`sessionId\` | string | no | Resume an existing session for multi-turn conversation. Returned in the \`done\` event. |
-| \`files\` | array | no | File attachments as base64 data URLs: \`[{name, data}]\`. Files are placed in the working directory and the prompt is augmented with instructions to read them. |
-| \`sourceInstanceId\` | string | no | Instance ID for routing AskUserQuestion back to the originating chat tab. |
+| \`sessionId\` | string | no | Resume an existing session for multi-turn conversation. |
 
-### SSE events (stream mode, default)
-
-All responses stream as Server-Sent Events (\`Content-Type: text/event-stream\`).
+### SSE events
 
 | Event | Payload | When |
 |-------|---------|------|
-| \`text\` | \`{ text }\` | Streamed text delta from Claude |
-| \`ask\` | \`{ toolUseId, questions }\` | AskUserQuestion -- the session needs user input to continue. Answer via \`POST /api/run/answer\`. |
+| \`text\` | \`{ text }\` | Streamed text delta |
+| \`ask\` | \`{ toolUseId, questions }\` | Session needs user input. Answer via \`POST /api/run/answer\`. |
 | \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId? }\` | Final result. \`result\` is the full text, \`sessionId\` enables multi-turn. |
-
-### JSON response (stream: false)
-
-When \`stream\` is \`false\`, the request blocks until the run completes (30-minute timeout) and returns a single JSON response.
-
-**Response:**
-\`\`\`json
-{ "result": "...full text...", "text": "...full text...", "sessionId": "..." }
-\`\`\`
-
-If the run pauses on an \`AskUserQuestion\`, the response returns immediately with \`status: "waiting"\` and the question details so you can answer via \`POST /api/run/answer\` and re-submit:
-
-\`\`\`json
-{ "status": "waiting", "toolUseId": "toolu_abc", "questions": [...], "text": "...so far..." }
-\`\`\`
+| \`done\` | \`{ result, sessionId? }\` | Final result. \`sessionId\` enables multi-turn. |
 
 ---
 
 ## POST /api/run/answer
 
-Answer a pending \`AskUserQuestion\` that arrived via the \`ask\` SSE event. The run resumes after the answer.
+Answer a pending \`AskUserQuestion\`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | \`toolUseId\` | string | yes | The \`toolUseId\` from the \`ask\` event |
-| \`answer\` | any | yes | The answer value (string or structured response) |
-| \`files\` | array | no | File attachments for file-type questions: \`[{questionId, name, data}]\`. Files are saved to \`outputs/_uploads/<toolUseId>/\` and paths are patched into the answer. |
-
-**Response:** \`{ ok: true }\` on success. \`404\` if no pending question matches the \`toolUseId\`.
+| \`answer\` | any | yes | The answer value |
 
 ---
 
-## GET /api/dirs
+## Example
 
-List subdirectories within the \`outputs/\` sandbox.
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`path\` | string (query) | no | Relative path within \`outputs/\`. Defaults to root. |
-
-**Response:** \`{ current, absolute, dirs }\` -- \`dirs\` is a sorted array of subdirectory names (hidden dirs excluded).
-
----
-
-## POST /api/dirs
-
-Create a new directory within \`outputs/\`.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`path\` | string | no | Parent directory (relative to \`outputs/\`) |
-| \`name\` | string | yes | Folder name. Alphanumeric, spaces, dots, hyphens, underscores. Max 100 chars. |
-
-**Response:** \`{ ok: true, created: "relative/path" }\` on success.
-
----
-
-## GET /api/file
-
-Serve a file from the \`outputs/\` directory.
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`path\` | string (query) | yes | Absolute path to the file. Must be inside the \`outputs/\` directory. |
-
-**Response:** The file content with the appropriate \`Content-Type\` header (html, json, js, css, txt, md, csv, xml, png, jpg, gif, svg, webp, pdf, or \`application/octet-stream\`). Returns \`403\` if the path is outside \`outputs/\`, \`404\` if the file doesn't exist.
-
----
-
-## File attachment format
-
-Files are sent as base64 data URLs in the \`data\` field:
-
-\`\`\`
-data:<mime-type>;base64,<base64-encoded-content>
-\`\`\`
-
-For example: \`data:image/png;base64,iVBORw0KGgo...\`
-
-**Chat files** (\`files: [{name, data}]\`): placed in the working directory as \`upload-<timestamp>-<index>-<safename>\`. The prompt is augmented with instructions for Claude to read them.
-
-**Answer files** (\`files: [{questionId, name, data}]\`): saved to \`outputs/_uploads/<toolUseId>/\` and relative paths are patched into the answer array.
-
----
-
-## Examples
-
-Each example shows both Bash and Node.js, covering text input, file input, and capturing results.
-
-### Non-streaming (stream: false)
-
-The simplest way to call the API. Blocks until completion and returns a single JSON response -- no SSE parsing needed. 30-minute timeout.
-
-\`\`\`html
-<div class="code-tabs">
-  <div class="code-tab-bar">
-    <button class="code-tab-btn active" data-tab="bash">Bash</button>
-    <button class="code-tab-btn" data-tab="node">Node.js</button>
-  </div>
-  <div class="code-tab-panel active" data-tab="bash">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
+\`\`\`bash
 TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
 
-# Chat -- returns JSON with full result
-curl -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"chat","prompt":"Write a haiku about code","stream":false}'
-# {"result":"...","text":"...","sessionId":"..."}
+# Start a streaming chat
+curl -N -X POST http://localhost:3457/api/run \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"chat","prompt":"List all TODO comments in this project","cwd":"my-project"}'
 
-# Chat with file input
-FILE_DATA="data:image/png;base64,$(base64 -w0 photo.png)"
-curl -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"chat\",
-    \"prompt\": \"Describe this image\",
-    \"stream\": false,
-    \"files\": [{\"name\": \"photo.png\", \"data\": \"$FILE_DATA\"}]
-  }" | jq '.text'
-
-</code></pre></div>
-  </div>
-  <div class="code-tab-panel" data-tab="node">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
-const fs = require('fs');
-
-const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
-const PORT = 3457;
-
-function postJSON(path, body) {
-  return new Promise((resolve, reject) =&gt; {
-    const data = JSON.stringify(body);
-    const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': \`Bearer \${TOKEN}\`,
-      },
-    }, res =&gt; {
-      let buf = '';
-      res.on('data', c =&gt; buf += c);
-      res.on('end', () =&gt; {
-        try { resolve(JSON.parse(buf)); } catch { resolve(buf); }
-      });
-    });
-    req.on('error', reject);
-    req.end(data);
-  });
-}
-
-async function main() {
-  // Chat -- simple JSON response
-  const chatResult = await postJSON('/api/run', {
-    type: 'chat',
-    prompt: 'Write a haiku about code',
-    stream: false,
-  });
-  console.log('Chat:', chatResult.text);
-  console.log('Session:', chatResult.sessionId);
-
-  // Chat with file input
-  const fileB64 = fs.readFileSync('photo.png', 'base64');
-  const fileResult = await postJSON('/api/run', {
-    type: 'chat',
-    prompt: 'Describe this image',
-    stream: false,
-    files: [{ name: 'photo.png', data: \`data:image/png;base64,\${fileB64}\` }],
-  });
-  console.log('Description:', fileResult.text);
-}
-
-main().catch(console.error);</code></pre></div>
-  </div>
-</div>
-\`\`\`
-
-### Streaming (SSE) -- Chat
-
-Stream response text in real-time, capture the \`sessionId\` for multi-turn.
-
-\`\`\`html
-<div class="code-tabs">
-  <div class="code-tab-bar">
-    <button class="code-tab-btn active" data-tab="bash">Bash</button>
-    <button class="code-tab-btn" data-tab="node">Node.js</button>
-  </div>
-  <div class="code-tab-panel active" data-tab="bash">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
-TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
-
-\`\`\`html
-<div class="code-tabs">
-  <div class="code-tab-bar">
-    <button class="code-tab-btn active" data-tab="bash">Bash</button>
-    <button class="code-tab-btn" data-tab="node">Node.js</button>
-  </div>
-  <div class="code-tab-panel active" data-tab="bash">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
-TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
-
-# Encode a file as base64 data URL
-FILE_DATA="data:image/png;base64,$(base64 -w0 photo.png)"
-
-# Start a chat with text + file input (SSE stream)
-CURRENT_EVENT=""
-curl -N -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"chat\",
-    \"prompt\": \"Describe this image and save a summary to summary.txt\",
-    \"profile\": \"full\",
-    \"cwd\": \"my-project\",
-    \"files\": [{\"name\": \"photo.png\", \"data\": \"$FILE_DATA\"}]
-  }" | while IFS= read -r line; do
-  if [[ "$line" == event:* ]]; then
-    CURRENT_EVENT="\${line#event: }"
-  elif [[ "$line" == data:* ]]; then
-    JSON="\${line#data: }"
-    case "$CURRENT_EVENT" in
-      text)  echo "$JSON" | jq -rj '.text // empty' ;;
-      done)  echo "" ; echo "$JSON" | jq -r '"sessionId: \(.sessionId)"' ;;
-      error) echo "$JSON" | jq -r '.error' &gt;&amp;2 ;;
-    esac
-  fi
-done
-
-# Multi-turn: reuse sessionId from the done event
-curl -N -s -X POST "$HOST/api/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"chat","prompt":"Now translate it to French","sessionId":"SESSION_ID"}'
-
-# Download a file Claude created
-curl -s "$HOST/api/file?path=$(pwd)/outputs/my-project/summary.txt" \
-  -H "Authorization: Bearer $TOKEN" -o summary.txt</code></pre></div>
-  </div>
-  <div class="code-tab-panel" data-tab="node">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
-const fs = require('fs');
-
-const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
-const PORT = 3457;
-
-function post(path, body) {
-  return new Promise((resolve, reject) =&gt; {
-    const data = JSON.stringify(body);
-    const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': \`Bearer \${TOKEN}\`,
-      },
-    }, resolve);
-    req.on('error', reject);
-    req.end(data);
-  });
-}
-
-// Parse SSE stream, call handlers for each event type
-function streamSSE(res, handlers) {
-  let buf = '', currentEvent = '';
-  res.on('data', chunk =&gt; {
-    buf += chunk.toString();
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event: ')) currentEvent = line.slice(7);
-        else if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (handlers[currentEvent]) handlers[currentEvent](data);
-          } catch {}
-        }
-      }
-    }
-  });
-  return new Promise(resolve =&gt; res.on('end', resolve));
-}
-
-async function main() {
-  // Encode file as base64 data URL
-  const fileB64 = fs.readFileSync('photo.png', 'base64');
-  const fileData = \`data:image/png;base64,\${fileB64}\`;
-
-  // Chat with text + file input
-  const res = await post('/api/run', {
-    type: 'chat',
-    prompt: 'Describe this image and save a summary to summary.txt',
-    profile: 'full',
-    cwd: 'my-project',
-    files: [{ name: 'photo.png', data: fileData }],
-  });
-
-  let sessionId = null;
-  await streamSSE(res, {
-    text:  d =&gt; process.stdout.write(d.text || ''),
-    error: d =&gt; console.error('Error:', d.error),
-    done:  d =&gt; { sessionId = d.sessionId; console.log('\nSession:', sessionId); },
-  });
-
-  // Multi-turn: continue the conversation
-  if (sessionId) {
-    const res2 = await post('/api/run', {
-      type: 'chat',
-      prompt: 'Now translate it to French',
-      sessionId,
-    });
-    await streamSSE(res2, {
-      text: d =&gt; process.stdout.write(d.text || ''),
-      done: d =&gt; console.log('\nDone'),
-    });
-  }
-}
-
-main().catch(console.error);</code></pre></div>
-  </div>
-</div>
-\`\`\`
-
-### Answering an AskUserQuestion
-
-When Claude needs input mid-run, the stream emits an \`ask\` event. Answer it via \`POST /api/run/answer\` -- the run resumes automatically. Answers can include file attachments.
-
-\`\`\`html
-<div class="code-tabs">
-  <div class="code-tab-bar">
-    <button class="code-tab-btn active" data-tab="bash">Bash</button>
-    <button class="code-tab-btn" data-tab="node">Node.js</button>
-  </div>
-  <div class="code-tab-panel active" data-tab="bash">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-bash">#!/usr/bin/env bash
-TOKEN="YOUR_TOKEN"
-HOST="http://localhost:3457"
-
-# When you receive an ask event in the SSE stream:
-#   event: ask
-#   data: {"toolUseId":"toolu_abc123","questions":[{"question":"Which database?","options":["PostgreSQL","MySQL"]}]}
-
-# Answer with text
-curl -s -X POST "$HOST/api/run/answer" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+# Answer a pending AskUserQuestion
+curl -s -X POST http://localhost:3457/api/run/answer \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
   -d '{"toolUseId":"toolu_abc123","answer":"PostgreSQL"}'
-# Returns: {"ok":true}
 
-# Answer with a file attachment (for file-type questions)
-FILE_DATA="data:text/csv;base64,$(base64 -w0 config.csv)"
-
-curl -s -X POST "$HOST/api/run/answer" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"toolUseId\": \"toolu_abc123\",
-    \"answer\": [\"\"],
-    \"files\": [{\"questionId\": \"q1\", \"name\": \"config.csv\", \"data\": \"$FILE_DATA\"}]
-  }"</code></pre></div>
-  </div>
-  <div class="code-tab-panel" data-tab="node">
-    <div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-javascript">const http = require('http');
-const fs = require('fs');
-
-const TOKEN = process.env.TOKEN || 'YOUR_TOKEN';
-const PORT = 3457;
-
-function postJSON(path, body) {
-  return new Promise((resolve, reject) =&gt; {
-    const data = JSON.stringify(body);
-    const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': \`Bearer \${TOKEN}\`,
-      },
-    }, res =&gt; {
-      let buf = '';
-      res.on('data', c =&gt; buf += c);
-      res.on('end', () =&gt; {
-        try { resolve(JSON.parse(buf)); } catch { resolve(buf); }
-      });
-    });
-    req.on('error', reject);
-    req.end(data);
-  });
-}
-
-// Inside your SSE handler, when you receive an ask event:
-async function handleAsk(data) {
-  const { toolUseId, questions } = data;
-  for (const q of questions) {
-    console.log(\`Question: \${q.question}\`);
-    if (q.options) q.options.forEach((o, i) =&gt; console.log(\`  \${i + 1}. \${o}\`));
-  }
-
-  // Answer with text
-  await postJSON('/api/run/answer', {
-    toolUseId,
-    answer: 'PostgreSQL',
-  });
-
-  // Or answer with a file attachment
-  const fileB64 = fs.readFileSync('config.csv', 'base64');
-  await postJSON('/api/run/answer', {
-    toolUseId,
-    answer: [''],
-    files: [{
-      questionId: 'q1',
-      name: 'config.csv',
-      data: \`data:text/csv;base64,\${fileB64}\`,
-    }],
-  });
-  // Returns: { ok: true }
-}</code></pre></div>
-  </div>
-</div>
+# Non-streaming (blocks until complete, returns JSON)
+curl -s -X POST http://localhost:3457/api/run \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"chat","prompt":"Write a haiku about code","stream":false}'
 \`\`\`
 `;
 
@@ -868,8 +607,8 @@ async function handleAsk(data) {
   function renderSections() {
     const sections = {
       'home-overview': overviewMd,
-      'home-architecture': architectureMd,
-      'home-tools': toolsMd,
+      'home-proxy': proxyMd,
+      'home-mcp': mcpMd,
       'home-api': apiMd,
     };
     for (const [id, md] of Object.entries(sections)) {
@@ -909,7 +648,6 @@ async function handleAsk(data) {
     apiEl.insertBefore(box, apiEl.firstChild);
   }
 
-  // Render after a short delay to ensure marked + MathJax are loaded
   if (document.readyState === 'complete') {
     renderSections();
     updateTokenDisplay();

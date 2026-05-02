@@ -353,6 +353,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           profileName: null,
           profileData: null,
           instanceId: req.instanceId || null,
+          isInternalInstance: !!instCtx,
           req,
           res,
           interaction,
@@ -712,7 +713,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       try {
         const ctx = {
           body, isStreaming: false, profileName: null, profileData: null,
-          instanceId: req.instanceId || null, req, res,
+          instanceId: req.instanceId || null,
+          isInternalInstance: !!getInstanceContext(req.instanceId),
+          req, res,
           interaction: null, store, broadcaster,
           helpers: { generateId, sendDummyResponse, parseSSEString, trackSSEEvent, enhancedAskTool },
         };

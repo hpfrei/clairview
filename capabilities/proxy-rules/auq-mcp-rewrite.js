@@ -1,7 +1,7 @@
 const VISTA_AUQ = 'vista-AskUserQuestion';
 
 module.exports = function(ctx) {
-  if (!ctx.instanceId) return;
+  if (!ctx.instanceId || !ctx.isInternalInstance) return;
 
   // Request: rename vista-AUQ → AUQ in conversation history sent to Anthropic
   if (ctx.body.messages) {

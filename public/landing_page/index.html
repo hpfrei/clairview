@@ -40,8 +40,8 @@
               <span><strong>Inspector</strong> shows text interactions, tool calls, MCP calls, hooks &mdash; with token counts, timing, and full payloads</span>
             </li>
             <li>
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#1088aa" stroke-width="1.5"/><rect x="3" y="7" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><rect x="10" y="4" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><rect x="10" y="11" width="4" height="4" rx="1" stroke="#1088aa" stroke-width="1"/><line x1="7" y1="8" x2="10" y2="6.5" stroke="#1088aa" stroke-width="1"/><line x1="7" y1="10" x2="10" y2="12" stroke="#1088aa" stroke-width="1"/></svg>
-              <span><strong>Workflow steps</strong> can use different models per step, with configurable context piped from previous steps</span>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="#1088aa" stroke-width="1.5"/><path d="M6 6h6M6 9h6M6 12h4" stroke="#1088aa" stroke-width="1.2" stroke-linecap="round"/></svg>
+              <span><strong>Remote access</strong> via tunnel &mdash; run Claude Code on a powerful machine, control from any browser or phone</span>
             </li>
           </ul>
           <div class="hero-cta">
@@ -105,29 +105,19 @@
             <rect x="272" y="160" width="16" height="4" rx="2" fill="#c0c0b8"/>
             <rect x="292" y="160" width="16" height="4" rx="2" fill="#c0c0b8"/>
 
-            <!-- Workflows panel (cyan) -->
+            <!-- CLI Terminal panel (cyan) -->
             <rect x="36" y="196" width="192" height="120" rx="6" fill="#fff" stroke="#1088aa" stroke-width="1.5"/>
             <rect x="36" y="196" width="192" height="22" rx="6" fill="#1088aa10"/>
             <rect x="36" y="212" width="192" height="6" fill="#1088aa10"/>
-            <text x="48" y="211" font-family="'SF Mono',monospace" font-size="9" fill="#1088aa" font-weight="700">Workflows</text>
-            <!-- Step boxes -->
-            <rect x="52" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
-            <text x="62" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">lint</text>
-            <rect x="112" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
-            <text x="118" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">test</text>
-            <rect x="172" y="232" width="44" height="24" rx="4" fill="#fff" stroke="#1088aa" stroke-width="1"/>
-            <text x="174" y="248" font-family="'SF Mono',monospace" font-size="8" fill="#1088aa">deploy</text>
-            <!-- Arrows between steps -->
-            <line x1="96" y1="244" x2="110" y2="244" stroke="#1088aa" stroke-width="1.2"/>
-            <polygon points="110,241 110,247 115,244" fill="#1088aa"/>
-            <line x1="156" y1="244" x2="170" y2="244" stroke="#1088aa" stroke-width="1.2"/>
-            <polygon points="170,241 170,247 175,244" fill="#1088aa"/>
-            <!-- Conditional branch -->
-            <polygon points="134,266 142,274 134,282 126,274" fill="none" stroke="#c07020" stroke-width="1"/>
-            <text x="115" y="290" font-family="'SF Mono',monospace" font-size="7" fill="#c07020">if tests pass</text>
-            <!-- Status -->
-            <circle cx="64" cy="300" r="4" fill="#1a8a3a"/>
-            <text x="72" y="303" font-family="'SF Mono',monospace" font-size="7" fill="#1a8a3a">running</text>
+            <text x="48" y="211" font-family="'SF Mono',monospace" font-size="9" fill="#1088aa" font-weight="700">CLI Terminal</text>
+            <!-- Terminal lines -->
+            <text x="48" y="236" font-family="'SF Mono',monospace" font-size="7" fill="#1088aa">$ claude "refactor auth"</text>
+            <text x="48" y="250" font-family="'SF Mono',monospace" font-size="7" fill="#777770">Updating middleware...</text>
+            <text x="48" y="264" font-family="'SF Mono',monospace" font-size="7" fill="#1088aa">$ claude "run tests"</text>
+            <text x="48" y="278" font-family="'SF Mono',monospace" font-size="7" fill="#777770">All 42 tests passed</text>
+            <!-- Session indicator -->
+            <circle cx="56" cy="300" r="4" fill="#1a8a3a"/>
+            <text x="64" y="303" font-family="'SF Mono',monospace" font-size="7" fill="#1a8a3a">3 sessions</text>
 
             <!-- Tools panel (green) -->
             <rect x="240" y="196" width="186" height="120" rx="6" fill="#fff" stroke="#1a8a3a" stroke-width="1.5"/>
@@ -217,16 +207,16 @@
 
         <div class="ribbon-pill" style="border-color: #1088aa">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-            <rect x="2" y="9" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
-            <rect x="12" y="4" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
-            <rect x="12" y="14" width="6" height="6" rx="1.5" stroke="#1088aa" stroke-width="1.5"/>
-            <line x1="8" y1="11" x2="12" y2="8" stroke="#1088aa" stroke-width="1.5"/>
-            <line x1="8" y1="13" x2="12" y2="16" stroke="#1088aa" stroke-width="1.5"/>
-            <line x1="18" y1="10" x2="22" y2="14" stroke="#1088aa" stroke-width="1.5" stroke-dasharray="2,2"/>
+            <rect x="3" y="5" width="18" height="14" rx="3" stroke="#1088aa" stroke-width="1.5"/>
+            <circle cx="12" cy="12" r="4" stroke="#1088aa" stroke-width="1.2"/>
+            <line x1="12" y1="5" x2="12" y2="8" stroke="#1088aa" stroke-width="1"/>
+            <line x1="12" y1="16" x2="12" y2="19" stroke="#1088aa" stroke-width="1"/>
+            <line x1="3" y1="12" x2="8" y2="12" stroke="#1088aa" stroke-width="1"/>
+            <line x1="16" y1="12" x2="21" y2="12" stroke="#1088aa" stroke-width="1"/>
           </svg>
           <div class="ribbon-pill-text">
-            <span class="ribbon-pill-label" style="color:#1088aa">Workflow Engine</span>
-            <span class="ribbon-pill-replaces">replaces LangGraph, CrewAI</span>
+            <span class="ribbon-pill-label" style="color:#1088aa">Remote Access</span>
+            <span class="ribbon-pill-replaces">replaces SSH + tmux</span>
           </div>
         </div>
 
@@ -299,29 +289,23 @@
           <p>Send Claude Code traffic through OpenAI, Gemini, DeepSeek, Moonshot, or local Ollama models. Automatic protocol translation. Switch with a dropdown.</p>
         </div>
 
-        <!-- Workflows -->
+        <!-- Remote Access -->
         <div class="feature-card" data-color="cyan">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect x="2" y="16" width="12" height="10" rx="2" fill="none" stroke="#1088aa" stroke-width="1.5"/>
-            <text x="8" y="23" text-anchor="middle" font-family="monospace" font-size="6" fill="#1088aa">1</text>
-            <rect x="20" y="16" width="12" height="10" rx="2" fill="none" stroke="#1088aa" stroke-width="1.5"/>
-            <text x="26" y="23" text-anchor="middle" font-family="monospace" font-size="6" fill="#1088aa">2</text>
-            <rect x="38" y="8" width="10" height="10" rx="2" fill="none" stroke="#1a8a3a" stroke-width="1.5"/>
-            <text x="43" y="15" text-anchor="middle" font-family="monospace" font-size="6" fill="#1a8a3a">3a</text>
-            <rect x="38" y="26" width="10" height="10" rx="2" fill="none" stroke="#c07020" stroke-width="1.5"/>
-            <text x="43" y="33" text-anchor="middle" font-family="monospace" font-size="6" fill="#c07020">3b</text>
-            <!-- arrows -->
-            <line x1="14" y1="21" x2="20" y2="21" stroke="#1088aa" stroke-width="1.5"/>
-            <polygon points="19,19 19,23 22,21" fill="#1088aa"/>
-            <line x1="32" y1="18" x2="38" y2="13" stroke="#1a8a3a" stroke-width="1.5"/>
-            <line x1="32" y1="24" x2="38" y2="31" stroke="#c07020" stroke-width="1.5"/>
-            <!-- diamond -->
-            <polygon points="33,21 36,18 39,21 36,24" fill="none" stroke="#c07020" stroke-width="1"/>
-            <!-- NL label -->
-            <text x="8" y="40" font-family="monospace" font-size="6" fill="#777770">describe in English</text>
+            <!-- laptop -->
+            <rect x="4" y="10" width="22" height="14" rx="2" stroke="#1088aa" stroke-width="1.5"/>
+            <line x1="2" y1="24" x2="28" y2="24" stroke="#1088aa" stroke-width="1.5" stroke-linecap="round"/>
+            <!-- phone -->
+            <rect x="34" y="14" width="10" height="16" rx="2" stroke="#1088aa" stroke-width="1.5"/>
+            <circle cx="39" cy="27" r="1" fill="#1088aa"/>
+            <!-- signal arcs -->
+            <path d="M18 6c4-3 8-3 12 0" stroke="#1088aa" stroke-width="1" stroke-linecap="round" fill="none" stroke-dasharray="2,2"/>
+            <path d="M20 8c3-2 5-2 8 0" stroke="#1088aa" stroke-width="1" stroke-linecap="round" fill="none"/>
+            <!-- label -->
+            <text x="4" y="40" font-family="monospace" font-size="6" fill="#777770">cloudflared tunnel</text>
           </svg>
-          <h3>Multi-provider routing</h3>
-          <p>Route requests to different LLM providers through a single proxy. Per-profile model selection, automatic header translation, and streaming support across providers.</p>
+          <h3>Work from anywhere</h3>
+          <p>Run Claude Code on a powerful machine, control it from your laptop, phone, or any browser. Tunnel via cloudflared, ngrok, or bore &mdash; auth-token protected.</p>
         </div>
 
         <!-- MCP Tools -->
@@ -411,7 +395,7 @@
         <text x="120" y="86" text-anchor="middle" font-family="'SF Mono',monospace" font-size="11" fill="#777770">Dashboard :3457</text>
         <line x1="40" y1="96" x2="200" y2="96" stroke="#c0c0b8" stroke-width="0.5"/>
         <text x="120" y="114" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#777770">Inspector | Chat</text>
-        <text x="120" y="130" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#777770">Workflows | Tools</text>
+        <text x="120" y="130" text-anchor="middle" font-family="'SF Mono',monospace" font-size="10" fill="#777770">CLI | Tools</text>
 
         <!-- vistaclair server box -->
         <rect x="310" y="20" width="280" height="160" rx="8" fill="#fff" stroke="#1a8a3a" stroke-width="2"/>

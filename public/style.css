@@ -3390,6 +3390,10 @@ footer {
 }
 .provider-key-status.mm-key-ok { color: var(--green); }
 .provider-key-status.mm-key-missing { color: var(--text-dim); opacity: .6; }
+.provider-hint {
+  font-size: 12px; color: var(--text-dim); padding: 4px 0 2px;
+}
+.provider-hint code { font-size: 11px; background: var(--bg-alt); padding: 1px 5px; border-radius: 3px; }
 
 /* Model cards grid */
 .model-card-grid {
