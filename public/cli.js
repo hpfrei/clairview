@@ -351,7 +351,10 @@
     const cancelBtn = document.getElementById('dirPickerCancelBtn');
     const selectBtn = document.getElementById('dirPickerSelectBtn');
     const newBtn = document.getElementById('dirPickerNewBtn');
-    if (newBtn) newBtn.style.display = 'none';
+    const newRow = document.getElementById('dirPickerNew');
+    const newNameInput = document.getElementById('dirPickerNewName');
+    const newOkBtn = document.getElementById('dirPickerNewOk');
+    const newCancelBtn = document.getElementById('dirPickerNewCancel');
 
     let currentDir = '';
     let resolve;
@@ -421,12 +424,40 @@
       });
     }
 
+    // New folder handlers
+    function onNewBtn() {
+      newRow.classList.remove('hidden');
+      newNameInput.value = '';
+      newNameInput.focus();
+    }
+    async function onNewOk() {
+      const name = newNameInput.value.trim();
+      if (!name) return;
+      try {
+        const resp = await fetch('/api/browse-dirs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parent: currentDir, name }),
+        });
+        const data = await resp.json();
+        if (data.error) { alert(data.error); return; }
+        newRow.classList.add('hidden');
+        loadDir(data.created);
+      } catch { alert('Failed to create folder.'); }
+    }
+    function onNewCancel() { newRow.classList.add('hidden'); }
+    function onNewKey(e) { if (e.key === 'Enter') onNewOk(); }
+
     function cleanup() {
       modal.classList.add('hidden');
+      newRow.classList.add('hidden');
       closeBtn.removeEventListener('click', onClose);
       cancelBtn.removeEventListener('click', onClose);
       selectBtn.removeEventListener('click', onSelect);
-      if (newBtn) newBtn.style.display = '';
+      newBtn.removeEventListener('click', onNewBtn);
+      newOkBtn.removeEventListener('click', onNewOk);
+      newCancelBtn.removeEventListener('click', onNewCancel);
+      newNameInput.removeEventListener('keydown', onNewKey);
     }
     function onClose() { cleanup(); resolve(null); }
     function onSelect() { cleanup(); resolve(currentDir); }
@@ -434,6 +465,10 @@
     closeBtn.addEventListener('click', onClose);
     cancelBtn.addEventListener('click', onClose);
     selectBtn.addEventListener('click', onSelect);
+    newBtn.addEventListener('click', onNewBtn);
+    newOkBtn.addEventListener('click', onNewOk);
+    newCancelBtn.addEventListener('click', onNewCancel);
+    newNameInput.addEventListener('keydown', onNewKey);
 
     modal.classList.remove('hidden');
     loadDir('');

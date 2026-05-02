@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
-const { resolveOutputDir, OUTPUTS_DIR, MIME_TYPES, ensureDir } = require('./utils');
+const { MIME_TYPES } = require('./utils');
 
 function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authToken, cliSessionManager }) {
   const router = express.Router();
@@ -25,6 +25,22 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
       res.json({ current: resolved, parent: path.dirname(resolved), dirs });
     } catch (err) {
       res.status(403).json({ error: 'Cannot access directory', path: resolved });
+    }
+  });
+
+  // ── POST /api/browse-dirs — create a directory on the real filesystem ──
+  router.post('/browse-dirs', (req, res) => {
+    const { parent, name } = req.body || {};
+    if (!parent || !name) return res.status(400).json({ error: 'parent and name are required' });
+    if (typeof name !== 'string' || name.length > 100 || /[/\\]/.test(name) || name.includes('..')) {
+      return res.status(400).json({ error: 'Invalid folder name' });
+    }
+    const target = path.join(path.resolve(parent), name);
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      res.json({ ok: true, created: target });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to create directory: ' + err.message });
     }
   });
 
@@ -167,70 +183,6 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     } catch (err) {
       res.status(500).json({ error: 'Search failed: ' + err.message });
     }
-  });
-
-  // ── GET /api/dirs — list subdirectories within outputs/ ───────────
-  router.get('/dirs', (req, res) => {
-    try {
-      const userPath = req.query.path || '';
-      const abs = resolveOutputDir(userPath);
-      const relative = abs.startsWith(OUTPUTS_DIR)
-        ? abs.slice(OUTPUTS_DIR.length).replace(/^\//, '')
-        : '';
-      const entries = fs.readdirSync(abs, { withFileTypes: true });
-      const dirs = entries
-        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-        .map(e => e.name)
-        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-      res.json({ current: relative, absolute: abs, dirs });
-    } catch {
-      res.json({ current: '', absolute: OUTPUTS_DIR, dirs: [] });
-    }
-  });
-
-  // ── POST /api/dirs — create a new directory within outputs/ ──────
-  router.post('/dirs', (req, res) => {
-    const { path: parentPath, name } = req.body || {};
-    if (!name || typeof name !== 'string') {
-      return res.status(400).json({ error: 'Missing folder name' });
-    }
-    if (name.length > 100 || !/^[a-zA-Z0-9][a-zA-Z0-9_. -]*$/.test(name)) {
-      return res.status(400).json({ error: 'Invalid folder name. Use letters, numbers, spaces, dots, hyphens, underscores.' });
-    }
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
-      return res.status(400).json({ error: 'Invalid folder name' });
-    }
-    try {
-      const parentAbs = resolveOutputDir(parentPath || '');
-      const target = path.join(parentAbs, name);
-      if (!target.startsWith(OUTPUTS_DIR)) {
-        return res.status(400).json({ error: 'Invalid path' });
-      }
-      ensureDir(target);
-      const relative = target.slice(OUTPUTS_DIR.length).replace(/^\//, '');
-      res.json({ ok: true, created: relative });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ── GET /api/file — serve a file from the outputs directory ───────
-  router.get('/file', (req, res) => {
-    const filePath = req.query.path;
-    if (!filePath || typeof filePath !== 'string') {
-      return res.status(400).json({ error: 'Missing path parameter' });
-    }
-    const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(OUTPUTS_DIR)) {
-      return res.status(403).json({ error: 'Access denied — file must be inside outputs directory' });
-    }
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-    const ext = path.extname(resolved).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    res.setHeader('Content-Type', contentType);
-    fs.createReadStream(resolved).pipe(res);
   });
 
   return router;

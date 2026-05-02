@@ -1,6 +1,6 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, OUTPUTS_DIR, getActiveProcessCount, getInstances, killInstance, removeInstances, resolveOutputDir, listFiles, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser } = require('./utils');
+const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 
@@ -28,7 +28,6 @@ class DashboardBroadcaster {
         type: 'chat:settings',
         tabId: 'tab-1',
         cwd: process.cwd(),
-        outputsDir: OUTPUTS_DIR,
         authToken: this.authToken,
         knownTools: caps.KNOWN_TOOLS,
         knownSkills: caps.KNOWN_SKILLS,
@@ -223,10 +222,6 @@ class DashboardBroadcaster {
           } else if (msg.type === 'mcp:bridge:call') {
             // Bridge reporting a tool call for inspector logging
             if (this.mcpHandler?.handleBridgeReport) this.mcpHandler.handleBridgeReport(msg);
-          } else if (msg.type === 'files:refresh') {
-            const dir = resolveOutputDir(msg.cwd || '');
-            const files = listFiles(dir);
-            ws.send(JSON.stringify({ type: 'files:list', tabId: msg.tabId || undefined, cwd: dir, files }));
           } else if (msg.type.startsWith('rule:')) {
             if (this.ruleHandler) this.ruleHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('mcp:')) {

@@ -1660,7 +1660,6 @@
       + '<ul class="empty-state-list">'
       + '<li><b>External Claude</b> &mdash; run with the proxy env var:<br><code>ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "prompt"</code></li>'
       + '<li><b>Chat</b> &mdash; use the <span class="empty-state-link" data-view="claude">Chat</span> tab to talk to Claude directly through the proxy</li>'
-      + '<li><b>API</b> &mdash; POST to <code>/api/run</code> with a prompt to get an SSE stream</li>'
       + '</ul>';
     emptyState.querySelectorAll('.empty-state-link').forEach(el => {
       el.addEventListener('click', () => {

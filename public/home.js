@@ -189,9 +189,8 @@ Describe a rule in plain English in the **Rules** tab — vistaclair generates J
 - **Run multiple sessions** — open several chat tabs, each with its own working directory and model mapping. Let one refactor auth while another writes tests.
 - **Switch models** — route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local Ollama with a dropdown change. Automatic protocol translation.
 - **Use the CLI terminal** — the **CLIs** tab is a full Claude Code terminal running on your server. Start sessions, run commands — no local install needed on the client.
-- **Manage directories** — the **Directories** tab lets you browse, create, and switch between project folders. Each chat session gets its own sandboxed working directory.
+- **Choose working directories** — pick any folder on the filesystem when starting a new CLI session, or create a new one from the directory picker.
 - **AskUserQuestion** — when Claude Code needs input mid-task, the question appears in your browser. Answer it and Claude continues. Works across all sessions.
-- **REST API** — \`POST /api/run\` to start chats programmatically and stream results via SSE. Build automations on top.
 
 ## Quick start
 
@@ -499,109 +498,6 @@ VISTACLAIR_AUTH_TOKEN="<token>" VISTACLAIR_DASHBOARD_PORT=3457 \\
 Connected clients have access to all tools — custom and built-in. Tool calls from external clients appear in the Inspector.
 `;
 
-  const apiMd = `
-# REST API
-
-vistaclair exposes a REST API on the dashboard port (\`:3457\`) for programmatic access. All endpoints require authentication via cookie (\`token=<TOKEN>\`), header (\`Authorization: Bearer <TOKEN>\`), or the internal header (\`X-Vistaclair-Internal: true\` from localhost).
-
-\`\`\`svg
-<svg viewBox="0 0 700 175" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
-  <defs><marker id="ap1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--text-dim)"/></marker></defs>
-
-  <!-- Client -->
-  <rect x="10" y="40" width="130" height="65" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-  <text x="75" y="64" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">Your script</text>
-  <text x="75" y="80" text-anchor="middle" fill="var(--text-dim)" font-size="9">curl / fetch / SDK</text>
-  <text x="75" y="94" text-anchor="middle" fill="var(--text-dim)" font-size="9">POST /api/run</text>
-
-  <!-- Dashboard -->
-  <rect x="220" y="30" width="180" height="85" rx="8" fill="none" stroke="var(--green)" stroke-width="2"/>
-  <text x="310" y="55" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Dashboard :3457</text>
-  <text x="310" y="73" text-anchor="middle" fill="var(--text-dim)" font-size="9">validates auth + params</text>
-  <text x="310" y="87" text-anchor="middle" fill="var(--text-dim)" font-size="9">spawns claude -p</text>
-  <text x="310" y="101" text-anchor="middle" fill="var(--text-dim)" font-size="9">streams SSE events back</text>
-
-  <!-- Claude -->
-  <rect x="480" y="45" width="120" height="50" rx="6" fill="none" stroke="var(--cyan,#0dd)" stroke-width="1.5"/>
-  <text x="540" y="68" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="500">claude -p</text>
-  <text x="540" y="84" text-anchor="middle" fill="var(--text-dim)" font-size="9">with instance URL</text>
-
-  <!-- Arrows -->
-  <line x1="140" y1="72" x2="220" y2="72" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#ap1)"/>
-  <text x="180" y="65" text-anchor="middle" fill="var(--text-dim)" font-size="8">JSON body</text>
-  <line x1="400" y1="68" x2="480" y2="68" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#ap1)"/>
-  <text x="440" y="62" text-anchor="middle" fill="var(--text-dim)" font-size="8">spawn</text>
-
-  <!-- SSE arrow back -->
-  <line x1="220" y1="95" x2="140" y2="95" stroke="var(--accent)" stroke-width="1" marker-end="url(#ap1)"/>
-  <text x="180" y="108" text-anchor="middle" fill="var(--accent)" font-size="8">SSE stream</text>
-
-  <!-- Note -->
-  <text x="350" y="145" text-anchor="middle" fill="var(--text-dim)" font-size="10">Instance-scoped routing applies: API calls get the same per-session model mapping as browser chats</text>
-  <text x="350" y="163" text-anchor="middle" fill="var(--text-dim)" font-size="10">All events visible in Inspector alongside browser sessions</text>
-</svg>
-\`\`\`
-
----
-
-## POST /api/run
-
-Start a chat. Returns a **Server-Sent Events** stream by default.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`type\` | string | yes | \`"chat"\` |
-| \`prompt\` | string | yes | The user message to send to Claude |
-| \`stream\` | boolean | no | \`false\` for a single JSON response instead of SSE. Default: \`true\`. |
-| \`cwd\` | string | no | Working directory (sandboxed into \`outputs/\`). Defaults to \`outputs/\`. |
-| \`sessionId\` | string | no | Resume an existing session for multi-turn conversation. |
-
-### SSE events
-
-| Event | Payload | When |
-|-------|---------|------|
-| \`text\` | \`{ text }\` | Streamed text delta |
-| \`ask\` | \`{ toolUseId, questions }\` | Session needs user input. Answer via \`POST /api/run/answer\`. |
-| \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId? }\` | Final result. \`sessionId\` enables multi-turn. |
-
----
-
-## POST /api/run/answer
-
-Answer a pending \`AskUserQuestion\`.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| \`toolUseId\` | string | yes | The \`toolUseId\` from the \`ask\` event |
-| \`answer\` | any | yes | The answer value |
-
----
-
-## Example
-
-\`\`\`bash
-TOKEN="YOUR_TOKEN"
-
-# Start a streaming chat
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"List all TODO comments in this project","cwd":"my-project"}'
-
-# Answer a pending AskUserQuestion
-curl -s -X POST http://localhost:3457/api/run/answer \\
-  -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"toolUseId":"toolu_abc123","answer":"PostgreSQL"}'
-
-# Non-streaming (blocks until complete, returns JSON)
-curl -s -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"Write a haiku about code","stream":false}'
-\`\`\`
-`;
 
   // --- Render sections ---
   function renderSections() {
@@ -609,7 +505,6 @@ curl -s -X POST http://localhost:3457/api/run \\
       'home-overview': overviewMd,
       'home-proxy': proxyMd,
       'home-mcp': mcpMd,
-      'home-api': apiMd,
     };
     for (const [id, md] of Object.entries(sections)) {
       const el = document.getElementById(id);
@@ -620,40 +515,9 @@ curl -s -X POST http://localhost:3457/api/run \\
     }
   }
 
-  // --- Token display in API tab ---
-  function updateTokenDisplay() {
-    const apiEl = document.getElementById('home-api');
-    if (!apiEl) return;
-    const token = window.dashboard?.state?.authToken;
-    if (!token) return;
-    let box = document.getElementById('api-token-display');
-    if (box) {
-      box.querySelector('.api-token-value').textContent = token;
-      return;
-    }
-    box = document.createElement('div');
-    box.id = 'api-token-display';
-    box.className = 'api-token-box';
-    box.innerHTML = `
-      <span class="api-token-label">Auth Token</span>
-      <code class="api-token-value">${window.dashboard.escHtml(token)}</code>
-      <button class="api-token-copy" title="Copy token">Copy</button>
-    `;
-    box.querySelector('.api-token-copy').addEventListener('click', function() {
-      navigator.clipboard.writeText(window.dashboard.state.authToken).then(() => {
-        this.textContent = 'Copied!';
-        setTimeout(() => { this.textContent = 'Copy'; }, 1500);
-      });
-    });
-    apiEl.insertBefore(box, apiEl.firstChild);
-  }
-
   if (document.readyState === 'complete') {
     renderSections();
-    updateTokenDisplay();
   } else {
-    window.addEventListener('load', () => { renderSections(); updateTokenDisplay(); });
+    window.addEventListener('load', renderSections);
   }
-
-  window.homeModule = { updateTokenDisplay };
 })();

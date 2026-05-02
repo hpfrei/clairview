@@ -37,7 +37,6 @@ const state = {
   providers: [],
   editingModel: null,
   mcpServers: [],
-  outputsDir: '',
   serverRestarting: false,
 };
 
@@ -275,7 +274,6 @@ function syncSettings(msg) {
   if (msg.hookEvents) state.hookEvents = msg.hookEvents;
   if (msg.matcherEvents) state.matcherEvents = msg.matcherEvents;
   if (msg.mcpServers) state.mcpServers = msg.mcpServers;
-  if (msg.outputsDir) state.outputsDir = msg.outputsDir;
 }
 
 // Reusable CWD edit-in-place toolbar setup
@@ -953,7 +951,6 @@ function handleMessage(msg) {
       break;
     case 'chat:settings':
       syncSettings(msg);
-      window.homeModule?.updateTokenDisplay?.();
       window.capabilitiesModule?.handleSettings(msg);
       break;
 
