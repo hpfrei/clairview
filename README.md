@@ -35,8 +35,32 @@ multi-session chat, custom MCP tools, multi-provider model routing, and a REST A
 
 ### Prerequisites
 
-- **Node.js 18+**
+- **Node.js 18+** and **npm**
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+
+<details>
+<summary><b>Installing Node.js and npm</b></summary>
+
+**macOS** (via Homebrew):
+```bash
+brew install node
+```
+
+**Ubuntu / Debian**:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+**Windows**: download the installer from [nodejs.org](https://nodejs.org/)
+
+Verify the installation:
+```bash
+node --version   # v18+ required
+npm --version
+```
+
+</details>
 
 ### Install
 
@@ -46,7 +70,10 @@ cd vistaclair
 npm install
 ```
 
-Run `claude` once manually to authenticate if you haven't already.
+> [!IMPORTANT]
+> Always run `npm install` after cloning or pulling new changes to install dependencies.
+
+Run `claude` once manually to authenticate if you haven't already. With a Max subscription, just run `claude login` -- no API key needed.
 
 ### Run
 
