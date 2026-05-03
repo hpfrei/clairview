@@ -108,7 +108,8 @@
 
       const label = document.createElement('span');
       label.className = 'cli-tab-label';
-      label.textContent = computeTabLabel(tabId);
+      const isAppCli = tabId.startsWith('app-');
+      label.textContent = (isAppCli ? '\u{1F528} ' : '') + computeTabLabel(tabId);
       let clickTimer = null;
       label.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -563,7 +564,12 @@
         break;
       }
       case 'cli:spawned': {
-        const tab = tabs.get(msg.tabId);
+        let tab = tabs.get(msg.tabId);
+        if (!tab && msg.tabId.startsWith('app-')) {
+          tab = createTab(msg.tabId);
+          switchTab(msg.tabId);
+          if (typeof switchView === 'function') switchView('claude');
+        }
         if (tab) {
           tab.status = 'running';
           tab.cwd = msg.cwd;

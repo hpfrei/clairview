@@ -36,6 +36,7 @@
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab" data-view="claude">CLIs</button>
         <button class="header-tab" data-view="directories">Directories</button>
+        <button class="header-tab header-tab-pro" data-view="apps">Apps <span class="pro-badge">PRO</span></button>
         <span class="header-tab-sep"></span>
         <button class="header-tab header-tab-config" data-view="models">Models</button>
         <button class="header-tab header-tab-config" data-view="rules">Rules</button>
@@ -43,6 +44,7 @@
       </nav>
     </div>
     <div class="header-actions">
+      <button class="get-pro-btn" id="getProBtn" title="Get VistaClair Pro">Get Pro</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
@@ -1355,6 +1357,40 @@ jq -r '.tool_input.command' |
     </div>
   </div>
 
+  <!-- ===== APPS VIEW ===== -->
+  <div id="view-apps" class="hidden" style="display:none">
+    <div id="appsTeaser" class="pro-teaser">
+      <div class="pro-teaser-icon">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </div>
+      <h2 class="pro-teaser-title">VistaClair Apps</h2>
+      <p class="pro-teaser-desc">Build and run AI-powered apps inside VistaClair. Each app gets a full GUI, shell access, file I/O, and Claude CLI integration.</p>
+      <div class="pro-teaser-features">
+        <div class="pro-feature-card">
+          <strong>AI Pentester</strong>
+          <span>Automated security scanning with AI-powered threat analysis</span>
+        </div>
+        <div class="pro-feature-card">
+          <strong>Custom App Builder</strong>
+          <span>Describe what you want, AI builds the app for you</span>
+        </div>
+        <div class="pro-feature-card">
+          <strong>Shell + Browser Bridge</strong>
+          <span>Apps can run CLI tools, capture screenshots, spawn processes</span>
+        </div>
+      </div>
+      <div class="pro-teaser-activate">
+        <a class="pro-buy-btn" href="https://hpfreilabs.lemonsqueezy.com" target="_blank" rel="noopener">Buy License</a>
+        <div class="pro-divider"><span>or enter your license key</span></div>
+        <div class="pro-key-form">
+          <input type="text" id="proKeyInput" class="pro-key-input" placeholder="HPFR-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" />
+          <button id="proActivateBtn" class="pro-activate-btn">Activate</button>
+        </div>
+        <div id="proActivateMsg" class="pro-activate-msg"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="footer-gradient-bar">
     <div class="footer-sep" style="left:200px"></div>
     <div class="footer-sep" style="left:400px"></div>
@@ -1409,5 +1445,65 @@ jq -r '.tool_input.command' |
   <script src="home.js"></script>
   <script src="rules.js"></script>
   <script src="directories.js"></script>
+  <script>
+  // Pro loader — checks for updates, then dynamically loads apps engine
+  (function() {
+    fetch('/api/pro/status').then(function(r) { return r.json(); }).then(function(s) {
+      if (!s.loaded) return;
+      // Check for updates (non-blocking — load assets immediately, update in background)
+      fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(u) {
+        if (u.updated) console.log('[Pro] Updated to ' + u.version + ' — restart to apply');
+      }).catch(function() {});
+      var link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = '/pro/apps.css';
+      document.head.appendChild(link);
+      var s1 = document.createElement('script');
+      s1.src = '/pro/apps.js';
+      s1.onload = function() {
+        var s2 = document.createElement('script');
+        s2.src = '/pro/app-bridge-client.js';
+        document.body.appendChild(s2);
+      };
+      document.body.appendChild(s1);
+    }).catch(function() {});
+
+    // Get Pro button → show activation modal
+    var proBtn = document.getElementById('getProBtn');
+    if (proBtn) {
+      proBtn.addEventListener('click', function() {
+        var el = document.querySelector('.header-tab[data-view="apps"]');
+        if (el) el.click();
+      });
+    }
+
+    // Activation form handler
+    document.addEventListener('click', function(e) {
+      if (e.target.id !== 'proActivateBtn') return;
+      var key = document.getElementById('proKeyInput')?.value?.trim();
+      var msg = document.getElementById('proActivateMsg');
+      if (!key) { msg.textContent = 'Enter a license key'; msg.className = 'pro-activate-msg error'; return; }
+      msg.textContent = 'Activating...'; msg.className = 'pro-activate-msg';
+      e.target.disabled = true;
+      fetch('/api/pro/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key })
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) {
+          msg.textContent = 'Activated! Restarting...';
+          msg.className = 'pro-activate-msg success';
+        } else {
+          msg.textContent = data.error || 'Activation failed';
+          msg.className = 'pro-activate-msg error';
+          e.target.disabled = false;
+        }
+      }).catch(function(err) {
+        msg.textContent = 'Connection error: ' + err.message;
+        msg.className = 'pro-activate-msg error';
+        e.target.disabled = false;
+      });
+    });
+  })();
+  </script>
 </body>
 </html>

@@ -1,8 +1,20 @@
 {
   "name": "vistaclair",
   "version": "1.0.0",
-  "description": "Transparent proxy for studying Claude Code API interactions",
+  "description": "Dashboard and transparent proxy for Claude Code",
   "main": "server.js",
+  "bin": {
+    "vistaclair": "./bin/vistaclair.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "public/",
+    "lib/",
+    "server.js",
+    "templates/",
+    "capabilities/tools/"
+  ],
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"

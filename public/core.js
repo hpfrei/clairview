@@ -971,6 +971,10 @@ function handleMessage(msg) {
       showRestartingOverlay();
       break;
 
+    case 'pro:disabled':
+      location.reload();
+      return;
+
     // Capabilities
     case 'skill:list':
     case 'agent:list':
@@ -1002,6 +1006,29 @@ function handleMessage(msg) {
       window.inspectorModule?.handleMessage(msg);
       break;
 
+    // Apps
+    case 'app:list':
+    case 'app:env':
+    case 'app:created':
+    case 'app:started':
+    case 'app:stopped':
+    case 'app:closed':
+    case 'app:error':
+    case 'app:files':
+    case 'app:fileContent':
+    case 'app:fileSaved':
+    case 'app:manifest':
+    case 'app:appmd':
+    case 'app:snapshots':
+    case 'app:server:output':
+    case 'app:cliSpawned':
+      window.appsModule?.handleMessage(msg);
+      break;
+    case 'app:bridge:response':
+    case 'app:bridge:event':
+      window.appBridgeClient?.handleBridgeResponse(msg) || window.appBridgeClient?.handleBridgeEvent(msg);
+      break;
+
     // MCP
     default:
       if (msg.type === 'mcp:list') state.mcpServers = msg.servers || [];
@@ -1019,7 +1046,7 @@ function switchView(view) {
   const activeBtn = document.querySelector(`.header-tab[data-view="${view}"]`);
   if (activeBtn) activeBtn.classList.add('active');
 
-  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-models', 'view-rules', 'view-directories'];
+  const views = ['view-home', 'view-dashboard', 'view-claude', 'view-capabilities', 'view-models', 'view-rules', 'view-directories', 'view-apps'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -1032,6 +1059,7 @@ function switchView(view) {
     }
   }
 
+  if (view === 'apps' && window.appsModule?.render) window.appsModule.render();
 }
 
 document.getElementById('headerTabs').addEventListener('click', e => {

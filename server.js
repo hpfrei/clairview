@@ -11,6 +11,9 @@ const { pendingQuestions } = createProxyRouter;
 const CliSessionManager = require('./src/cli-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
+let pro = null;
+let proLicenseValid = false;
+const proDir = path.join(__dirname, 'vistaclair-pro');
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
@@ -33,6 +36,58 @@ const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } =
   const child = require('child_process').spawnSync(process.execPath, process.argv.slice(1), { cwd: __dirname, stdio: 'inherit' });
   process.exit(child.status ?? 1);
 })();
+
+async function validateLicense() {
+  const fs = require('fs');
+  const licPath = path.join(__dirname, 'data', 'license.json');
+  if (!fs.existsSync(licPath)) return { valid: false, reason: 'no-key' };
+
+  let stored;
+  try { stored = JSON.parse(fs.readFileSync(licPath, 'utf-8')); } catch { return { valid: false, reason: 'corrupt' }; }
+  if (!stored.key) return { valid: false, reason: 'no-key' };
+
+  const os = require('os');
+  const machineId = crypto.createHash('sha256')
+    .update(os.hostname() + os.userInfo().username).digest('hex').slice(0, 16);
+
+  try {
+    const https = require('https');
+    const licUrl = new URL(process.env.VISTACLAIR_LICENSE_URL || 'https://licencing.hpfreilabs.com/api/validate');
+    const body = JSON.stringify({ key: stored.key, product: 'vistaclair-pro', machineId });
+
+    const response = await new Promise((resolve, reject) => {
+      const mod = licUrl.protocol === 'https:' ? https : require('http');
+      const r = mod.request(licUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 10000 }, (resp) => {
+        let data = '';
+        resp.on('data', c => data += c);
+        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
+      });
+      r.on('error', reject);
+      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
+      r.write(body);
+      r.end();
+    });
+
+    return { valid: !!response.valid, reason: response.valid ? 'ok' : (response.error || 'invalid') };
+  } catch {
+    return { valid: true, reason: 'offline-grace' };
+  }
+}
+
+(async () => {
+
+const fs = require('fs');
+if (fs.existsSync(proDir)) {
+  const result = await validateLicense();
+  proLicenseValid = result.valid;
+  if (proLicenseValid) {
+    try { pro = require('./vistaclair-pro'); } catch (e) {
+      console.error('  Pro: failed to load:', e.message);
+    }
+  } else {
+    console.log(`  Pro: license invalid (${result.reason}) — running in free mode`);
+  }
+}
 
 const PROXY_PORT = parseInt(process.env.PROXY_PORT || '3456');
 const PORT_ARG = process.argv.slice(2).find(a => /^\d+$/.test(a));
@@ -171,6 +226,120 @@ dashboardApp.use(express.static(path.join(__dirname, 'public')));
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
 
+// Pro activation endpoint
+dashboardApp.post('/api/pro/activate', async (req, res) => {
+  const { key } = req.body;
+  if (!key) return res.status(400).json({ error: 'License key required' });
+
+  try {
+    const fs = require('fs');
+    const https = require('https');
+    const os = require('os');
+    const hostname = os.hostname();
+    const username = os.userInfo().username;
+    const machineId = crypto.createHash('sha256').update(hostname + username).digest('hex').slice(0, 16);
+
+    const body = JSON.stringify({ key, product: 'vistaclair-pro', machineId, hostname, username });
+    const licUrl = new URL(process.env.VISTACLAIR_LICENSE_URL || 'https://licencing.hpfreilabs.com/api/activate');
+
+    const response = await new Promise((resolve, reject) => {
+      const mod = licUrl.protocol === 'https:' ? https : require('http');
+      const r = mod.request(licUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (resp) => {
+        let data = '';
+        resp.on('data', c => data += c);
+        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
+      });
+      r.on('error', reject);
+      r.write(body);
+      r.end();
+    });
+
+    if (!response.valid) return res.json({ ok: false, error: response.error || 'Invalid license key' });
+
+    const { execSync } = require('child_process');
+    const proDir = path.join(__dirname, 'vistaclair-pro');
+    const gitAuth = response.gitCredentials
+      ? `${encodeURIComponent(response.gitCredentials.username)}:${encodeURIComponent(response.gitCredentials.password)}@`
+      : '';
+
+    if (!fs.existsSync(proDir)) {
+      const cloneUrl = response.gitUrl
+        ? response.gitUrl.replace('https://', `https://${gitAuth}`)
+        : response.cloneUrl;
+      execSync(`git clone ${cloneUrl} vistaclair-pro`, { cwd: __dirname, stdio: 'pipe', timeout: 60000 });
+    }
+
+    if (response.extras) {
+      for (const extra of response.extras) {
+        const dir = path.join(__dirname, extra.name);
+        if (!fs.existsSync(dir)) {
+          const extraUrl = extra.gitUrl
+            ? extra.gitUrl.replace('https://', `https://${gitAuth}`)
+            : extra.cloneUrl;
+          if (!extraUrl) continue;
+          try {
+            execSync(`git clone ${extraUrl} ${extra.name}`, { cwd: __dirname, stdio: 'pipe', timeout: 60000 });
+          } catch (e) {
+            if (!extra.optional) throw e;
+          }
+        }
+      }
+    }
+
+    const { ensureDir } = require('./src/utils');
+    ensureDir(path.join(__dirname, 'data'));
+    fs.writeFileSync(path.join(__dirname, 'data', 'license.json'), JSON.stringify({ key, activatedAt: new Date().toISOString() }));
+
+    res.json({ ok: true, message: 'Pro activated. Restarting...' });
+
+    // Trigger server restart to load pro
+    setTimeout(() => {
+      broadcaster.broadcast({ type: 'server:restarting' });
+      const child = spawn(process.argv[0], process.argv.slice(1), {
+        detached: true, stdio: 'inherit', cwd: process.cwd(),
+        env: { ...process.env, AUTH_TOKEN },
+      });
+      child.unref();
+      process.exit(0);
+    }, 500);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Pro update check — pulls latest if pro is installed
+dashboardApp.post('/api/pro/update', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const { execSync } = require('child_process');
+    const proDir = path.join(__dirname, 'vistaclair-pro');
+    if (!fs.existsSync(proDir)) return res.json({ ok: false, error: 'Pro not installed' });
+
+    const before = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
+    try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); } catch {}
+    const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
+
+    // Also update vistaclair-apps if present
+    const appsDir = path.join(__dirname, 'vistaclair-apps');
+    if (fs.existsSync(path.join(appsDir, '.git'))) {
+      try { execSync('git pull --ff-only', { cwd: appsDir, stdio: 'pipe', timeout: 30000 }); } catch {}
+    }
+
+    const updated = before !== after;
+    res.json({ ok: true, updated, version: after.slice(0, 8) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+dashboardApp.get('/api/pro/status', (req, res) => {
+  res.json({
+    installed: fs.existsSync(proDir),
+    licensed: proLicenseValid,
+    loaded: !!pro,
+  });
+});
+
 const dashboardServer = http.createServer(dashboardApp);
 
 const cliSessionManager = new CliSessionManager(PROXY_PORT, { broadcast: (...args) => broadcaster.broadcast(...args) }, store, { authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
@@ -202,6 +371,11 @@ createProxyRouter._cliSettingsGetter = (instanceId) => cliSessionManager.getSett
 // Initialize MCP Server Manager
 mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
+// Initialize Pro (Apps Platform) if available
+if (pro) {
+  pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager });
+  console.log('  Pro: loaded');
+}
 
 ruleHandler.init({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
@@ -288,11 +462,25 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
       const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
       exec(`${cmd} "${url}"`);
     }
+
+    // Re-validate license every 4 hours
+    setInterval(async () => {
+      if (!pro) return;
+      const result = await validateLicense();
+      if (!result.valid && result.reason !== 'offline-grace') {
+        console.log(`  Pro: license no longer valid (${result.reason}) — disabling`);
+        pro.shutdown();
+        pro = null;
+        proLicenseValid = false;
+        broadcaster.broadcast({ type: 'pro:disabled', reason: result.reason });
+      }
+    }, 4 * 60 * 60 * 1000);
   });
 });
 
-// Clean shutdown: unregister MCP servers
+// Clean shutdown: unregister MCP servers and stop running apps
 function gracefulShutdown() {
+  if (pro) pro.shutdown();
   mcp.shutdown();
   process.exit(0);
 }
@@ -305,3 +493,5 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);
 });
+
+})();

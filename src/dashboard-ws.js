@@ -15,6 +15,7 @@ class DashboardBroadcaster {
     this._proxyPort = opts.proxyPort || 3456;
     this.cliSessionManager = opts.cliSessionManager || null;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
+    this.appsHandler = null; // Set externally by src/apps/index.js
 
     this.wss.on('connection', (ws) => {
       // Send full history on connect
@@ -50,6 +51,8 @@ class DashboardBroadcaster {
       if (this.mcpHandler) this.mcpHandler.onConnect(ws);
       // Rule handler init
       if (this.ruleHandler) this.ruleHandler.onConnect(ws);
+      // Apps platform init
+      if (this.appsHandler) this.appsHandler.onConnect(ws);
 
       // CLI tabs init
       if (this.cliSessionManager) {
@@ -224,6 +227,8 @@ class DashboardBroadcaster {
             if (this.mcpHandler?.handleBridgeReport) this.mcpHandler.handleBridgeReport(msg);
           } else if (msg.type.startsWith('rule:')) {
             if (this.ruleHandler) this.ruleHandler.handleMessage(ws, msg, this);
+          } else if (msg.type.startsWith('app:')) {
+            if (this.appsHandler) this.appsHandler.handleMessage(ws, msg, this);
           } else if (msg.type.startsWith('mcp:')) {
             if (this.mcpHandler) this.mcpHandler.handleMessage(ws, msg, this);
           // --- CLI Terminal ---
