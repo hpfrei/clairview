@@ -44,7 +44,6 @@
       </nav>
     </div>
     <div class="header-actions">
-      <button class="get-pro-btn" id="getProBtn" title="Get VistaClair Pro">Get Pro</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
@@ -1380,13 +1379,8 @@ jq -r '.tool_input.command' |
         </div>
       </div>
       <div class="pro-teaser-activate">
-        <a class="pro-buy-btn" href="https://hpfreilabs.lemonsqueezy.com" target="_blank" rel="noopener">Buy License</a>
-        <div class="pro-divider"><span>or enter your license key</span></div>
-        <div class="pro-key-form">
-          <input type="text" id="proKeyInput" class="pro-key-input" placeholder="HPFR-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" />
-          <button id="proActivateBtn" class="pro-activate-btn">Activate</button>
-        </div>
-        <div id="proActivateMsg" class="pro-activate-msg"></div>
+        <div id="proVariantButtons" class="pro-variant-buttons"></div>
+        <div id="proClaimMsg" class="pro-activate-msg"></div>
       </div>
     </div>
   </div>
@@ -1446,63 +1440,79 @@ jq -r '.tool_input.command' |
   <script src="rules.js"></script>
   <script src="directories.js"></script>
   <script>
-  // Pro loader — checks for updates, then dynamically loads apps engine
   (function() {
     fetch('/api/pro/status').then(function(r) { return r.json(); }).then(function(s) {
-      if (!s.loaded) return;
-      // Check for updates (non-blocking — load assets immediately, update in background)
-      fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(u) {
-        if (u.updated) console.log('[Pro] Updated to ' + u.version + ' — restart to apply');
-      }).catch(function() {});
-      var link = document.createElement('link');
-      link.rel = 'stylesheet'; link.href = '/pro/apps.css';
-      document.head.appendChild(link);
-      var s1 = document.createElement('script');
-      s1.src = '/pro/apps.js';
-      s1.onload = function() {
-        var s2 = document.createElement('script');
-        s2.src = '/pro/app-bridge-client.js';
-        document.body.appendChild(s2);
-      };
-      document.body.appendChild(s1);
+      if (s.loaded) {
+        fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(u) {
+          if (u.updated) console.log('[Pro] Updated to ' + u.version + ' — restart to apply');
+        }).catch(function() {});
+        var link = document.createElement('link');
+        link.rel = 'stylesheet'; link.href = '/pro/apps.css';
+        document.head.appendChild(link);
+        var s1 = document.createElement('script');
+        s1.src = '/pro/apps.js';
+        s1.onload = function() {
+          var s2 = document.createElement('script');
+          s2.src = '/pro/app-bridge-client.js';
+          document.body.appendChild(s2);
+        };
+        document.body.appendChild(s1);
+        return;
+      }
+
+      if (s.productInfo && s.productInfo.variants && s.productInfo.variants.length) {
+        var container = document.getElementById('proVariantButtons');
+        if (!container) return;
+        s.productInfo.variants.forEach(function(v) {
+          if (!v.checkoutUrl) return;
+          var btn = document.createElement('button');
+          btn.className = 'pro-buy-btn';
+          btn.textContent = v.name;
+          btn.dataset.checkoutUrl = v.checkoutUrl;
+          btn.addEventListener('click', function() {
+            if (window.LemonSqueezy) {
+              LemonSqueezy.Url.Open(v.checkoutUrl);
+            } else {
+              window.open(v.checkoutUrl, '_blank');
+            }
+          });
+          container.appendChild(btn);
+        });
+
+        var lsScript = document.createElement('script');
+        lsScript.src = 'https://app.lemonsqueezy.com/js/lemon.js';
+        lsScript.defer = true;
+        document.head.appendChild(lsScript);
+
+        window.addEventListener('message', function(e) {
+          if (!e.data || e.data.event !== 'Checkout.Success') return;
+          var order = e.data.data;
+          if (!order || !order.order) return;
+          var orderId = order.order.id || order.order.data?.id;
+          if (!orderId) return;
+          var msg = document.getElementById('proClaimMsg');
+          if (msg) { msg.textContent = 'Activating license...'; msg.className = 'pro-activate-msg'; }
+          var btns = container.querySelectorAll('.pro-buy-btn');
+          btns.forEach(function(b) { b.disabled = true; });
+
+          fetch('/api/pro/claim', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: String(orderId) })
+          }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.ok) {
+              if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
+            } else {
+              if (msg) { msg.textContent = data.error || 'Claim failed'; msg.className = 'pro-activate-msg error'; }
+              btns.forEach(function(b) { b.disabled = false; });
+            }
+          }).catch(function(err) {
+            if (msg) { msg.textContent = 'Connection error: ' + err.message; msg.className = 'pro-activate-msg error'; }
+            btns.forEach(function(b) { b.disabled = false; });
+          });
+        });
+      }
     }).catch(function() {});
-
-    // Get Pro button → show activation modal
-    var proBtn = document.getElementById('getProBtn');
-    if (proBtn) {
-      proBtn.addEventListener('click', function() {
-        var el = document.querySelector('.header-tab[data-view="apps"]');
-        if (el) el.click();
-      });
-    }
-
-    // Activation form handler
-    document.addEventListener('click', function(e) {
-      if (e.target.id !== 'proActivateBtn') return;
-      var key = document.getElementById('proKeyInput')?.value?.trim();
-      var msg = document.getElementById('proActivateMsg');
-      if (!key) { msg.textContent = 'Enter a license key'; msg.className = 'pro-activate-msg error'; return; }
-      msg.textContent = 'Activating...'; msg.className = 'pro-activate-msg';
-      e.target.disabled = true;
-      fetch('/api/pro/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: key })
-      }).then(function(r) { return r.json(); }).then(function(data) {
-        if (data.ok) {
-          msg.textContent = 'Activated! Restarting...';
-          msg.className = 'pro-activate-msg success';
-        } else {
-          msg.textContent = data.error || 'Activation failed';
-          msg.className = 'pro-activate-msg error';
-          e.target.disabled = false;
-        }
-      }).catch(function(err) {
-        msg.textContent = 'Connection error: ' + err.message;
-        msg.className = 'pro-activate-msg error';
-        e.target.disabled = false;
-      });
-    });
   })();
   </script>
 </body>
