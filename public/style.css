@@ -4239,6 +4239,7 @@ footer {
 .dir-close-btn { margin-left: 4px; background: none; border: 1px solid var(--border); color: var(--text-dim); font-size: 12px; cursor: pointer; border-radius: 3px; padding: 1px 6px; line-height: 1; transition: background 0.15s, color 0.15s; }
 .dir-close-btn:hover { background: var(--bg-hover); color: var(--text); }
 
+.dir-preview-sort-bar { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .dir-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; padding: 12px; align-content: start; }
 .dir-preview-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); position: relative; cursor: pointer; transition: border-color 0.15s; }
 .dir-preview-card:hover { border-color: var(--accent); }

@@ -121,8 +121,10 @@
         renderPreviews(tab);
       } else if (!tab.showPreviews && !tab.selectedFile) {
         const content = tab.rightPanel.querySelector('.dir-viewer-content');
+        const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
         content.style.display = 'none';
         content.innerHTML = '';
+        empty.style.display = '';
       }
     });
     sortBar.appendChild(previewToggle);
@@ -525,8 +527,10 @@
 
   function renderPreviews(tab) {
     const content = tab.rightPanel.querySelector('.dir-viewer-content');
+    const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
     content.style.display = '';
     content.innerHTML = '';
+    empty.style.display = 'none';
 
     const files = tab.entries.filter(e => !e.isDirectory);
     if (files.length === 0) {
@@ -534,10 +538,38 @@
       return;
     }
 
+    const sortBar = document.createElement('div');
+    sortBar.className = 'dir-preview-sort-bar';
+    const previewSortKey = tab.previewSortBy || tab.sortBy;
+    const previewSortDir = tab.previewSortDir || tab.sortDir;
+    for (const s of ['name', 'date', 'size']) {
+      const btn = document.createElement('button');
+      btn.className = 'dir-sort-btn' + (previewSortKey === s ? ' active' : '');
+      btn.textContent = s.charAt(0).toUpperCase() + s.slice(1) + (previewSortKey === s ? (previewSortDir === 'desc' ? ' ↓' : ' ↑') : '');
+      btn.addEventListener('click', () => {
+        if (tab.previewSortBy === s) {
+          tab.previewSortDir = tab.previewSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          tab.previewSortBy = s;
+          tab.previewSortDir = 'asc';
+        }
+        renderPreviews(tab);
+      });
+      sortBar.appendChild(btn);
+    }
+    content.appendChild(sortBar);
+
+    const sortedFiles = [...files].sort((a, b) => {
+      const dir = previewSortDir === 'desc' ? -1 : 1;
+      if (previewSortKey === 'name') return dir * a.name.localeCompare(b.name);
+      if (previewSortKey === 'date') return dir * (new Date(a.mtime) - new Date(b.mtime));
+      return dir * ((a.size || 0) - (b.size || 0));
+    });
+
     const grid = document.createElement('div');
     grid.className = 'dir-preview-grid';
 
-    for (const entry of files) {
+    for (const entry of sortedFiles) {
       const fullPath = tab.cwd + '/' + entry.name;
       const ext = (entry.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || '';
       const category = getFileCategory(ext);
