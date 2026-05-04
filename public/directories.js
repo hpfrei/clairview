@@ -62,6 +62,8 @@
       sortBy: 'name',
       sortDir: 'asc',
       selectedFile: null,
+      selectedPaths: new Set(),
+      _lastSelectedIndex: -1,
       entries: [],
       wrap,
       leftPanel,
@@ -516,6 +518,8 @@
     content.innerHTML = '';
     empty.style.display = '';
     tab.selectedFile = null;
+    tab.selectedPaths.clear();
+    tab._lastSelectedIndex = -1;
 
     tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
 
@@ -566,16 +570,22 @@
       return dir * ((a.size || 0) - (b.size || 0));
     });
 
+    const gridWrap = document.createElement('div');
+    gridWrap.className = 'dir-preview-grid-wrap';
+
     const grid = document.createElement('div');
     grid.className = 'dir-preview-grid';
 
-    for (const entry of sortedFiles) {
+    for (let i = 0; i < sortedFiles.length; i++) {
+      const entry = sortedFiles[i];
       const fullPath = tab.cwd + '/' + entry.name;
       const ext = (entry.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || '';
       const category = getFileCategory(ext);
 
       const card = document.createElement('div');
-      card.className = 'dir-preview-card';
+      card.className = 'dir-preview-card' + (tab.selectedPaths.has(fullPath) ? ' selected' : '');
+      card.dataset.index = i;
+      card.dataset.path = fullPath;
 
       const thumb = document.createElement('div');
       thumb.className = 'dir-preview-thumb';
@@ -598,10 +608,39 @@
         thumb.innerHTML = BINARY_SVG;
       }
 
-      card.appendChild(thumb);
-      card.title = entry.name;
+      const label = document.createElement('div');
+      label.className = 'dir-preview-label';
+      label.textContent = entry.name;
 
-      card.addEventListener('click', () => {
+      card.appendChild(thumb);
+      card.appendChild(label);
+
+      card.addEventListener('click', (e) => {
+        const idx = parseInt(card.dataset.index, 10);
+        if (e.shiftKey && tab._lastSelectedIndex >= 0) {
+          const lo = Math.min(tab._lastSelectedIndex, idx);
+          const hi = Math.max(tab._lastSelectedIndex, idx);
+          if (!e.ctrlKey && !e.metaKey) tab.selectedPaths.clear();
+          for (let j = lo; j <= hi; j++) {
+            const p = sortedFiles[j];
+            if (p) tab.selectedPaths.add(tab.cwd + '/' + p.name);
+          }
+          syncCardSelection(grid, tab);
+          updateDeleteBar(tab, content);
+          return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+          if (tab.selectedPaths.has(fullPath)) tab.selectedPaths.delete(fullPath);
+          else tab.selectedPaths.add(fullPath);
+          tab._lastSelectedIndex = idx;
+          syncCardSelection(grid, tab);
+          updateDeleteBar(tab, content);
+          return;
+        }
+        tab.selectedPaths.clear();
+        tab._lastSelectedIndex = idx;
+        syncCardSelection(grid, tab);
+        updateDeleteBar(tab, content);
         tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
         const row = tab.leftPanel.querySelector(`.dir-entry[data-path="${CSS.escape(fullPath)}"]`);
         if (row) row.classList.add('selected');
@@ -611,7 +650,60 @@
       grid.appendChild(card);
     }
 
-    content.appendChild(grid);
+    gridWrap.appendChild(grid);
+    content.appendChild(gridWrap);
+    updateDeleteBar(tab, content);
+  }
+
+  function syncCardSelection(grid, tab) {
+    grid.querySelectorAll('.dir-preview-card').forEach(c => {
+      c.classList.toggle('selected', tab.selectedPaths.has(c.dataset.path));
+    });
+  }
+
+  function updateDeleteBar(tab, content) {
+    let bar = content.querySelector('.dir-preview-delete-bar');
+    if (tab.selectedPaths.size === 0) {
+      if (bar) bar.remove();
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'dir-preview-delete-bar';
+      const btn = document.createElement('button');
+      btn.className = 'dir-preview-delete-btn';
+      btn.addEventListener('click', () => deleteSelectedFiles(tab));
+      bar.appendChild(btn);
+      content.appendChild(bar);
+    }
+    const btn = bar.querySelector('button');
+    const n = tab.selectedPaths.size;
+    btn.textContent = `Delete ${n} file${n > 1 ? 's' : ''}`;
+  }
+
+  async function deleteSelectedFiles(tab) {
+    const paths = [...tab.selectedPaths];
+    if (paths.length === 0) return;
+    const msg = paths.length === 1
+      ? `Delete "${paths[0].split('/').pop()}"?`
+      : `Delete ${paths.length} files?`;
+    if (!confirm(msg)) return;
+    try {
+      const resp = await fetch('/api/delete-files', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      });
+      const result = await resp.json();
+      if (result.errors?.length) {
+        console.warn('Some files could not be deleted:', result.errors);
+      }
+    } catch (err) {
+      console.error('Delete failed:', err);
+    }
+    tab.selectedPaths.clear();
+    tab._lastSelectedIndex = -1;
+    loadDir(tab.id, tab.cwd);
   }
 
   // ── Terminal panel ─────────────────────────────────────────────────

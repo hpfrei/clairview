@@ -185,6 +185,35 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     }
   });
 
+  // ── DELETE /api/delete-files — delete one or more files ────
+  router.delete('/delete-files', async (req, res) => {
+    const { paths } = req.body || {};
+    if (!Array.isArray(paths) || paths.length === 0) {
+      return res.status(400).json({ error: 'paths array required' });
+    }
+    const deleted = [];
+    const errors = [];
+    for (const p of paths) {
+      const resolved = path.resolve(p);
+      if (resolved !== p) {
+        errors.push({ path: p, error: 'Must be an absolute path' });
+        continue;
+      }
+      try {
+        const stat = fs.statSync(resolved);
+        if (!stat.isFile()) {
+          errors.push({ path: p, error: 'Not a file' });
+          continue;
+        }
+        fs.unlinkSync(resolved);
+        deleted.push(p);
+      } catch (err) {
+        errors.push({ path: p, error: err.message });
+      }
+    }
+    res.json({ deleted, errors });
+  });
+
   return router;
 }
 
