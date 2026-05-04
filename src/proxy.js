@@ -139,6 +139,10 @@ async function* resumeWebStream(firstChunk, reader) {
 }
 
 function sendProxyError(res, err) {
+  if (res.headersSent) {
+    try { res.end(); } catch {}
+    return;
+  }
   res.writeHead(502, { 'content-type': 'application/json' });
   res.end(JSON.stringify({
     type: 'error',
