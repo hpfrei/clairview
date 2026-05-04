@@ -566,42 +566,8 @@
         thumb.innerHTML = BINARY_SVG;
       }
 
-      const info = document.createElement('div');
-      info.className = 'dir-preview-info';
-      info.innerHTML = `<div class="name" title="${escHtml(entry.name)}">${escHtml(entry.name)}</div>`
-        + `<div class="meta">${formatSize(entry.size)} &middot; ${formatDate(entry.mtime)}</div>`;
-
-      const actions = document.createElement('div');
-      actions.className = 'dir-preview-actions';
-
-      const openBtn = document.createElement('button');
-      openBtn.textContent = 'Open';
-      openBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
-        const row = tab.leftPanel.querySelector(`.dir-entry[data-path="${CSS.escape(fullPath)}"]`);
-        if (row) row.classList.add('selected');
-        openFile(tab, fullPath, entry);
-      });
-
-      const dlBtn = document.createElement('button');
-      dlBtn.textContent = 'Download';
-      dlBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const a = document.createElement('a');
-        a.href = '/api/raw-file?path=' + encodeURIComponent(fullPath);
-        a.download = entry.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
-
-      actions.appendChild(openBtn);
-      actions.appendChild(dlBtn);
-
       card.appendChild(thumb);
-      card.appendChild(info);
-      card.appendChild(actions);
+      card.title = entry.name;
 
       card.addEventListener('click', () => {
         tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));

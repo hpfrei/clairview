@@ -11,10 +11,7 @@
   const pendingAskOverlays = new Map();
 
   function getTheme() {
-    const isDark = document.documentElement.getAttribute('data-theme') !== 'bright';
-    return isDark
-      ? { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' }
-      : { background: '#f8f8f8', foreground: '#1a1a1a', cursor: '#3355aa', selectionBackground: 'rgba(50,80,170,0.2)' };
+    return { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' };
   }
 
   function createTab(tabId) {
@@ -531,19 +528,6 @@
     el.addEventListener('click', () => settingsModal.classList.add('hidden'));
   });
   settingsModal?.querySelector('.cli-settings-save')?.addEventListener('click', saveSettings);
-
-  // --- Theme sync ---
-  const themeToggle = document.getElementById('themeToggle');
-  if (themeToggle) {
-    themeToggle.addEventListener('click', () => {
-      setTimeout(() => {
-        const theme = getTheme();
-        for (const tab of tabs.values()) {
-          tab.terminal.options.theme = theme;
-        }
-      }, 100);
-    });
-  }
 
   // --- Message handler ---
   function handleMessage(msg) {
