@@ -4232,6 +4232,27 @@ footer {
 .dir-download-btn:hover { background: var(--bg-hover); }
 .dir-viewer-size { color: var(--text-dim); font-size: 11px; }
 
+/* --- File preview overlay --- */
+.dir-overlay { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; }
+.dir-overlay-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.6); }
+.dir-overlay-panel { position: relative; width: 80vw; height: 80vh; max-width: 1200px; background: var(--bg); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.5); z-index: 1; }
+.dir-overlay-header { padding: 8px 14px; font-size: 12px; color: var(--text-dim); border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; align-items: center; gap: 8px; background: var(--bg); }
+.dir-overlay-header .dir-filename { color: var(--text); font-weight: 500; }
+.dir-overlay-close { background: none; border: 1px solid var(--border); color: var(--text-dim); font-size: 14px; cursor: pointer; border-radius: 4px; padding: 2px 8px; line-height: 1; transition: background 0.15s, color 0.15s; }
+.dir-overlay-close:hover { background: var(--bg-hover); color: var(--text); }
+.dir-overlay-content { flex: 1; overflow: auto; position: relative; }
+.dir-overlay-content img { max-width: 100%; max-height: 100%; display: block; margin: 24px auto; border-radius: 4px; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+.dir-overlay-content audio { display: block; margin: 40px auto; min-width: 320px; }
+.dir-overlay-content video { display: block; max-width: 100%; max-height: 100%; margin: 24px auto; }
+.dir-overlay-content iframe { width: 100%; height: 100%; border: none; }
+
+.dir-overlay-nav { position: absolute; top: 50%; z-index: 2; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s, border-color 0.15s, opacity 0.15s; padding: 0; }
+.dir-overlay-nav svg { width: 22px; height: 22px; }
+.dir-overlay-nav:hover { background: var(--bg-hover); border-color: var(--accent); }
+.dir-overlay-nav.prev { left: 16px; }
+.dir-overlay-nav.next { right: 16px; }
+.dir-overlay-nav.disabled { opacity: 0.25; pointer-events: none; }
+
 /* --- Preview toggle & grid --- */
 .dir-preview-toggle { font-size: 10px; cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--text-dim); user-select: none; padding: 2px 6px; }
 .dir-preview-toggle input { cursor: pointer; accent-color: var(--accent); margin: 0; }
@@ -4245,7 +4266,11 @@ footer {
 .dir-preview-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); position: relative; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
 .dir-preview-card:hover { border-color: var(--accent); }
 .dir-preview-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
-.dir-preview-card.selected::after { content: '\2713'; position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; line-height: 1; }
+/* Checkbox on preview cards */
+.dir-preview-cb { position: absolute; top: 6px; left: 6px; z-index: 2; width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent); opacity: 0; transition: opacity 0.15s; pointer-events: auto; }
+.dir-preview-card:hover .dir-preview-cb,
+.dir-preview-card.selected .dir-preview-cb,
+.dir-preview-grid.selecting .dir-preview-cb { opacity: 1; }
 
 .dir-preview-thumb { display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--surface, var(--bg)); aspect-ratio: 1; }
 .dir-preview-thumb img { width: 100%; height: 100%; object-fit: cover; }
@@ -4254,9 +4279,11 @@ footer {
 
 .dir-preview-label { padding: 4px 6px; font-size: 10px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid var(--border); }
 
-.dir-preview-delete-bar { position: sticky; bottom: 0; display: flex; justify-content: center; padding: 8px; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(6px); border-top: 1px solid var(--border); }
-.dir-preview-delete-btn { padding: 6px 20px; font-size: 12px; font-weight: 600; border-radius: 4px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 12%, var(--bg)); color: var(--red); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.dir-preview-delete-bar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.dir-preview-delete-btn { padding: 3px 12px; font-size: 11px; font-weight: 600; border-radius: 4px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 12%, var(--bg)); color: var(--red); cursor: pointer; transition: background 0.15s, color 0.15s; }
 .dir-preview-delete-btn:hover { background: var(--red); color: #fff; }
+.dir-preview-clear-btn { padding: 3px 10px; font-size: 11px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); cursor: pointer; transition: background 0.15s; }
+.dir-preview-clear-btn:hover { background: var(--bg-hover); color: var(--text); }
 
 /* --- Search button in sort bar --- */
 .dir-search-btn { margin-left: auto; font-size: 12px; padding: 2px 6px; }

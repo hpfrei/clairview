@@ -408,28 +408,96 @@
     }
   }
 
-  // ── File preview ───────────────────────────────────────────────────
+  // ── File preview overlay ────────────────────────────────────────────
 
-  async function openFile(tab, filePath, entry) {
+  const ARROW_LEFT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+  const ARROW_RIGHT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+
+  let activeOverlay = null;
+
+  function getFileList(tab) {
+    return tab.entries.filter(e => !e.isDirectory);
+  }
+
+  function getFileIndex(tab, filePath) {
+    const files = getFileList(tab);
+    return files.findIndex(e => tab.cwd + '/' + e.name === filePath);
+  }
+
+  function openFile(tab, filePath, entry) {
     tab.selectedFile = filePath;
+    showOverlay(tab, filePath, entry);
+  }
 
-    const hdr = tab.rightPanel.querySelector('.dir-viewer-header');
-    const content = tab.rightPanel.querySelector('.dir-viewer-content');
-    const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
+  function closeOverlay() {
+    if (!activeOverlay) return;
+    if (activeOverlay.editor) { activeOverlay.editor.dispose(); activeOverlay.editor = null; }
+    const tab = activeOverlay.tab;
+    activeOverlay.el.remove();
+    document.removeEventListener('keydown', activeOverlay.keyHandler);
+    activeOverlay = null;
+    if (tab) tab.selectedFile = null;
+  }
 
-    empty.style.display = 'none';
-    hdr.style.display = '';
-    content.style.display = '';
+  function showOverlay(tab, filePath, entry) {
+    closeOverlay();
+
+    const files = getFileList(tab);
+    const currentIdx = files.findIndex(e => tab.cwd + '/' + e.name === filePath);
+    const hasPrev = currentIdx > 0;
+    const hasNext = currentIdx < files.length - 1;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'dir-overlay';
 
     const downloadUrl = '/api/raw-file?path=' + encodeURIComponent(filePath);
-    hdr.innerHTML = `<span class="dir-filename">${escHtml(entry.name)}</span><span class="dir-viewer-size">${formatSize(entry.size)}</span>`
-      + `<a class="dir-download-btn" href="${downloadUrl}" download="${escHtml(entry.name)}" title="Download file">⬇</a>`
-      + `<button class="dir-close-btn" title="Close preview">✕</button>`;
-    hdr.querySelector('.dir-close-btn').addEventListener('click', () => resetPreviewPanel(tab));
 
-    if (tab.editor) { tab.editor.dispose(); tab.editor = null; }
-    content.innerHTML = '';
+    overlay.innerHTML = `
+      <div class="dir-overlay-backdrop"></div>
+      <button class="dir-overlay-nav prev${hasPrev ? '' : ' disabled'}" title="Previous file">${ARROW_LEFT_SVG}</button>
+      <button class="dir-overlay-nav next${hasNext ? '' : ' disabled'}" title="Next file">${ARROW_RIGHT_SVG}</button>
+      <div class="dir-overlay-panel">
+        <div class="dir-overlay-header">
+          <span class="dir-filename">${escHtml(entry.name)}</span>
+          <span class="dir-viewer-size">${formatSize(entry.size)}</span>
+          <a class="dir-download-btn" href="${downloadUrl}" download="${escHtml(entry.name)}" title="Download">⬇</a>
+          <button class="dir-overlay-close" title="Close">✕</button>
+        </div>
+        <div class="dir-overlay-content"></div>
+      </div>`;
 
+    document.body.appendChild(overlay);
+
+    const content = overlay.querySelector('.dir-overlay-content');
+
+    overlay.querySelector('.dir-overlay-backdrop').addEventListener('click', closeOverlay);
+    overlay.querySelector('.dir-overlay-close').addEventListener('click', closeOverlay);
+
+    function navigate(dir) {
+      const newIdx = currentIdx + dir;
+      if (newIdx < 0 || newIdx >= files.length) return;
+      const e = files[newIdx];
+      const p = tab.cwd + '/' + e.name;
+      tab.selectedFile = p;
+      showOverlay(tab, p, e);
+    }
+
+    if (hasPrev) overlay.querySelector('.dir-overlay-nav.prev').addEventListener('click', () => navigate(-1));
+    if (hasNext) overlay.querySelector('.dir-overlay-nav.next').addEventListener('click', () => navigate(1));
+
+    function keyHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeOverlay(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); navigate(1); }
+    }
+    document.addEventListener('keydown', keyHandler);
+
+    activeOverlay = { el: overlay, editor: null, keyHandler, tab };
+
+    renderOverlayContent(tab, filePath, entry, content);
+  }
+
+  async function renderOverlayContent(tab, filePath, entry, content) {
     const ext = (filePath.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
     const category = getFileCategory(ext);
     const url = '/api/raw-file?path=' + encodeURIComponent(filePath);
@@ -441,15 +509,15 @@
           const resp = await fetch(url);
           if (!resp.ok) throw new Error();
           const text = await resp.text();
-          if (tab.selectedFile !== filePath) return;
+          if (!activeOverlay || tab.selectedFile !== filePath) return;
           content.innerHTML = '';
           const editorDiv = document.createElement('div');
           editorDiv.style.cssText = 'width:100%;height:100%;position:absolute;top:0;left:0;right:0;bottom:0;';
           content.appendChild(editorDiv);
 
           await ensureMonaco();
-          if (tab.selectedFile !== filePath) return;
-          tab.editor = monaco.editor.create(editorDiv, {
+          if (!activeOverlay || tab.selectedFile !== filePath) return;
+          activeOverlay.editor = monaco.editor.create(editorDiv, {
             value: text,
             language: getMonacoLanguage(ext),
             theme: getMonacoTheme(),
@@ -465,7 +533,7 @@
             scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
           });
         } catch {
-          if (tab.selectedFile !== filePath) return;
+          if (!activeOverlay || tab.selectedFile !== filePath) return;
           content.innerHTML = '<div style="padding:12px;color:#e55;font-size:12px">Failed to load file</div>';
         }
         break;
@@ -498,7 +566,7 @@
         break;
       }
       default: {
-        content.innerHTML = `<div class="dir-viewer-empty">Cannot preview .${escHtml(ext)} files</div>`;
+        content.innerHTML = `<div class="dir-viewer-empty" style="height:100%">Cannot preview .${escHtml(ext)} files</div>`;
       }
     }
   }
@@ -508,11 +576,12 @@
   const BINARY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="4" width="32" height="40" rx="3"/><text x="24" y="28" text-anchor="middle" font-size="8" stroke="none" fill="currentColor" font-family="monospace">01 10</text><text x="24" y="36" text-anchor="middle" font-size="8" stroke="none" fill="currentColor" font-family="monospace">11 00</text></svg>`;
 
   function resetPreviewPanel(tab) {
+    closeOverlay();
+
     const hdr = tab.rightPanel.querySelector('.dir-viewer-header');
     const content = tab.rightPanel.querySelector('.dir-viewer-content');
     const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
 
-    if (tab.editor) { tab.editor.dispose(); tab.editor = null; }
     hdr.style.display = 'none';
     content.style.display = 'none';
     content.innerHTML = '';
@@ -608,39 +677,34 @@
         thumb.innerHTML = BINARY_SVG;
       }
 
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'dir-preview-cb';
+      cb.checked = tab.selectedPaths.has(fullPath);
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => {
+        const idx = parseInt(card.dataset.index, 10);
+        if (cb.checked) tab.selectedPaths.add(fullPath);
+        else tab.selectedPaths.delete(fullPath);
+        tab._lastSelectedIndex = idx;
+        syncCardSelection(grid, tab);
+        updateDeleteBar(tab, content, sortBar);
+      });
+
       const label = document.createElement('div');
       label.className = 'dir-preview-label';
       label.textContent = entry.name;
 
+      card.appendChild(cb);
       card.appendChild(thumb);
       card.appendChild(label);
 
       card.addEventListener('click', (e) => {
-        const idx = parseInt(card.dataset.index, 10);
-        if (e.shiftKey && tab._lastSelectedIndex >= 0) {
-          const lo = Math.min(tab._lastSelectedIndex, idx);
-          const hi = Math.max(tab._lastSelectedIndex, idx);
-          if (!e.ctrlKey && !e.metaKey) tab.selectedPaths.clear();
-          for (let j = lo; j <= hi; j++) {
-            const p = sortedFiles[j];
-            if (p) tab.selectedPaths.add(tab.cwd + '/' + p.name);
-          }
-          syncCardSelection(grid, tab);
-          updateDeleteBar(tab, content);
+        if (tab.selectedPaths.size > 0) {
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event('change'));
           return;
         }
-        if (e.ctrlKey || e.metaKey) {
-          if (tab.selectedPaths.has(fullPath)) tab.selectedPaths.delete(fullPath);
-          else tab.selectedPaths.add(fullPath);
-          tab._lastSelectedIndex = idx;
-          syncCardSelection(grid, tab);
-          updateDeleteBar(tab, content);
-          return;
-        }
-        tab.selectedPaths.clear();
-        tab._lastSelectedIndex = idx;
-        syncCardSelection(grid, tab);
-        updateDeleteBar(tab, content);
         tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
         const row = tab.leftPanel.querySelector(`.dir-entry[data-path="${CSS.escape(fullPath)}"]`);
         if (row) row.classList.add('selected');
@@ -652,17 +716,25 @@
 
     gridWrap.appendChild(grid);
     content.appendChild(gridWrap);
-    updateDeleteBar(tab, content);
+    if (tab.selectedPaths.size > 0) {
+      grid.classList.add('selecting');
+    }
+    updateDeleteBar(tab, content, sortBar);
   }
 
   function syncCardSelection(grid, tab) {
+    const selecting = tab.selectedPaths.size > 0;
+    grid.classList.toggle('selecting', selecting);
     grid.querySelectorAll('.dir-preview-card').forEach(c => {
-      c.classList.toggle('selected', tab.selectedPaths.has(c.dataset.path));
+      const sel = tab.selectedPaths.has(c.dataset.path);
+      c.classList.toggle('selected', sel);
+      const cb = c.querySelector('.dir-preview-cb');
+      if (cb) cb.checked = sel;
     });
   }
 
-  function updateDeleteBar(tab, content) {
-    let bar = content.querySelector('.dir-preview-delete-bar');
+  function updateDeleteBar(tab, content, sortBar) {
+    let bar = sortBar ? sortBar.querySelector('.dir-preview-delete-bar') : content.querySelector('.dir-preview-delete-bar');
     if (tab.selectedPaths.size === 0) {
       if (bar) bar.remove();
       return;
@@ -670,13 +742,25 @@
     if (!bar) {
       bar = document.createElement('div');
       bar.className = 'dir-preview-delete-bar';
-      const btn = document.createElement('button');
-      btn.className = 'dir-preview-delete-btn';
-      btn.addEventListener('click', () => deleteSelectedFiles(tab));
-      bar.appendChild(btn);
-      content.appendChild(bar);
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'dir-preview-clear-btn';
+      clearBtn.textContent = 'Cancel';
+      clearBtn.addEventListener('click', () => {
+        tab.selectedPaths.clear();
+        tab._lastSelectedIndex = -1;
+        const grid = content.querySelector('.dir-preview-grid');
+        if (grid) syncCardSelection(grid, tab);
+        updateDeleteBar(tab, content, sortBar);
+      });
+      const delBtn = document.createElement('button');
+      delBtn.className = 'dir-preview-delete-btn';
+      delBtn.addEventListener('click', () => deleteSelectedFiles(tab));
+      bar.appendChild(clearBtn);
+      bar.appendChild(delBtn);
+      if (sortBar) sortBar.appendChild(bar);
+      else content.appendChild(bar);
     }
-    const btn = bar.querySelector('button');
+    const btn = bar.querySelector('.dir-preview-delete-btn');
     const n = tab.selectedPaths.size;
     btn.textContent = `Delete ${n} file${n > 1 ? 's' : ''}`;
   }
@@ -1127,6 +1211,7 @@
   }
 
   document.addEventListener('keydown', e => {
+    if (activeOverlay) return;
     if (activeTabId === null) return;
     const dirView = document.getElementById('view-directories');
     if (!dirView || dirView.style.display === 'none') return;
