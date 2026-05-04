@@ -1441,6 +1441,14 @@ jq -r '.tool_input.command' |
   <script src="directories.js"></script>
   <script>
   (function() {
+    function showRegistryError(reason) {
+      var container = document.getElementById('proVariantButtons');
+      if (!container) return;
+      container.innerHTML = '<div class="pro-registry-notice">'
+        + '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="7"/><line x1="8" y1="5" x2="8" y2="9"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg> '
+        + '<span>' + reason + '</span></div>';
+    }
+
     fetch('/api/pro/status').then(function(r) { return r.json(); }).then(function(s) {
       if (s.loaded) {
         fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(u) {
@@ -1511,8 +1519,12 @@ jq -r '.tool_input.command' |
             btns.forEach(function(b) { b.disabled = false; });
           });
         });
+      } else {
+        showRegistryError('Could not load product info from the registry. The licensing server may be unavailable — try again later.');
       }
-    }).catch(function() {});
+    }).catch(function() {
+      showRegistryError('Unable to reach the server. Check your connection and try refreshing.');
+    });
   })();
   </script>
 </body>

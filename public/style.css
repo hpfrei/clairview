@@ -4434,3 +4434,17 @@ footer {
 }
 .pro-activate-msg.error { color: var(--red); }
 .pro-activate-msg.success { color: var(--green); }
+
+.pro-registry-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-hover, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  max-width: 400px;
+}
+.pro-registry-notice svg { flex-shrink: 0; opacity: 0.6; }
