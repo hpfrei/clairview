@@ -88,8 +88,28 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
       if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' });
       const ext = path.extname(resolved).toLowerCase();
       const mime = MIME_TYPES[ext] || 'application/octet-stream';
+      const size = stat.size;
+
+      const range = req.headers.range;
+      if (range) {
+        const match = range.match(/bytes=(\d+)-(\d*)/);
+        if (match) {
+          const start = parseInt(match[1], 10);
+          const end = match[2] ? parseInt(match[2], 10) : size - 1;
+          res.writeHead(206, {
+            'Content-Type': mime,
+            'Content-Range': `bytes ${start}-${end}/${size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+          });
+          fs.createReadStream(resolved, { start, end }).pipe(res);
+          return;
+        }
+      }
+
       res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Content-Length', size);
+      res.setHeader('Accept-Ranges', 'bytes');
       fs.createReadStream(resolved).pipe(res);
     } catch (err) {
       res.status(404).json({ error: 'File not found', path: resolved });
