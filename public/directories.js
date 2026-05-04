@@ -69,6 +69,7 @@
       editor: null,
       loadSeq: 0,
       searchMode: false,
+      showPreviews: false,
     };
     tabs.set(tabId, tab);
     return tab;
@@ -108,6 +109,23 @@
       });
       sortBar.appendChild(btn);
     }
+
+    const previewToggle = document.createElement('label');
+    previewToggle.className = 'dir-preview-toggle';
+    previewToggle.innerHTML = '<input type="checkbox" class="dir-preview-checkbox"> Previews';
+    previewToggle.querySelector('input').addEventListener('change', (e) => {
+      const tab = tabs.get(tabId);
+      if (!tab) return;
+      tab.showPreviews = e.target.checked;
+      if (tab.showPreviews && !tab.selectedFile) {
+        renderPreviews(tab);
+      } else if (!tab.showPreviews && !tab.selectedFile) {
+        const content = tab.rightPanel.querySelector('.dir-viewer-content');
+        content.style.display = 'none';
+        content.innerHTML = '';
+      }
+    });
+    sortBar.appendChild(previewToggle);
 
     const searchBtn = document.createElement('button');
     searchBtn.className = 'dir-sort-btn dir-search-btn';
@@ -276,6 +294,7 @@
       renderBreadcrumbs(tab, data.current, data.parent);
       renderFileList(tab);
       renderTabStrip();
+      resetPreviewPanel(tab);
     } catch {
       if (seq !== tab.loadSeq) return;
       listEl.innerHTML = '<div style="padding:12px;color:#e55;font-size:12px">Failed to load directory</div>';
@@ -400,7 +419,9 @@
 
     const downloadUrl = '/api/raw-file?path=' + encodeURIComponent(filePath);
     hdr.innerHTML = `<span class="dir-filename">${escHtml(entry.name)}</span><span class="dir-viewer-size">${formatSize(entry.size)}</span>`
-      + `<a class="dir-download-btn" href="${downloadUrl}" download="${escHtml(entry.name)}" title="Download file">⬇</a>`;
+      + `<a class="dir-download-btn" href="${downloadUrl}" download="${escHtml(entry.name)}" title="Download file">⬇</a>`
+      + `<button class="dir-close-btn" title="Close preview">✕</button>`;
+    hdr.querySelector('.dir-close-btn').addEventListener('click', () => resetPreviewPanel(tab));
 
     if (tab.editor) { tab.editor.dispose(); tab.editor = null; }
     content.innerHTML = '';
@@ -476,6 +497,123 @@
         content.innerHTML = `<div class="dir-viewer-empty">Cannot preview .${escHtml(ext)} files</div>`;
       }
     }
+  }
+
+  // ── Preview grid ───────────────────────────────────────────────────
+
+  const BINARY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="4" width="32" height="40" rx="3"/><text x="24" y="28" text-anchor="middle" font-size="8" stroke="none" fill="currentColor" font-family="monospace">01 10</text><text x="24" y="36" text-anchor="middle" font-size="8" stroke="none" fill="currentColor" font-family="monospace">11 00</text></svg>`;
+
+  function resetPreviewPanel(tab) {
+    const hdr = tab.rightPanel.querySelector('.dir-viewer-header');
+    const content = tab.rightPanel.querySelector('.dir-viewer-content');
+    const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
+
+    if (tab.editor) { tab.editor.dispose(); tab.editor = null; }
+    hdr.style.display = 'none';
+    content.style.display = 'none';
+    content.innerHTML = '';
+    empty.style.display = '';
+    tab.selectedFile = null;
+
+    tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+
+    const checkbox = tab.leftPanel.querySelector('.dir-preview-checkbox');
+    if (checkbox) checkbox.checked = tab.showPreviews;
+
+    if (tab.showPreviews) renderPreviews(tab);
+  }
+
+  function renderPreviews(tab) {
+    const content = tab.rightPanel.querySelector('.dir-viewer-content');
+    content.style.display = '';
+    content.innerHTML = '';
+
+    const files = tab.entries.filter(e => !e.isDirectory);
+    if (files.length === 0) {
+      content.innerHTML = '<div style="padding:16px;color:var(--text-dim);font-size:12px">No files to preview</div>';
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'dir-preview-grid';
+
+    for (const entry of files) {
+      const fullPath = tab.cwd + '/' + entry.name;
+      const ext = (entry.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || '';
+      const category = getFileCategory(ext);
+
+      const card = document.createElement('div');
+      card.className = 'dir-preview-card';
+
+      const thumb = document.createElement('div');
+      thumb.className = 'dir-preview-thumb';
+
+      if (category === 'image') {
+        const img = document.createElement('img');
+        img.src = '/api/raw-file?path=' + encodeURIComponent(fullPath);
+        img.alt = entry.name;
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+      } else if (category === 'text') {
+        const pre = document.createElement('pre');
+        pre.textContent = 'Loading...';
+        thumb.appendChild(pre);
+        fetch('/api/raw-file?path=' + encodeURIComponent(fullPath))
+          .then(r => r.ok ? r.text() : Promise.reject())
+          .then(text => { pre.textContent = text.slice(0, 600); })
+          .catch(() => { pre.textContent = '(failed to load)'; });
+      } else {
+        thumb.innerHTML = BINARY_SVG;
+      }
+
+      const info = document.createElement('div');
+      info.className = 'dir-preview-info';
+      info.innerHTML = `<div class="name" title="${escHtml(entry.name)}">${escHtml(entry.name)}</div>`
+        + `<div class="meta">${formatSize(entry.size)} &middot; ${formatDate(entry.mtime)}</div>`;
+
+      const actions = document.createElement('div');
+      actions.className = 'dir-preview-actions';
+
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+        const row = tab.leftPanel.querySelector(`.dir-entry[data-path="${CSS.escape(fullPath)}"]`);
+        if (row) row.classList.add('selected');
+        openFile(tab, fullPath, entry);
+      });
+
+      const dlBtn = document.createElement('button');
+      dlBtn.textContent = 'Download';
+      dlBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const a = document.createElement('a');
+        a.href = '/api/raw-file?path=' + encodeURIComponent(fullPath);
+        a.download = entry.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+
+      actions.appendChild(openBtn);
+      actions.appendChild(dlBtn);
+
+      card.appendChild(thumb);
+      card.appendChild(info);
+      card.appendChild(actions);
+
+      card.addEventListener('click', () => {
+        tab.leftPanel.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+        const row = tab.leftPanel.querySelector(`.dir-entry[data-path="${CSS.escape(fullPath)}"]`);
+        if (row) row.classList.add('selected');
+        openFile(tab, fullPath, entry);
+      });
+
+      grid.appendChild(card);
+    }
+
+    content.appendChild(grid);
   }
 
   // ── Terminal panel ─────────────────────────────────────────────────
