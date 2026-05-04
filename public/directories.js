@@ -617,6 +617,8 @@
   // ── Terminal panel ─────────────────────────────────────────────────
 
   const shellTabs = new Map();
+  const dirShellIds = new Set();
+  let dirShellSeq = 0;
 
   function getCliTheme() {
     const isDark = document.documentElement.getAttribute('data-theme') !== 'bright';
@@ -712,24 +714,20 @@
     ro.observe(termBody);
     tab._termResizeObserver = ro;
 
-    tab._pendingShellSpawn = true;
-    sendWs({ type: 'cli:newTab' });
-  }
-
-  function finishShellSpawn(tab, cliTabId) {
-    tab._shellTabId = cliTabId;
-    shellTabs.set(cliTabId, tab);
-    tab._pendingShellSpawn = false;
+    const shellId = 'dir-shell-' + (++dirShellSeq);
+    tab._shellTabId = shellId;
+    shellTabs.set(shellId, tab);
+    dirShellIds.add(shellId);
 
     tab._terminal.onData(data => {
-      sendWs({ type: 'cli:input', tabId: cliTabId, data });
+      sendWs({ type: 'cli:input', tabId: shellId, data });
     });
     tab._terminal.onResize(({ cols, rows }) => {
-      sendWs({ type: 'cli:resize', tabId: cliTabId, cols, rows });
+      sendWs({ type: 'cli:resize', tabId: shellId, cols, rows });
     });
 
     const { cols, rows } = { cols: tab._terminal.cols, rows: tab._terminal.rows };
-    sendWs({ type: 'cli:spawn', tabId: cliTabId, cwd: tab.cwd || '/', cols, rows, shell: true });
+    sendWs({ type: 'cli:spawn', tabId: shellId, cwd: tab.cwd || '/', cols, rows, shell: true });
 
     setTimeout(() => {
       try { tab._termFitAddon.fit(); } catch {}
@@ -744,6 +742,7 @@
     if (tab._shellTabId) {
       sendWs({ type: 'cli:closeTab', tabId: tab._shellTabId });
       shellTabs.delete(tab._shellTabId);
+      dirShellIds.delete(tab._shellTabId);
       tab._shellTabId = null;
     }
 
@@ -770,13 +769,8 @@
   }
 
   function handleShellMessage(msg) {
-    if (msg.type === 'cli:newTab' && msg.tabId) {
-      for (const [, tab] of tabs) {
-        if (tab._pendingShellSpawn) {
-          finishShellSpawn(tab, msg.tabId);
-          return true;
-        }
-      }
+    if (msg.type === 'cli:tabs' && dirShellIds.size > 0) {
+      msg.tabs = (msg.tabs || []).filter(t => !dirShellIds.has(t.tabId));
       return false;
     }
 
