@@ -1381,6 +1381,13 @@ jq -r '.tool_input.command' |
       <div class="pro-teaser-activate">
         <div id="proVariantButtons" class="pro-variant-buttons"></div>
         <div id="proClaimMsg" class="pro-activate-msg"></div>
+        <div class="pro-key-activate">
+          <div class="pro-key-divider"><span>or activate with a license key</span></div>
+          <div class="pro-key-row">
+            <input type="text" id="proKeyInput" class="pro-key-input" placeholder="HPFR-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off">
+            <button class="pro-key-btn" id="proKeyBtn" onclick="activateWithKey()">Activate</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1440,6 +1447,34 @@ jq -r '.tool_input.command' |
   <script src="rules.js"></script>
   <script src="directories.js"></script>
   <script>
+  function activateWithKey() {
+    var input = document.getElementById('proKeyInput');
+    var btn = document.getElementById('proKeyBtn');
+    var msg = document.getElementById('proClaimMsg');
+    var key = (input.value || '').trim();
+    if (!key) { if (msg) { msg.textContent = 'Enter a license key'; msg.className = 'pro-activate-msg error'; } return; }
+    btn.disabled = true;
+    btn.textContent = 'Activating...';
+    if (msg) { msg.textContent = 'Activating license...'; msg.className = 'pro-activate-msg'; }
+    fetch('/api/pro/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.ok) {
+        if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
+      } else {
+        if (msg) { msg.textContent = data.error || 'Activation failed'; msg.className = 'pro-activate-msg error'; }
+        btn.disabled = false;
+        btn.textContent = 'Activate';
+      }
+    }).catch(function(err) {
+      if (msg) { msg.textContent = 'Connection error: ' + err.message; msg.className = 'pro-activate-msg error'; }
+      btn.disabled = false;
+      btn.textContent = 'Activate';
+    });
+  }
+
   (function() {
     function showRegistryError(reason) {
       var container = document.getElementById('proVariantButtons');

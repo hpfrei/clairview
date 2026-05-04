@@ -328,6 +328,53 @@ dashboardApp.post('/api/pro/claim', async (req, res) => {
   }
 });
 
+dashboardApp.post('/api/pro/activate', async (req, res) => {
+  const { key } = req.body;
+  if (!key) return res.status(400).json({ error: 'License key required' });
+
+  try {
+    const https = require('https');
+    const os = require('os');
+    const hostname = os.hostname();
+    const username = os.userInfo().username;
+    const machineId = crypto.createHash('sha256').update(hostname + username).digest('hex').slice(0, 16);
+
+    const body = JSON.stringify({ key, product: PRODUCT_SLUG, machineId, hostname, username });
+    const activateUrl = new URL('/api/activate', LICENSE_SERVER);
+
+    const response = await new Promise((resolve, reject) => {
+      const mod = activateUrl.protocol === 'https:' ? https : require('http');
+      const r = mod.request(activateUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 30000 }, (resp) => {
+        let data = '';
+        resp.on('data', c => data += c);
+        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
+      });
+      r.on('error', reject);
+      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
+      r.write(body);
+      r.end();
+    });
+
+    if (!response.valid) return res.json({ ok: false, error: response.error || 'Activation failed' });
+
+    installPro(response, response.key);
+
+    res.json({ ok: true, message: 'Pro activated. Restarting...' });
+
+    setTimeout(() => {
+      broadcaster.broadcast({ type: 'server:restarting' });
+      const child = spawn(process.argv[0], process.argv.slice(1), {
+        detached: true, stdio: 'inherit', cwd: process.cwd(),
+        env: { ...process.env, AUTH_TOKEN },
+      });
+      child.unref();
+      process.exit(0);
+    }, 500);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Pro update check — pulls latest if pro is installed
 dashboardApp.post('/api/pro/update', async (req, res) => {
   try {

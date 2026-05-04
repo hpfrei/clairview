@@ -1188,6 +1188,36 @@ footer {
 }
 .tab-close:hover { opacity: 1; }
 
+/* CLI subtab theming */
+#cliTabStrip .view-tab {
+  background: var(--bg-hover);
+  color: var(--tab-inactive-text);
+  border-color: var(--border);
+  border-bottom: none;
+}
+#cliTabStrip .view-tab:hover {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+#cliTabStrip .view-tab.active,
+#cliTabStrip .view-tab.active:hover {
+  background: var(--bg-surface);
+  color: var(--accent);
+  border-color: var(--accent);
+  border-bottom-color: transparent;
+  font-weight: 600;
+}
+#cliTabStrip .view-tab-new {
+  background: var(--bg-hover);
+  color: var(--tab-inactive-text);
+  border-color: var(--border);
+  border-bottom: none;
+}
+#cliTabStrip .view-tab-new:hover {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
 /* CLI "+" dropdown menu */
 .cli-new-menu {
   background: var(--bg-surface, #1e2030);
@@ -4434,6 +4464,18 @@ footer {
 }
 .pro-activate-msg.error { color: var(--red); }
 .pro-activate-msg.success { color: var(--green); }
+
+.pro-key-activate { margin-top: 16px; max-width: 400px; }
+.pro-key-divider { text-align: center; margin-bottom: 10px; font-size: 11px; color: var(--text-dim); position: relative; }
+.pro-key-divider::before, .pro-key-divider::after { content: ''; position: absolute; top: 50%; width: 30%; height: 1px; background: var(--border); }
+.pro-key-divider::before { left: 0; }
+.pro-key-divider::after { right: 0; }
+.pro-key-row { display: flex; gap: 8px; }
+.pro-key-input { flex: 1; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: monospace; letter-spacing: 1px; outline: none; }
+.pro-key-input:focus { border-color: var(--accent); }
+.pro-key-btn { padding: 8px 18px; border: none; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; transition: filter 0.15s; white-space: nowrap; }
+.pro-key-btn:hover { filter: brightness(1.15); }
+.pro-key-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .pro-registry-notice {
   display: flex;
