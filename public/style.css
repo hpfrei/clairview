@@ -1207,6 +1207,14 @@ footer {
   border-bottom-color: transparent;
   font-weight: 600;
 }
+#cliTabStrip .view-tab.dir-cli {
+  color: #8bb97a;
+}
+#cliTabStrip .view-tab.dir-cli.active,
+#cliTabStrip .view-tab.dir-cli.active:hover {
+  color: #8bb97a;
+  border-color: #8bb97a;
+}
 #cliTabStrip .view-tab-new {
   background: var(--bg-hover);
   color: var(--tab-inactive-text);

@@ -88,10 +88,14 @@
       const p = t.cwd.replace(/\/+$/, '').split('/');
       if ((p[p.length - 1] || t.cwd) === basename) sameDir.push(id);
     }
-    if (sameDir.length <= 1) return basename;
-    sameDir.sort();
-    const idx = sameDir.indexOf(tabId);
-    return idx === 0 ? basename : `${basename}-${idx + 1}`;
+    let name = basename;
+    if (sameDir.length > 1) {
+      sameDir.sort();
+      const idx = sameDir.indexOf(tabId);
+      if (idx > 0) name = `${basename}-${idx + 1}`;
+    }
+    if (tab?.fromDir) return `>${name}`;
+    return name;
   }
 
   function renderTabStrip() {
@@ -100,7 +104,7 @@
 
     for (const [tabId, tab] of tabs) {
       const btn = document.createElement('button');
-      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '');
+      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '') + (tab.fromDir ? ' dir-cli' : '');
       btn.dataset.tabId = tabId;
 
       const label = document.createElement('span');
@@ -589,6 +593,7 @@
         }
         if (pendingCwd) {
           const tab = tabs.get(tabId);
+          if (tab) tab.fromDir = true;
           const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
           const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows };
           if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
