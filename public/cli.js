@@ -289,7 +289,7 @@
         item.addEventListener('click', () => {
           closeNewMenu();
           state._pendingCliCwd = sess.cwd;
-          state._pendingCliResume = true;
+          state._pendingCliResumeSessionId = sess.id;
           state._pendingCliSettings = sess.settings;
           state._pendingCliTitle = sess.title || null;
           sendWs({ type: 'cli:newTab' });
@@ -572,11 +572,11 @@
         if (!tabs.has(tabId)) createTab(tabId);
         switchTab(tabId);
         const pendingCwd = state._pendingCliCwd;
-        const pendingResume = state._pendingCliResume || false;
+        const pendingResumeSessionId = state._pendingCliResumeSessionId || null;
         const pendingSettings = state._pendingCliSettings;
         const pendingTitle = state._pendingCliTitle || null;
         state._pendingCliCwd = null;
-        state._pendingCliResume = false;
+        state._pendingCliResumeSessionId = null;
         state._pendingCliSettings = null;
         state._pendingCliTitle = null;
         if (pendingTitle) {
@@ -590,7 +590,9 @@
         if (pendingCwd) {
           const tab = tabs.get(tabId);
           const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          sendWs({ type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, resume: pendingResume });
+          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows };
+          if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
+          sendWs(spawnMsg);
         }
         break;
       }

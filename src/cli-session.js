@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -38,16 +39,25 @@ class CliSession {
     return this.status === 'running' && this.pty !== null;
   }
 
-  spawn(cwd, cols, rows, { resume = false } = {}) {
+  spawn(cwd, cols, rows, { resumeSessionId } = {}) {
     if (this.running) this.kill();
 
     this.cwd = cwd;
     this.status = 'running';
-    this.sessId = 'sess-' + Date.now();
+
+    if (resumeSessionId) {
+      this.sessId = resumeSessionId;
+    } else {
+      this.sessId = crypto.randomUUID();
+    }
     this.store.registerSession(this.instanceId, this.sessId);
 
     const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];
-    if (resume) args.push('--continue');
+    if (resumeSessionId) {
+      args.push('--resume', resumeSessionId);
+    } else {
+      args.push('--session-id', this.sessId);
+    }
 
     // MCP config injection
     this._cleanupMcpConfig();

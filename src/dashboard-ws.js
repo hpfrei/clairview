@@ -251,7 +251,7 @@ class DashboardBroadcaster {
                 const session = this.cliSessionManager.getOrCreate(msg.tabId);
                 session.spawnShell(msg.cwd, msg.cols || 80, msg.rows || 24);
               } else {
-                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resume: !!msg.resume });
+                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined });
               }
             }
           } else if (msg.type === 'cli:input') {

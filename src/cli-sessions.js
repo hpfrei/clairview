@@ -104,9 +104,9 @@ class CliSessionManager {
     return this.sessions.get(tabId) || null;
   }
 
-  spawn(tabId, cwd, cols, rows, { resume = false } = {}) {
+  spawn(tabId, cwd, cols, rows, { resumeSessionId } = {}) {
     const session = this.getOrCreate(tabId);
-    session.spawn(cwd, cols, rows, { resume });
+    session.spawn(cwd, cols, rows, { resumeSessionId });
     this.broadcastTabs();
   }
 
