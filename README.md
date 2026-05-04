@@ -7,7 +7,7 @@
 $\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route}$
 
 A development dashboard that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with real-time API inspection,
-multi-session chat, custom MCP tools, and multi-provider model routing.
+multi-session chat, file management, terminal access, and multi-provider model routing.
 
 [Getting started](#getting-started) ·
 [Features](#features) ·
@@ -26,6 +26,7 @@ multi-session chat, custom MCP tools, and multi-provider model routing.
 | $\color{#3fb950}{\textsf{Remote access}}$ | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
 | $\color{#bc8cff}{\textsf{Multi-provider routing}}$ | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
 | $\color{#79c0ff}{\textsf{Tool development}}$ | Create and test custom MCP tools from a form-driven editor without leaving the browser |
+| $\color{#d29922}{\textsf{File management}}$ | Browse, preview, and manage files on the remote machine with a full-featured file manager |
 
 ---
 
@@ -127,22 +128,23 @@ A transparent proxy that captures every API call between Claude Code and the ups
 - Profile flags (bare mode, auto-memory) shown per request
 - All interactions saved to disk as structured JSON for offline analysis
 
-### $\color{#3fb950}{\textsf{Chat}}$
+### $\color{#3fb950}{\textsf{CLI (Multi-tab Terminal)}}$
 
-Multi-tab browser-based Claude Code sessions with full conversation context.
+Multi-tab Claude Code terminal sessions managed from the browser.
 
-- Send prompts, get streamed responses, answer interactive questions -- no terminal needed
-- **Multiple independent tabs**, each with its own profile, model, and working directory
-- **Per-session isolation** -- switching profiles or models in one tab never affects another
-- Session resume via `--resume` -- follow-up questions work naturally
-- **AskUserQuestion** interception -- Claude's questions appear in the browser, answers are injected back transparently
+- **Multiple independent tabs**, each running a separate `claude` process
+- Spawn sessions in any directory with the filesystem picker
+- Per-session settings: model routing, profiles, working directory
+- **Session save and resume** -- close a session and pick it up later with full context
+- **AskUserQuestion** interception -- Claude's questions appear inline, answers are injected back transparently
 - Live **task panel** -- `TaskCreate`/`TaskUpdate` tool calls rendered as a draggable status board
+- Directory-spawned tabs shown with distinct `>dirname` label and green accent
 - Stop running sessions at any time
-- Live process counter in the footer shows how many `claude -p` instances are active
+- Inline tab rename via double-click
 
 ### $\color{#d29922}{\textsf{Profiles}}$
 
-Named capability bundles that control how `claude -p` is spawned.
+Named capability bundles that control how `claude` is spawned.
 
 | Setting | CLI flag | Description |
 |---|---|---|
@@ -185,6 +187,14 @@ Route Claude Code through non-Anthropic models. The proxy translates Anthropic M
 
 Model definitions are configured in `capabilities/models.json`. API keys stored separately in `capabilities/secrets.json` (gitignored). Each model can specify system prompt handling (`replace` / `prepend` / `append` / `passthrough`), reasoning mode, context window, max output tokens, and cost per million tokens.
 
+### $\color{#f778ba}{\textsf{Proxy Rules}}$
+
+Programmable request/response manipulation at the proxy layer.
+
+- Match requests by path, headers, or body patterns
+- Transform, block, or redirect matched requests
+- Configured via `capabilities/proxy-rules.json`
+
 ### $\color{#79c0ff}{\textsf{MCP Tool Manager}}$
 
 Extend Claude Code with custom tools through one integrated MCP server.
@@ -203,7 +213,20 @@ Extend Claude Code with custom tools through one integrated MCP server.
 
 The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator using `chat` to delegate research to a `readonly` session).
 
-### $\color{#f778ba}{\textsf{Skills, Agents, and Hooks}}$
+### $\color{#8bb97a}{\textsf{Directories (File Manager)}}$
+
+Full-featured file browser with multi-tab support.
+
+- Browse the remote filesystem with breadcrumb navigation and sort controls
+- **Preview grid** -- toggle thumbnail previews for all files in a directory (images, text snippets, binary icons)
+- **File overlay** -- click any file to open a full preview overlay with Monaco editor for code, native rendering for images/audio/video/PDF
+- **Keyboard navigation** -- arrow keys to browse, left/right to navigate between files in the overlay, Escape to close
+- **Multi-select and bulk delete** -- checkboxes fade in on hover, click to select, delete bar appears in the toolbar
+- **Integrated shell** -- spawn a terminal in any directory's context
+- File search with filename/content regex and date filters
+- Download any file directly from the browser
+
+### $\color{#f0883e}{\textsf{Skills, Agents, and Hooks}}$
 
 - **Skills** -- create and edit skills (`.claude/skills/<name>/SKILL.md`) with supporting template files
 - **Agents** -- custom sub-agents with their own system prompts, models, and tool restrictions
@@ -232,7 +255,7 @@ vistaclair runs two servers from a single Node.js process:
 
 ### Per-session isolation
 
-Every `claude -p` process gets its profile baked into its base URL at spawn time:
+Every `claude` process gets its profile baked into its base URL at spawn time:
 
 ```
 ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
@@ -250,10 +273,10 @@ This means the profile is **immutable for the process lifetime**. Switching prof
 
 ### AskUserQuestion interception
 
-When `claude -p` calls the `AskUserQuestion` tool during a chat:
+When `claude` calls the `AskUserQuestion` tool during a session:
 
 1. The proxy intercepts the tool call in the API response stream
-2. When `claude -p` sends back the error `tool_result`, the proxy pauses the request
+2. When `claude` sends back the error `tool_result`, the proxy pauses the request
 3. The proxy broadcasts `ask:question` to the dashboard UI
 4. The UI renders the question with options and free text input
 5. User answers, UI sends `ask:answer` back via WebSocket
@@ -268,47 +291,65 @@ When `claude -p` calls the `AskUserQuestion` tool during a chat:
 server.js                  Entry point -- proxy + dashboard servers, auth
 src/
   proxy.js                 API forwarding, SSE passthrough, provider routing, per-session profiles
+  proxy-rule-handler.js    Programmable proxy request/response rules
   sse-passthrough.js       Zero-copy SSE transform stream
-  api.js                   REST API endpoints (filesystem browsing, file serving)
-  claude-session.js        Spawns claude -p with profile flags and session resume
-  claude-sessions.js       Multi-tab session manager
+  api.js                   REST API endpoints (filesystem browsing, file serving, search, delete)
+  ask-schema.js            AskUserQuestion schema definitions
+  cli-session.js           Spawns claude with profile flags and session resume
+  cli-sessions.js          Multi-tab session manager
   dashboard-ws.js          WebSocket server and broadcast hub
   capabilities.js          Profiles, models, providers, hooks, skills, agents CRUD
   store.js                 In-memory interaction store with disk persistence
   utils.js                 Central spawn function, process tracking, stream parsing
   providers/
     base.js                Provider adapter interface
-    openai.js              OpenAI-compatible adapter (OpenAI, Gemini, DeepSeek, Moonshot, Ollama)
+    openai.js              OpenAI-compatible adapter (OpenAI, DeepSeek, Moonshot, Ollama)
+    gemini.js              Google Gemini adapter (native REST API)
     registry.js            Provider registry
   mcp/
     index.js               MCP init, auto-start, tool probing, inspector logging
     servers.js             Tool CRUD, server.js/tool file generation
+    templates.js           MCP server file templates
+    logs.js                MCP call logging
     registrar.js           Reads/writes .mcp.json and ~/.claude.json
 lib/
   mcp-bridge.js            Stdio bridge Claude Code spawns via --mcp-config
+  hook-reporter.js         Hook event reporting bridge
 public/
   index.html               Dashboard SPA
+  login.html               Auth token login page
   home.js                  Home view documentation (overview, architecture, tools)
   core.js                  WebSocket, view switching, markdown rendering, process counter
   capabilities.js          Profile/model/tool/skill/agent/hook management UI
   inspector.js             Inspector timeline and detail panel
-  chat.js                  Chat tab UI and session controls
+  cli.js                   Multi-tab CLI session UI and settings
+  directories.js           File manager -- browsing, previews, overlay, selection, shell
+  rules.js                 Proxy rules editor UI
+  mcp.js                   MCP tool manager UI
+  mcp.css                  MCP-specific styles
   style.css                Layout and structural styles
   theme-bright.css         Bright theme (default)
   theme-dark.css           Dark theme (Tokyo Night)
+  tools.html               Standalone MCP tool testing page
 capabilities/
   models.json              Pre-configured LLM provider models
   anthropic-pricing.json   Anthropic model pricing (auto-refreshable)
+  proxy-rules.json         Proxy rule definitions
   secrets.json             API keys (gitignored)
   profiles/                Custom profile JSON files
 mcp-servers/integrated/    Auto-generated MCP tool server + built-in tools
 interactions/              Saved API call history (per-session directories)
 docs/
   architecture-*.svg       Architecture diagrams (light + dark theme)
+  request-flow-*.svg       Request flow diagrams (light + dark theme)
 ```
 
 ---
 
 ## License
 
-Business Source License 1.1 -- see [LICENSE](LICENSE). Copyright (c) 2026 [hpfreilabs.com](https://hpfreilabs.com)
+MIT License -- see [LICENSE](LICENSE). Copyright (c) 2026 [hpfreilabs.com](https://hpfreilabs.com)
+
+Free to use, modify, and redistribute. Attribution required (keep the copyright notice).
+
+> **Note:** The "Apps" (Pro) feature is a separately licensed commercial add-on available via subscription. It is not part of this open-source repository.

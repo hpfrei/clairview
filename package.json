@@ -19,7 +19,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "license": "BUSL-1.1",
+  "license": "MIT",
   "dependencies": {
     "express": "^4.21.0",
     "ws": "^8.18.0"
