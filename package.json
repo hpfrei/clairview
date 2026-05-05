@@ -2,6 +2,28 @@
   "name": "vistaclair",
   "version": "1.0.0",
   "description": "Dashboard and transparent proxy for Claude Code",
+  "author": "hpfreilabs.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hpfrei/vistaclair.git"
+  },
+  "homepage": "https://github.com/hpfrei/vistaclair",
+  "bugs": {
+    "url": "https://github.com/hpfrei/vistaclair/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "proxy",
+    "dashboard",
+    "anthropic",
+    "mcp",
+    "inspector"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "main": "server.js",
   "bin": {
     "vistaclair": "./bin/vistaclair.js"
@@ -12,16 +34,17 @@
     "public/",
     "lib/",
     "server.js",
-    "templates/",
-    "capabilities/tools/"
+    "templates/"
   ],
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "license": "MIT",
   "dependencies": {
     "express": "^4.21.0",
     "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.0.0"
   }
 }
