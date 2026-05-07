@@ -9,6 +9,19 @@
   const tabs = new Map();
   let activeTabId = null;
   const pendingAskOverlays = new Map();
+  let _firstTabSync = true;
+  const _respawnQueue = [];
+
+  function _saveOpenTabs() {
+    const entries = [];
+    for (const [tabId, tab] of tabs) {
+      entries.push({ tabId, cwd: tab.cwd, title: tab.title, settings: tab.settings, instanceId: tab.instanceId, sessId: tab.sessId, isolated: tab.isolated });
+    }
+    try { sessionStorage.setItem('cli-open-tabs', JSON.stringify(entries)); } catch {}
+  }
+  function _loadOpenTabs() {
+    try { return JSON.parse(sessionStorage.getItem('cli-open-tabs') || 'null'); } catch { return null; }
+  }
 
   function getTheme() {
     return { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' };
@@ -45,6 +58,7 @@
 
     const tab = { terminal, fitAddon, wrap, cwd: null, title: null, settings: {}, status: 'idle' };
     tabs.set(tabId, tab);
+    _saveOpenTabs();
 
     container.appendChild(wrap);
 
@@ -94,7 +108,6 @@
       const idx = sameDir.indexOf(tabId);
       if (idx > 0) name = `${basename}-${idx + 1}`;
     }
-    if (tab?.fromDir) return `>${name}`;
     return name;
   }
 
@@ -104,7 +117,7 @@
 
     for (const [tabId, tab] of tabs) {
       const btn = document.createElement('button');
-      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '') + (tab.fromDir ? ' dir-cli' : '');
+      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '');
       btn.dataset.tabId = tabId;
 
       const label = document.createElement('span');
@@ -122,7 +135,8 @@
         clickTimer = setTimeout(() => {
           clickTimer = null;
           switchView('dashboard');
-          window.inspectorModule?.switchInstanceTab?.(`cli-${tabId}`);
+          const clickedTab = tabs.get(tabId);
+          if (clickedTab?.instanceId) window.inspectorModule?.switchInstanceTab?.(clickedTab.instanceId);
         }, 250);
       });
       label.addEventListener('dblclick', (e) => {
@@ -205,6 +219,7 @@
       tab.wrap.remove();
       tabs.delete(tabId);
     }
+    _saveOpenTabs();
     if (activeTabId === tabId) {
       const remaining = Array.from(tabs.keys());
       if (remaining.length > 0) {
@@ -236,7 +251,8 @@
       closeNewMenu();
       const picked = await openFsDirPicker();
       if (!picked) return;
-      state._pendingCliCwd = picked;
+      state._pendingCliCwd = picked.dir;
+      state._pendingCliIsolated = picked.isolated;
       sendWs({ type: 'cli:newTab' });
     });
     menu.appendChild(newItem);
@@ -267,16 +283,29 @@
         info.innerHTML = `<span class="cli-new-menu-dir">${escHtml(displayTitle)}</span><span class="cli-new-menu-age">${escHtml(age)}</span>`;
         item.appendChild(info);
 
-        const dirLine = document.createElement('div');
-        dirLine.className = 'cli-new-menu-meta';
+        const metaRow = document.createElement('div');
+        metaRow.className = 'cli-new-menu-meta-row';
+        const dirLine = document.createElement('span');
+        dirLine.className = 'cli-new-menu-meta cli-new-menu-path';
         dirLine.textContent = sess.cwd;
-        item.appendChild(dirLine);
-
+        metaRow.appendChild(dirLine);
+        const badge = document.createElement('span');
+        badge.className = 'cli-new-menu-badge';
+        badge.textContent = sess.isolated === true ? 'isolated' : 'shared';
+        metaRow.appendChild(badge);
         if (mappings) {
-          const meta = document.createElement('div');
-          meta.className = 'cli-new-menu-meta';
-          meta.textContent = mappings;
-          item.appendChild(meta);
+          const mapSpan = document.createElement('span');
+          mapSpan.className = 'cli-new-menu-badge cli-new-menu-badge-model';
+          mapSpan.textContent = mappings;
+          metaRow.appendChild(mapSpan);
+        }
+        item.appendChild(metaRow);
+
+        if (sess.jsonlSize) {
+          const gaugeLine = document.createElement('div');
+          gaugeLine.className = 'cli-new-menu-gauge-row';
+          gaugeLine.innerHTML = contextGauge(sess.jsonlSize);
+          item.appendChild(gaugeLine);
         }
 
         const del = document.createElement('span');
@@ -296,6 +325,7 @@
           state._pendingCliResumeSessionId = sess.id;
           state._pendingCliSettings = sess.settings;
           state._pendingCliTitle = sess.title || null;
+          state._pendingCliIsolated = sess.isolated === true;
           sendWs({ type: 'cli:newTab' });
         });
         menu.appendChild(item);
@@ -342,6 +372,21 @@
     if (hrs < 24) return `${hrs}h ago`;
     const days = Math.floor(hrs / 24);
     return `${days}d ago`;
+  }
+
+  function contextGauge(bytes) {
+    if (!bytes) return '';
+    const MAX_BYTES = 300 * 1024;
+    const pct = Math.min(bytes / MAX_BYTES, 1);
+    const w = 36, h = 8, fill = Math.max(pct * w, 1);
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    const label = bytes < 1024 ? bytes + ' B'
+      : bytes < 1024 * 1024 ? Math.round(bytes / 1024) + ' KB'
+      : (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return `<span class="cli-new-menu-gauge"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" rx="2" fill="var(--bg, #111)" stroke="var(--border, #333)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span class="cli-new-menu-gauge-label">${label}</span></span>`;
   }
 
   // --- Filesystem directory picker ---
@@ -461,8 +506,9 @@
       newCancelBtn.removeEventListener('click', onNewCancel);
       newNameInput.removeEventListener('keydown', onNewKey);
     }
+    const isolatedCheckbox = document.getElementById('dirPickerIsolated');
     function onClose() { cleanup(); resolve(null); }
-    function onSelect() { cleanup(); resolve(currentDir); }
+    function onSelect() { cleanup(); resolve({ dir: currentDir, isolated: isolatedCheckbox.checked }); }
 
     closeBtn.addEventListener('click', onClose);
     cancelBtn.addEventListener('click', onClose);
@@ -561,8 +607,14 @@
         if (tab) {
           tab.status = 'running';
           tab.cwd = msg.cwd;
+          if (msg.instanceId) {
+            tab.instanceId = msg.instanceId;
+            tab.sessId = msg.instanceId.replace(/^cli-/, '');
+          }
+          if (msg.isolated != null) tab.isolated = msg.isolated;
           if (msg.title) tab.title = msg.title;
           tab.settings = msg.settings || {};
+          _saveOpenTabs();
           renderTabStrip();
         }
         break;
@@ -575,14 +627,29 @@
         const tabId = msg.tabId;
         if (!tabs.has(tabId)) createTab(tabId);
         switchTab(tabId);
+
+        // Check respawn queue first (server restart recovery)
+        const respawnEntry = _respawnQueue.shift();
+        if (respawnEntry) {
+          const tab = tabs.get(tabId);
+          if (tab) tab.title = respawnEntry.title || null;
+          if (respawnEntry.title) sendWs({ type: 'cli:rename', tabId, title: respawnEntry.title });
+          if (respawnEntry.settings) sendWs({ type: 'cli:settings', tabId, settings: respawnEntry.settings });
+          const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
+          sendWs({ type: 'cli:spawn', tabId, cwd: respawnEntry.cwd, cols, rows, isolated: respawnEntry.isolated === true, resumeSessionId: respawnEntry.sessId });
+          break;
+        }
+
         const pendingCwd = state._pendingCliCwd;
         const pendingResumeSessionId = state._pendingCliResumeSessionId || null;
         const pendingSettings = state._pendingCliSettings;
         const pendingTitle = state._pendingCliTitle || null;
+        const pendingIsolated = state._pendingCliIsolated;
         state._pendingCliCwd = null;
         state._pendingCliResumeSessionId = null;
         state._pendingCliSettings = null;
         state._pendingCliTitle = null;
+        state._pendingCliIsolated = null;
         if (pendingTitle) {
           const tab = tabs.get(tabId);
           if (tab) tab.title = pendingTitle;
@@ -593,9 +660,12 @@
         }
         if (pendingCwd) {
           const tab = tabs.get(tabId);
-          if (tab) tab.fromDir = true;
+          if (tab) {
+            tab.isolated = pendingIsolated === true;
+            if (pendingResumeSessionId) tab.sessId = pendingResumeSessionId;
+          }
           const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows };
+          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, isolated: pendingIsolated === true };
           if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
           sendWs(spawnMsg);
         }
@@ -616,31 +686,66 @@
   }
 
   function handleTabList(serverTabs) {
+    if (_firstTabSync) {
+      _firstTabSync = false;
+      const prev = _loadOpenTabs();
+      if (prev && prev.length > 0) {
+        const prevSet = new Set(prev.map(e => e.tabId || e));
+        // Close server tabs we don't recognize
+        for (const st of serverTabs) {
+          if (!prevSet.has(st.tabId)) {
+            sendWs({ type: 'cli:closeTab', tabId: st.tabId });
+          }
+        }
+        serverTabs = serverTabs.filter(st => prevSet.has(st.tabId));
+
+        if (serverTabs.length > 0) {
+          // Server still has our tabs (page refresh without server restart)
+          for (const st of serverTabs) {
+            if (!tabs.has(st.tabId)) createTab(st.tabId);
+          }
+        } else {
+          // Server has none of our tabs (server restarted) — re-spawn from stored state
+          for (const entry of prev) {
+            if (!entry.cwd || !entry.sessId) continue;
+            sendWs({ type: 'cli:newTab' });
+            _respawnQueue.push(entry);
+          }
+          return;
+        }
+      }
+    }
+
     const serverIds = new Set(serverTabs.map(t => t.tabId));
     for (const [tabId] of tabs) {
       if (!serverIds.has(tabId)) removeTab(tabId);
     }
     for (const st of serverTabs) {
-      if (!tabs.has(st.tabId)) createTab(st.tabId);
+      if (!tabs.has(st.tabId)) continue;
       const tab = tabs.get(st.tabId);
       tab.status = st.status;
       tab.cwd = st.cwd;
       tab.title = st.title || null;
       tab.settings = st.settings || {};
+      if (st.instanceId) tab.instanceId = st.instanceId;
+      if (st.sessId) tab.sessId = st.sessId;
+      if (st.isolated != null) tab.isolated = st.isolated;
     }
     if (!activeTabId && tabs.size > 0) {
-      switchTab(serverTabs[0].tabId);
+      const first = Array.from(tabs.keys())[0];
+      switchTab(first);
     }
     renderTabStrip();
+    _saveOpenTabs();
     window.inspectorModule?.renderInspectorTabStrip?.();
   }
 
   function updateStreamingState(streamingInstances) {
     if (!tabStrip) return;
     let anyStreaming = false;
-    for (const [tabId] of tabs) {
-      const instanceId = `cli-${tabId}`;
-      const streaming = streamingInstances.has(instanceId);
+    for (const [tabId, tab] of tabs) {
+      const instanceId = tab.instanceId;
+      const streaming = instanceId ? streamingInstances.has(instanceId) : false;
       if (streaming) anyStreaming = true;
       const tabBtn = tabStrip.querySelector(`[data-tab-id="${tabId}"]`);
       if (tabBtn) tabBtn.classList.toggle('instance-running', streaming);
@@ -796,5 +901,5 @@
   }
 
   // Expose module
-  window.cliModule = { handleMessage, handleAskMessage, tabs, updateStreamingState, switchTab };
+  window.cliModule = { handleMessage, handleAskMessage, tabs, updateStreamingState, switchTab, computeTabLabel };
 })();

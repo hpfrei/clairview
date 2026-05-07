@@ -111,8 +111,8 @@
       item.innerHTML = `
         <div class="rule-item-header">
           <span class="rule-drag-handle" title="Drag to reorder">&#9776;</span>
-          <label class="rule-toggle" title="${bi ? 'Built-in (always enabled)' : rule.enabled ? 'Enabled' : 'Disabled'}">
-            <input type="checkbox" ${rule.enabled ? 'checked' : ''} data-id="${escHtml(rule.id)}" ${bi ? 'disabled' : ''}>
+          <label class="rule-toggle" title="${rule.enabled ? 'Enabled' : 'Disabled'}">
+            <input type="checkbox" ${rule.enabled ? 'checked' : ''} data-id="${escHtml(rule.id)}">
             <span class="rule-toggle-slider"></span>
           </label>
           <div class="rule-item-info">
@@ -126,16 +126,17 @@
           <div class="rule-source-section">
             <div class="rule-source-toolbar">
               <span class="rule-source-label">Source</span>
-              ${bi ? '' : `<button class="rule-save-btn" data-id="${escHtml(rule.id)}" disabled>Save</button>`}
+              ${bi ? `<button class="rule-restore-btn" data-id="${escHtml(rule.id)}" title="Restore original">Restore</button>` : ''}
+              <button class="rule-save-btn" data-id="${escHtml(rule.id)}" disabled>Save</button>
             </div>
             <div class="rule-editor-container" data-id="${escHtml(rule.id)}">
               <div class="rule-editor-loading">Loading editor&hellip;</div>
             </div>
           </div>
-          ${bi ? '' : `<div class="rule-edit-row">
+          <div class="rule-edit-row">
             <textarea class="rule-edit-input" data-id="${escHtml(rule.id)}" rows="3" placeholder="Describe a change to this rule&hellip;"></textarea>
             <button class="rule-edit-submit" data-id="${escHtml(rule.id)}">Apply with AI</button>
-          </div>`}
+          </div>
         </div>`;
       list.appendChild(item);
     }
@@ -184,6 +185,16 @@
       if (!currentEditor || !isEditorDirty) return;
       sendWs({ type: 'rule:save', id: saveBtn.dataset.id, source: currentEditor.getValue() });
       saveBtn.disabled = true;
+      return;
+    }
+
+    // Restore builtin
+    const restoreBtn = e.target.closest('.rule-restore-btn');
+    if (restoreBtn) {
+      e.stopPropagation();
+      if (confirm('Restore this rule to its original built-in version?')) {
+        sendWs({ type: 'rule:restore', id: restoreBtn.dataset.id });
+      }
       return;
     }
 
@@ -294,12 +305,19 @@
         const container = document.querySelector(`.rule-editor-container[data-id="${msg.id}"]`);
         if (!container || !monacoReady) break;
         container.innerHTML = '';
-        createEditor(container, msg.source, msg.id, msg.builtin);
+        createEditor(container, msg.source, msg.id, false);
         break;
       }
       case 'rule:saved':
         isEditorDirty = false;
         showAlert('Rule saved');
+        break;
+      case 'rule:restored':
+        isEditorDirty = false;
+        showAlert('Rule restored to original');
+        if (msg.id === expandedId) {
+          sendWs({ type: 'rule:source', id: msg.id });
+        }
         break;
     }
   }

@@ -3,9 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
-const { buildCliArgs, spawnClaudePty } = require('./utils');
+const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, PACKAGE_ROOT } = require('./utils');
+const JsonlWatcher = require('./jsonl-watcher');
 
-const PROJECT_ROOT = path.dirname(__dirname);
+const PROJECT_ROOT = PACKAGE_ROOT;
 
 const DEFAULT_SETTINGS = {
   modelMap: { opus: null, sonnet: null, haiku: null },
@@ -22,27 +23,32 @@ class CliSession {
     this.cwd = null;
     this.tabId = null;
     this.sessId = null;
+    this._instanceId = null;
     this.title = null;
     this.settings = { ...DEFAULT_SETTINGS };
     this.status = 'idle';
     this._mcpConfigFile = null;
+    this._jsonlWatcher = null;
     this._scrollback = '';
     this._authToken = opts.authToken || '';
     this._dashboardPort = opts.dashboardPort || 3457;
+    this._spawnGen = 0;
   }
 
   get instanceId() {
-    return `cli-${this.tabId}`;
+    return this._instanceId;
   }
 
   get running() {
     return this.status === 'running' && this.pty !== null;
   }
 
-  spawn(cwd, cols, rows, { resumeSessionId } = {}) {
+  spawn(cwd, cols, rows, { resumeSessionId, isolated } = {}) {
+    this._spawnGen++;
     if (this.running) this.kill();
 
     this.cwd = cwd;
+    this.isolated = isolated === true;
     this.status = 'running';
 
     if (resumeSessionId) {
@@ -50,7 +56,20 @@ class CliSession {
     } else {
       this.sessId = crypto.randomUUID();
     }
+    this._instanceId = `cli-${this.sessId}`;
     this.store.registerSession(this.instanceId, this.sessId);
+
+    if (resumeSessionId) {
+      const historical = this.store.loadSessionIntoMemory(this.sessId);
+      if (historical.length > 0) {
+        this.broadcaster.broadcast({
+          type: 'inspector:sessionLoaded',
+          sessId: this.sessId,
+          instanceId: this.instanceId,
+          interactions: historical.map(sanitizeForDashboard),
+        });
+      }
+    }
 
     const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];
     if (resumeSessionId) {
@@ -77,6 +96,7 @@ class CliSession {
       rows: rows || 24,
       dashboardPort: this._dashboardPort,
       authToken: this._authToken,
+      isolated: this.isolated,
     });
 
     this._scrollback = '';
@@ -89,20 +109,25 @@ class CliSession {
       this.broadcaster.broadcast({ type: 'cli:output', tabId: this.tabId, data });
     });
 
+    const gen = this._spawnGen;
     this.pty.onExit(({ exitCode }) => {
+      if (gen !== this._spawnGen) return;
       this._cleanupMcpConfig();
       this.store.unregisterSession(this.instanceId);
       this.status = 'exited';
       this.pty = null;
       this.broadcaster.broadcast({ type: 'cli:exit', tabId: this.tabId, exitCode });
+      setTimeout(() => this._stopJsonlWatcher(), 5000);
     });
 
     this.broadcaster.broadcast({
       type: 'cli:spawned',
       tabId: this.tabId,
+      instanceId: this.instanceId,
       cwd: this.cwd,
       title: this.title,
       settings: this.settings,
+      isolated: this.isolated,
     });
   }
 
@@ -140,6 +165,7 @@ class CliSession {
     this.broadcaster.broadcast({
       type: 'cli:spawned',
       tabId: this.tabId,
+      instanceId: this.instanceId,
       cwd: this.cwd,
       title: this.title,
       settings: this.settings,
@@ -167,6 +193,7 @@ class CliSession {
     }
     this.status = 'idle';
     this._cleanupMcpConfig();
+    this._stopJsonlWatcher();
   }
 
   getScrollback() {
@@ -179,6 +206,32 @@ class CliSession {
 
   getSettings() {
     return { ...this.settings };
+  }
+
+  ensureJsonlWatcher(transcriptPath) {
+    if (this._jsonlWatcher) return;
+
+    this._jsonlWatcher = new JsonlWatcher(transcriptPath, this.sessId, (requestId, enrichment) => {
+      const interaction = this.store.findByRequestId(requestId);
+      if (interaction) {
+        this.store.enrichInteraction(interaction.id, enrichment);
+        this.broadcaster.broadcast({
+          type: 'interaction:enriched',
+          interactionId: interaction.id,
+          subagent: enrichment,
+        });
+      } else {
+        this.store.pendingEnrichments.set(requestId, { data: enrichment, ts: Date.now() });
+      }
+    });
+    this._jsonlWatcher.start();
+  }
+
+  _stopJsonlWatcher() {
+    if (this._jsonlWatcher) {
+      this._jsonlWatcher.stop();
+      this._jsonlWatcher = null;
+    }
   }
 
   _cleanupMcpConfig() {
@@ -200,8 +253,7 @@ class CliSession {
     const enabledTools = (meta.tools || []).filter(t => t.enabled);
     if (enabledTools.length === 0) return null;
 
-    const appRoot = path.dirname(__dirname);
-    const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
+    const bridgePath = path.join(PACKAGE_ROOT, 'lib', 'mcp-bridge.js');
 
     const env = {};
     if (meta.env && typeof meta.env === 'object' && !Array.isArray(meta.env)) {

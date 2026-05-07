@@ -7,6 +7,26 @@ function getPty() {
   return _pty;
 }
 
+const os = require('os');
+
+// --- Directory roots ---
+// PACKAGE_ROOT: where bundled code lives (lib/, public/, templates/)
+const PACKAGE_ROOT = path.dirname(__dirname);
+
+// DATA_HOME: where runtime/user state goes (outputs/, interactions/, data/, capabilities/, mcp-servers/)
+// - VISTACLAIR_HOME env var overrides everything
+// - Global npm install (inside node_modules): defaults to ~/.vistaclair
+// - Local dev (cloned repo): defaults to the package root (backward compatible)
+const DATA_HOME = (function resolveDataHome() {
+  if (process.env.VISTACLAIR_HOME) return path.resolve(process.env.VISTACLAIR_HOME);
+  const sep = path.sep;
+  if (PACKAGE_ROOT.includes(sep + 'node_modules' + sep) ||
+      PACKAGE_ROOT.endsWith(sep + 'node_modules')) {
+    return path.join(os.homedir(), '.vistaclair');
+  }
+  return PACKAGE_ROOT;
+})();
+
 let counter = 0;
 
 const MIME_TYPES = {
@@ -98,7 +118,7 @@ function buildCliArgs(settings) {
  * Spawn `claude` with the proxy URL injected into the environment.
  */
 // Live tracking of running Claude processes
-// Map<instanceId, { proc, instanceId, profileName, spawnedAt, status }>
+// Map<instanceId, { proc, instanceId, spawnedAt, status, sourceContext, cwd }>
 const _activeProcesses = new Map();
 let _processBroadcaster = null;
 function setProcessBroadcaster(broadcaster) { _processBroadcaster = broadcaster; }
@@ -111,8 +131,8 @@ function getActiveProcessCount() {
 }
 
 function getInstances() {
-  return Array.from(_activeProcesses.values()).map(({ instanceId, spawnedAt, status, cwd }) => ({
-    instanceId, spawnedAt, status, cwd: cwd || null,
+  return Array.from(_activeProcesses.values()).map(({ instanceId, spawnedAt, status, cwd, sourceContext }) => ({
+    instanceId, spawnedAt, status, cwd: cwd || null, tabId: sourceContext?.tabId || null,
   }));
 }
 
@@ -121,7 +141,17 @@ function getInstanceContext(instanceId) {
   return entry?.sourceContext || null;
 }
 
-function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv }) {
+function prepareLocalConfigDir(cwd) {
+  const localConfigDir = path.join(cwd, '.claude');
+  fs.mkdirSync(localConfigDir, { recursive: true });
+  const globalCreds = path.join(os.homedir(), '.claude', '.credentials.json');
+  if (fs.existsSync(globalCreds)) {
+    fs.copyFileSync(globalCreds, path.join(localConfigDir, '.credentials.json'));
+  }
+  return localConfigDir;
+}
+
+function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
@@ -129,6 +159,7 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
+  if (isolated !== false) env.CLAUDE_CONFIG_DIR = prepareLocalConfigDir(cwd);
   env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
@@ -152,7 +183,7 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
 /**
  * Spawn `claude` in interactive PTY mode with the proxy URL injected.
  */
-function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv }) {
+function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
@@ -160,6 +191,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
   } else {
     delete env.ANTHROPIC_BASE_URL;
   }
+  if (isolated !== false) env.CLAUDE_CONFIG_DIR = prepareLocalConfigDir(cwd);
   env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
@@ -250,7 +282,7 @@ function createStreamJsonParser(onEvent, onRaw) {
 
 // --- Output directory sandboxing ---
 
-const OUTPUTS_DIR = path.join(path.dirname(__dirname), 'outputs');
+const OUTPUTS_DIR = path.join(DATA_HOME, 'outputs');
 
 /**
  * Resolve a user-provided path into the outputs sandbox.
@@ -488,6 +520,8 @@ module.exports = {
   removeInstances,
   createStreamJsonParser,
   MIME_TYPES,
+  PACKAGE_ROOT,
+  DATA_HOME,
   OUTPUTS_DIR,
   resolveOutputDir,
   ensureDir,

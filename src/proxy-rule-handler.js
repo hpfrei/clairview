@@ -1,9 +1,9 @@
 const path = require('path');
 const fs = require('fs');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, ensureDir, generateId } = require('./utils');
+const { buildClaudeArgs, spawnClaude, ensureDir, generateId, DATA_HOME } = require('./utils');
 
-const PROJECT_ROOT = path.dirname(__dirname);
+const PROJECT_ROOT = DATA_HOME;
 
 let opts = {};
 let broadcaster = null;
@@ -49,11 +49,6 @@ async function handleMessage(ws, msg, bc) {
           send({ type: 'rule:error', error: 'Rule ID and description are required' });
           break;
         }
-        const editRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
-        if (editRule?.builtin) {
-          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
-          break;
-        }
         send({ type: 'rule:generating', id: msg.id });
         try {
           const result = await editProxyRule(msg.id, msg.description.trim());
@@ -66,11 +61,6 @@ async function handleMessage(ws, msg, bc) {
       }
 
       case 'rule:toggle': {
-        const toggleRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
-        if (toggleRule?.builtin) {
-          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
-          break;
-        }
         if (caps.toggleProxyRule(PROJECT_ROOT, msg.id, msg.enabled)) {
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
         }
@@ -85,6 +75,26 @@ async function handleMessage(ws, msg, bc) {
         }
         if (caps.deleteProxyRule(PROJECT_ROOT, msg.id)) {
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
+        }
+        break;
+      }
+
+      case 'rule:restore': {
+        if (!msg.id) {
+          send({ type: 'rule:error', error: 'Rule ID is required' });
+          break;
+        }
+        const origPath = path.join(PROJECT_ROOT, 'capabilities', 'proxy-rules', `${msg.id}.original.js`);
+        if (!fs.existsSync(origPath)) {
+          send({ type: 'rule:error', error: 'No original version found for this rule.' });
+          break;
+        }
+        const origSource = fs.readFileSync(origPath, 'utf-8');
+        if (caps.updateProxyRule(PROJECT_ROOT, msg.id, null, null, origSource)) {
+          bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
+          send({ type: 'rule:restored', id: msg.id });
+        } else {
+          send({ type: 'rule:error', error: `Rule not found: ${msg.id}` });
         }
         break;
       }
@@ -109,11 +119,6 @@ async function handleMessage(ws, msg, bc) {
       case 'rule:save': {
         if (!msg.id || typeof msg.source !== 'string') {
           send({ type: 'rule:error', error: 'Rule ID and source are required' });
-          break;
-        }
-        const saveRule = caps.listProxyRules(PROJECT_ROOT).find(r => r.id === msg.id);
-        if (saveRule?.builtin) {
-          send({ type: 'rule:error', error: 'Cannot modify built-in rule.' });
           break;
         }
         try {

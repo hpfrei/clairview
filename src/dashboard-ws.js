@@ -1,11 +1,10 @@
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser } = require('./utils');
+const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME } = require('./utils');
 const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
 const caps = require('./capabilities');
 
-// Capabilities config always lives at project root, not the outputs sandbox
-const PROJECT_ROOT = path.dirname(__dirname);
+const PROJECT_ROOT = DATA_HOME;
 
 class DashboardBroadcaster {
   constructor(wss, store, opts = {}) {
@@ -19,7 +18,7 @@ class DashboardBroadcaster {
 
     this.wss.on('connection', (ws) => {
       // Send full history on connect
-      const interactions = this.store.getAll().map(sanitizeForDashboard);
+      const interactions = this.store.getActiveInteractions().map(sanitizeForDashboard);
       ws.send(JSON.stringify({ type: 'init', interactions }));
 
       // Send settings
@@ -73,9 +72,20 @@ class DashboardBroadcaster {
             if (msg.instanceId) killInstance(msg.instanceId);
           } else if (msg.type === 'inspector:clearInstances') {
             if (Array.isArray(msg.instanceIds) && msg.instanceIds.length > 0) {
-              this.store.removeByInstanceIds(msg.instanceIds);
+              this.store.removeFromMemory(msg.instanceIds);
               removeInstances(msg.instanceIds);
               this.broadcast({ type: 'inspector:instancesCleared', instanceIds: msg.instanceIds });
+            }
+          } else if (msg.type === 'inspector:loadSession') {
+            if (msg.sessId) {
+              const loaded = this.store.loadSessionIntoMemory(msg.sessId);
+              const interactions = loaded.map(sanitizeForDashboard);
+              ws.send(JSON.stringify({
+                type: 'inspector:sessionLoaded',
+                sessId: msg.sessId,
+                instanceId: `cli-${msg.sessId}`,
+                interactions,
+              }));
             }
           } else if (msg.type === 'ask:answer') {
             // Resolve a pending AskUserQuestion
@@ -236,7 +246,6 @@ class DashboardBroadcaster {
             if (this.cliSessionManager) {
               const newTabId = this.cliSessionManager.nextTabId();
               this.cliSessionManager.getOrCreate(newTabId);
-              this.cliSessionManager.broadcastTabs();
               ws.send(JSON.stringify({ type: 'cli:newTab', tabId: newTabId }));
             }
           } else if (msg.type === 'cli:closeTab') {
@@ -251,7 +260,7 @@ class DashboardBroadcaster {
                 const session = this.cliSessionManager.getOrCreate(msg.tabId);
                 session.spawnShell(msg.cwd, msg.cols || 80, msg.rows || 24);
               } else {
-                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined });
+                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined, isolated: msg.isolated === true });
               }
             }
           } else if (msg.type === 'cli:input') {

@@ -145,11 +145,15 @@
         const container = document.querySelector(`.rule-editor-container[data-slug="${msg.slug}"]`);
         if (!container || !monacoReady) break;
         container.innerHTML = '';
-        createEditor(container, msg.source, msg.slug, msg.builtin);
+        createEditor(container, msg.source, msg.slug, false);
         break;
       }
       case 'mcp:tool:source-saved':
         isEditorDirty = false;
+        break;
+      case 'mcp:tool:restored':
+        isEditorDirty = false;
+        showAlert('Tool restored to original');
         break;
       case 'mcp:tool:generating': {
         const btn = document.querySelector(`.rule-edit-submit[data-slug="${msg.slug}"]`);
@@ -242,8 +246,8 @@
 
     return `<div class="mcp-tool-item${isExpanded ? ' expanded' : ''}${t.enabled ? '' : ' disabled'}" data-slug="${escHtml(t.slug)}">
       <div class="mcp-tool-item-header">
-        <label class="rule-toggle" title="${bi ? 'Built-in (always enabled)' : t.enabled ? 'Enabled' : 'Disabled'}">
-          <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${escHtml(t.slug)}" class="mcp-toggle-cb" ${bi ? 'disabled' : ''}>
+        <label class="rule-toggle" title="${t.enabled ? 'Enabled' : 'Disabled'}">
+          <input type="checkbox" ${t.enabled ? 'checked' : ''} data-slug="${escHtml(t.slug)}" class="mcp-toggle-cb">
           <span class="rule-toggle-slider"></span>
         </label>
         <div class="mcp-tool-item-info">
@@ -258,16 +262,17 @@
         <div class="rule-source-section">
           <div class="rule-source-toolbar">
             <span class="rule-source-label">Source</span>
-            ${bi ? '' : `<button class="rule-save-btn" data-slug="${escHtml(t.slug)}" disabled>Save</button>`}
+            ${bi ? `<button class="rule-restore-btn" data-slug="${escHtml(t.slug)}" title="Restore original">Restore</button>` : ''}
+            <button class="rule-save-btn" data-slug="${escHtml(t.slug)}" disabled>Save</button>
           </div>
           <div class="rule-editor-container" data-slug="${escHtml(t.slug)}">
             <div class="rule-editor-loading">Loading editor&hellip;</div>
           </div>
         </div>
-        ${bi ? '' : `<div class="rule-edit-row">
+        <div class="rule-edit-row">
           <textarea class="rule-edit-input" data-slug="${escHtml(t.slug)}" rows="3" placeholder="Describe a change to this tool&hellip;"></textarea>
           <button class="rule-edit-submit" data-slug="${escHtml(t.slug)}">Apply with AI</button>
-        </div>`}
+        </div>
         <div class="mcp-test-section" id="mcpTest-${escHtml(t.slug)}"></div>
       </div>
     </div>`;
@@ -318,6 +323,16 @@
             mcp.expandedSlug = null;
             disposeEditor();
           }
+        }
+        return;
+      }
+
+      // Restore builtin
+      const restoreBtn = e.target.closest('.rule-restore-btn');
+      if (restoreBtn) {
+        e.stopPropagation();
+        if (confirm('Restore this tool to its original built-in version?')) {
+          sendWs({ type: 'mcp:tool:restore', slug: restoreBtn.dataset.slug });
         }
         return;
       }

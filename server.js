@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const path = require('path');
+const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
@@ -13,12 +14,11 @@ const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 let pro = null;
 let proLicenseValid = false;
-const proDir = path.join(__dirname, 'vistaclair-pro');
+const proDir = path.join(DATA_HOME, 'vistaclair-pro');
 const LICENSE_SERVER = process.env.VISTACLAIR_LICENSE_URL || 'https://licencing.hpfreilabs.com';
 const PRODUCT_SLUG = process.env.HPFREILABS_PRODUCT || 'vistaclair-pro';
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
-const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
 
 // Check and auto-install native dependencies, then restart so they load
 (function checkDependencies() {
@@ -41,7 +41,7 @@ const { OUTPUTS_DIR, ensureDir, setProcessBroadcaster, getActiveProcessCount } =
 
 async function validateLicense() {
   const fs = require('fs');
-  const licPath = path.join(__dirname, 'data', 'license.json');
+  const licPath = path.join(DATA_HOME, 'data', 'license.json');
   if (!fs.existsSync(licPath)) return { valid: false, reason: 'no-key' };
 
   let stored;
@@ -184,6 +184,7 @@ dashboardApp.post('/api/hook-report', (req, res) => {
       instanceId: req.body.instanceId || null,
       hookEvent: hookData.hook_event_name || 'unknown',
       toolName: hookData.tool_name || null,
+      toolUseId: hookData.tool_use_id || null,
       request: hookData,
       response: { status: 200, body: hookData.tool_response || null },
       timing: { startedAt: Date.now(), duration: 0 },
@@ -192,6 +193,14 @@ dashboardApp.post('/api/hook-report', (req, res) => {
     store.add(interaction);
     broadcaster.broadcast({ type: 'interaction:start', interaction });
     broadcaster.broadcast({ type: 'interaction:complete', interaction });
+
+    if (hookData.transcript_path && hookData.session_id && cliSessionManager) {
+      cliSessionManager.notifyTranscriptPath(
+        req.body.instanceId,
+        hookData.session_id,
+        hookData.transcript_path
+      );
+    }
   } catch {}
   res.status(200).end();
 });
@@ -260,16 +269,16 @@ function installPro(response, licenseKey) {
 
   if (!fs.existsSync(proDir)) {
     const cloneUrl = response.gitUrl.replace('https://', `https://${gitAuth}`);
-    execFileSync('git', ['clone', cloneUrl, 'vistaclair-pro'], { cwd: __dirname, stdio: 'pipe', timeout: 60000 });
+    execFileSync('git', ['clone', cloneUrl, 'vistaclair-pro'], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
   }
 
   if (response.extras) {
     for (const extra of response.extras) {
-      const dir = path.join(__dirname, extra.name);
+      const dir = path.join(DATA_HOME, extra.name);
       if (!fs.existsSync(dir)) {
         const extraUrl = extra.gitUrl.replace('https://', `https://${gitAuth}`);
         try {
-          execFileSync('git', ['clone', extraUrl, extra.name], { cwd: __dirname, stdio: 'pipe', timeout: 60000 });
+          execFileSync('git', ['clone', extraUrl, extra.name], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
         } catch (e) {
           if (!extra.optional) throw e;
         }
@@ -277,8 +286,8 @@ function installPro(response, licenseKey) {
     }
   }
 
-  ensureDir(path.join(__dirname, 'data'));
-  fs.writeFileSync(path.join(__dirname, 'data', 'license.json'), JSON.stringify({ key: licenseKey, activatedAt: new Date().toISOString() }));
+  ensureDir(path.join(DATA_HOME, 'data'));
+  fs.writeFileSync(path.join(DATA_HOME, 'data', 'license.json'), JSON.stringify({ key: licenseKey, activatedAt: new Date().toISOString() }));
 }
 
 dashboardApp.post('/api/pro/claim', async (req, res) => {
@@ -386,7 +395,7 @@ dashboardApp.post('/api/pro/update', async (req, res) => {
     const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
 
     // Also update vistaclair-apps if present
-    const appsDir = path.join(__dirname, 'vistaclair-apps');
+    const appsDir = path.join(DATA_HOME, 'vistaclair-apps');
     if (fs.existsSync(path.join(appsDir, '.git'))) {
       try { execSync('git pull --ff-only', { cwd: appsDir, stdio: 'pipe', timeout: 30000 }); } catch {}
     }
@@ -462,6 +471,7 @@ dashboardApp.post('/api/restart', (req, res) => {
     // Force-close all HTTP connections so server.close() completes
     dashboardServer.closeAllConnections?.();
     proxyServer.closeAllConnections?.();
+    cliSessionManager.saveAllToHistory();
     mcp.shutdown();
 
     const spawnNew = () => {
@@ -548,6 +558,7 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
 
 // Clean shutdown: unregister MCP servers and stop running apps
 function gracefulShutdown() {
+  cliSessionManager.saveAllToHistory();
   if (pro) pro.shutdown();
   mcp.shutdown();
   process.exit(0);

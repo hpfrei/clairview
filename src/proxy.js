@@ -3,13 +3,13 @@ const path = require('path');
 const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream');
 const SSEPassthrough = require('./sse-passthrough');
-const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard, getInstanceContext } = require('./utils');
+const { generateId, filterRequestHeaders, filterResponseHeaders, sanitizeForDashboard, getInstanceContext, DATA_HOME } = require('./utils');
 const { getProvider } = require('./providers/registry');
 const caps = require('./capabilities');
 const { getModelPricing } = caps;
 const enhancedAskTool = require('./ask-schema');
 
-const PROJECT_ROOT = path.dirname(__dirname);
+const PROJECT_ROOT = DATA_HOME;
 
 // Shared state: pending AskUserQuestion interceptions (used by /api/ask endpoint)
 const pendingQuestions = new Map();
@@ -354,8 +354,6 @@ function createProxyRouter(store, broadcaster, targetUrl) {
         const ctx = {
           body,
           isStreaming,
-          profileName: null,
-          profileData: null,
           instanceId: req.instanceId || null,
           isInternalInstance: !!instCtx,
           req,
@@ -716,7 +714,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     for (const rule of getEnabledRules()) {
       try {
         const ctx = {
-          body, isStreaming: false, profileName: null, profileData: null,
+          body, isStreaming: false,
           instanceId: req.instanceId || null,
           isInternalInstance: !!getInstanceContext(req.instanceId),
           req, res,

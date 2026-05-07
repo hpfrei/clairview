@@ -2,7 +2,7 @@ const servers = require('./servers');
 const registrar = require('./registrar');
 const logs = require('./logs');
 const caps = require('../capabilities');
-const { buildClaudeArgs, spawnClaude } = require('../utils');
+const { buildClaudeArgs, spawnClaude, PACKAGE_ROOT, DATA_HOME } = require('../utils');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -114,6 +114,23 @@ function handleMessage(ws, msg, bc) {
           send({ type: 'mcp:error', error: result.error });
         } else {
           send({ type: 'mcp:tool:source-saved', slug: msg.slug });
+          markNeedsRestart();
+        }
+        break;
+      }
+
+      case 'mcp:tool:restore': {
+        if (!msg.slug) {
+          send({ type: 'mcp:error', error: 'Tool slug is required' });
+          break;
+        }
+        const restoreResult = servers.restoreToolSource(msg.slug);
+        if (restoreResult.error) {
+          send({ type: 'mcp:error', error: restoreResult.error });
+        } else {
+          const restored = servers.readToolSource(msg.slug);
+          send({ type: 'mcp:tool:source', slug: msg.slug, source: restored.source, builtin: restored.builtin });
+          send({ type: 'mcp:tool:restored', slug: msg.slug });
           markNeedsRestart();
         }
         break;
@@ -345,8 +362,7 @@ function startServer(send, broadcast) {
 }
 
 function finishStart(meta) {
-  const appRoot = path.dirname(path.dirname(__dirname));
-  const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
+  const bridgePath = path.join(PACKAGE_ROOT, 'lib', 'mcp-bridge.js');
   const projectDir = process.cwd();
 
   const regResult = registrar.register(
@@ -452,7 +468,7 @@ function editToolWithAI(slug, description) {
     if (tool.builtin) { reject(new Error('Cannot modify built-in tool')); return; }
 
     const targetPath = path.join(dir, 'tools', tool.file);
-    const PROJECT_ROOT = path.dirname(path.dirname(__dirname));
+    const PROJECT_ROOT = DATA_HOME;
 
     const prompt = `You are editing an existing MCP tool for VistaClair.
 
@@ -521,8 +537,7 @@ Use the Write tool to create the file. Write ONLY valid JavaScript (no markdown 
 // --- MCP JSON-RPC helpers (tool discovery & testing) ---
 
 function spawnBridge() {
-  const appRoot = path.dirname(path.dirname(__dirname));
-  const bridgePath = path.join(appRoot, 'lib', 'mcp-bridge.js');
+  const bridgePath = path.join(PACKAGE_ROOT, 'lib', 'mcp-bridge.js');
   return spawn('node', [bridgePath, servers.INTEGRATED_SLUG], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {

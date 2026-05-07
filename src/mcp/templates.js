@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { PACKAGE_ROOT } = require('../utils');
 
-const templatesDir = path.join(path.dirname(path.dirname(__dirname)), 'templates', 'mcp-servers');
+const templatesDir = path.join(PACKAGE_ROOT, 'templates', 'mcp-servers');
 
 function listTemplates() {
   if (!fs.existsSync(templatesDir)) return [];

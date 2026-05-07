@@ -483,11 +483,23 @@ aside#timeline {
 }
 
 .turn-group.new-user-turn {
-  border-top: 2px solid blue;
+  border-top: 2px solid var(--subagent-color, var(--border));
 }
 
 .turn-group.new-user-turn:first-child {
   border-top: none;
+}
+
+.turn-group.sidechain-group {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--subagent-color, var(--cyan));
+}
+
+.turn-group.subagent-group {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--subagent-color, var(--border));
 }
 
 .user-turn-total {
@@ -572,6 +584,19 @@ aside#timeline {
   border-radius: 3px;
   margin-left: 4px;
 }
+.entry-subagent {
+  font-size: 10px;
+  color: var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+}
+.subagent-info {
+  border-left: 3px solid var(--cyan);
+  padding-left: 8px;
+  margin: 8px 0;
+}
 
 .turn-entry .entry-meta {
   display: flex;
@@ -639,7 +664,7 @@ aside#timeline {
 .tool-connector {
   width: 10px;
   height: 1px;
-  background: var(--border);
+  background: var(--subagent-color, var(--border));
   flex-shrink: 0;
 }
 
@@ -681,7 +706,7 @@ aside#timeline {
 .mcp-call-entry.selected { background: color-mix(in srgb, var(--green) 15%, transparent); }
 .mcp-label { color: var(--green); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; }
 .mcp-tool-name { color: var(--green); font-weight: 600; }
-.hook-call-group { border-left: 2px solid var(--magenta, #c084fc); }
+.hook-call-group {/* border-left: 2px solid var(--magenta, #c084fc); */}
 .hook-call-entry {
   display: flex;
   align-items: center;
@@ -697,6 +722,10 @@ aside#timeline {
 .hook-arrow { color: var(--magenta, #c084fc); font-size: 12px; flex-shrink: 0; }
 .hook-label { color: var(--magenta, #c084fc); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; flex-shrink: 0; }
 .hook-tool-name { color: var(--text-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.hook-tool-entry .hook-connector { background: var(--magenta, #c084fc); }
+.hook-tool-entry .hook-entry-name { color: var(--magenta, #c084fc); }
+.hook-tool-entry.selected .hook-entry-name { color: var(--magenta, #c084fc); }
+.tag-hook { color: var(--magenta, #c084fc); background: color-mix(in srgb, var(--magenta, #c084fc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--magenta, #c084fc) 20%, transparent); }
 .mcp-source-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
 .mcp-src-test { color: var(--purple); background: color-mix(in srgb, var(--purple) 12%, transparent); }
 .mcp-src-claude { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); }
@@ -1207,14 +1236,6 @@ footer {
   border-bottom-color: transparent;
   font-weight: 600;
 }
-#cliTabStrip .view-tab.dir-cli {
-  color: #8bb97a;
-}
-#cliTabStrip .view-tab.dir-cli.active,
-#cliTabStrip .view-tab.dir-cli.active:hover {
-  color: #8bb97a;
-  border-color: #8bb97a;
-}
 #cliTabStrip .view-tab-new {
   background: var(--bg-hover);
   color: var(--tab-inactive-text);
@@ -1274,13 +1295,47 @@ footer {
 }
 .cli-new-menu-dir { font-weight: 600; }
 .cli-new-menu-age { font-size: 11px; color: var(--text-dim, #888); flex-shrink: 0; }
+.cli-new-menu-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
 .cli-new-menu-meta {
   font-size: 11px;
   color: var(--text-dim, #888);
-  margin-top: 3px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.cli-new-menu-path { flex: 1; min-width: 0; }
+.cli-new-menu-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-hover, rgba(255,255,255,0.08));
+  color: var(--text-dim, #888);
+  flex-shrink: 0;
+}
+.cli-new-menu-badge-model {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cli-new-menu-gauge-row {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+}
+.cli-new-menu-gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cli-new-menu-gauge-label {
+  font-size: 10px;
+  color: var(--text-dim, #888);
 }
 .cli-new-menu-del {
   position: absolute;
@@ -2585,7 +2640,7 @@ footer {
 .tag-mt { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); border: 1px solid color-mix(in srgb, var(--green) 20%, transparent); }
 .tag-sk { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 10%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 20%, transparent); }
 .tag-hk { color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); border: 1px solid color-mix(in srgb, var(--orange) 20%, transparent); }
-.tag-sk { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 10%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 20%, transparent); }
+.tag-agent { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 10%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 20%, transparent); }
 
 /* Intro block */
 .ref-intro {
@@ -3763,6 +3818,17 @@ footer {
 }
 .dir-picker-new-btn:hover { background: var(--bg-selected); }
 
+.dir-picker-isolated {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  margin-left: 8px;
+}
+
 /* ── Chat Files Panel (overlay) ───────────────── */
 
 .chat-files-panel {
@@ -4009,6 +4075,11 @@ footer {
 }
 .rule-save-btn:disabled { opacity: 0.4; cursor: default; }
 .rule-save-btn.hidden { display: none; }
+.rule-restore-btn {
+  padding: 2px 10px; font-size: 11px; border: 1px solid var(--text-dim); border-radius: 3px;
+  background: transparent; color: var(--text-dim); cursor: pointer; font-family: inherit;
+}
+.rule-restore-btn:hover { color: var(--text); border-color: var(--text); }
 
 /* ============================================================
    DIRECTORY BROWSER VIEW

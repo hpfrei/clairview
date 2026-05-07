@@ -7,6 +7,75 @@
   // --- Auto-select suppression: don't jump away from user-selected turns ---
   let _userPinnedSelection = false;
 
+  // --- Subagent registry: track numbering and colors for parallel subagents ---
+  const _subagentRegistry = new Map();    // agentId -> { agentType, number, colorIndex }
+  const _subagentTypeCounts = new Map();  // agentType -> Map<agentId, number>
+  let _subagentColorCounter = 0;
+  const SUBAGENT_COLORS = [
+    '#7dcfff', // cyan
+    '#ff9e64', // orange
+    '#bb9af7', // purple
+    '#9ece6a', // green
+    '#f7768e', // pink
+    '#e0af68', // yellow
+    '#ff7eb6', // magenta
+    '#7aa2f7', // blue
+  ];
+
+  function registerSubagent(subagent) {
+    if (!subagent?.agentId) return null;
+    if (_subagentRegistry.has(subagent.agentId)) return _subagentRegistry.get(subagent.agentId);
+
+    const type = subagent.agentType || 'subagent';
+    if (!_subagentTypeCounts.has(type)) _subagentTypeCounts.set(type, new Map());
+    const typeMap = _subagentTypeCounts.get(type);
+    const number = typeMap.size + 1;
+    typeMap.set(subagent.agentId, number);
+
+    const colorIndex = _subagentColorCounter++ % SUBAGENT_COLORS.length;
+    const entry = { agentType: type, number, colorIndex };
+    _subagentRegistry.set(subagent.agentId, entry);
+
+    if (number === 2) refreshSubagentLabelsForType(type);
+
+    return entry;
+  }
+
+  function getSubagentLabel(subagent) {
+    if (!subagent?.agentId) return subagent?.agentType || 'subagent';
+    const entry = _subagentRegistry.get(subagent.agentId);
+    if (!entry) return subagent.agentType || 'subagent';
+    const typeMap = _subagentTypeCounts.get(entry.agentType);
+    if (typeMap && typeMap.size > 1) return `${entry.agentType} ${entry.number}`;
+    return entry.agentType;
+  }
+
+  function getSubagentColor(subagent) {
+    if (!subagent?.agentId) return SUBAGENT_COLORS[0];
+    const entry = _subagentRegistry.get(subagent.agentId);
+    if (!entry) return SUBAGENT_COLORS[0];
+    return SUBAGENT_COLORS[entry.colorIndex];
+  }
+
+  function refreshSubagentLabelsForType(type) {
+    const typeMap = _subagentTypeCounts.get(type);
+    if (!typeMap) return;
+    for (const [agentId, num] of typeMap) {
+      const label = typeMap.size > 1 ? `${type} ${num}` : type;
+      document.querySelectorAll(`.turn-group[data-agent-id="${agentId}"]`).forEach(group => {
+        const badge = group.querySelector('.entry-subagent');
+        if (badge) badge.textContent = label;
+        group.querySelectorAll('.tag-agent').forEach(tag => { tag.textContent = label; });
+      });
+    }
+  }
+
+  function resetSubagentRegistry() {
+    _subagentRegistry.clear();
+    _subagentTypeCounts.clear();
+    _subagentColorCounter = 0;
+  }
+
   // --- Streaming text block merge state ---
   let _streamBlockMap = new Map();   // index -> { bodyEl, needsSeparator }
   let _lastStreamTextBodyEl = null;
@@ -49,26 +118,15 @@
   }
 
   function cliInstanceLabel(instanceId) {
-    const tabId = instanceId.replace(/^cli-/, '');
-    const cliTab = window.cliModule?.tabs?.get(tabId);
-    if (cliTab?.title) return cliTab.title;
     const info = knownInstances.get(instanceId);
+    const tabId = info?.tabId;
+    if (tabId && window.cliModule?.computeTabLabel) {
+      const label = window.cliModule.computeTabLabel(tabId);
+      if (label && label !== tabId) return label.replace(/^>/, '');
+    }
     if (!info?.cwd) return instanceId;
     const parts = info.cwd.replace(/\/+$/, '').split('/');
-    const basename = parts[parts.length - 1] || info.cwd;
-    const sameDir = [];
-    for (const [id, inst] of knownInstances) {
-      if (!id.startsWith('cli-')) continue;
-      const tId = id.replace(/^cli-/, '');
-      if (window.cliModule?.tabs?.get(tId)?.title) continue;
-      if (!inst.cwd) continue;
-      const p = inst.cwd.replace(/\/+$/, '').split('/');
-      if ((p[p.length - 1] || inst.cwd) === basename) sameDir.push(id);
-    }
-    if (sameDir.length <= 1) return basename;
-    sameDir.sort();
-    const idx = sameDir.indexOf(instanceId);
-    return idx === 0 ? basename : `${basename}-${idx + 1}`;
+    return parts[parts.length - 1] || info.cwd;
   }
 
   function instanceDisplayLabel(instanceId) {
@@ -92,7 +150,7 @@
     if (!inspectorTabStrip) return;
     inspectorTabStrip.innerHTML = '';
     // "Others" tab — only when orphan interactions exist
-    const showOthers = hasOrphanInteractions();
+    const showOthers = false;
     if (showOthers) {
       const allBtn = document.createElement('button');
       allBtn.className = 'view-tab' + (activeInstanceTab === 'all' ? ' active' : '');
@@ -118,9 +176,11 @@
             switchInstanceTab(id);
             return;
           }
-          const tabId = id.replace(/^cli-/, '');
-          switchView('claude');
-          window.cliModule?.switchTab?.(tabId);
+          const entry = knownInstances.get(id);
+          if (entry?.tabId) {
+            switchView('claude');
+            window.cliModule?.switchTab?.(entry.tabId);
+          }
         });
       }
       btn.appendChild(label);
@@ -161,7 +221,7 @@
     renderTimeline();
     // Select last matching interaction
     const filtered = activeInstanceTab === 'all'
-      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId))
+      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId) )
       : state.interactions.filter(i => i.instanceId === activeInstanceTab);
     const last = filtered[filtered.length - 1];
     if (last) {
@@ -653,10 +713,14 @@
     if (idx >= 0) {
       const localEvents = state.interactions[idx].response?.sseEvents || [];
       const localInstanceId = state.interactions[idx].instanceId;
+      const localSubagent = state.interactions[idx].subagent;
       state.interactions[idx] = { ...updated, response: { ...updated.response, sseEvents: localEvents } };
       // Preserve locally-stamped ext instanceId (server sends null for external sessions)
       if (!updated.instanceId && localInstanceId) {
         state.interactions[idx].instanceId = localInstanceId;
+      }
+      if (localSubagent && !state.interactions[idx].subagent) {
+        state.interactions[idx].subagent = localSubagent;
       }
     }
 
@@ -699,13 +763,17 @@
     return n;
   }
 
+  let _lastRenderedAgentId = null;
+
   function renderTimeline() {
     timelineList.innerHTML = '';
+    resetSubagentRegistry();
+    _lastRenderedAgentId = null;
     let turnNum = 0;
     state.interactions.forEach((interaction) => {
       // Apply instance filter
       if (activeInstanceTab === 'all') {
-        // "Others" — exclude interactions that belong to a known instance tab
+        // "Others" — exclude interactions that belong to a known instance tab (but include dir-spawned)
         if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
       } else if (interaction.instanceId !== activeInstanceTab) return;
       if (!interaction.isMcp && !interaction.isHook) turnNum++;
@@ -725,8 +793,25 @@
     }
 
     const group = document.createElement('div');
-    group.className = 'turn-group' + (isNewUserTurn(interaction) ? ' new-user-turn' : '');
+    let groupClass = 'turn-group' + (isNewUserTurn(interaction) ? ' new-user-turn' : '');
+    if (interaction.subagent?.isSidechain) groupClass += ' sidechain-group';
+    else if (interaction.subagent?.agentType) groupClass += ' subagent-group';
+    group.className = groupClass;
     group.dataset.turnId = interaction.id;
+
+    const currentAgentId = interaction.subagent?.agentId || null;
+    if (interaction.subagent?.agentId) {
+      registerSubagent(interaction.subagent);
+      group.dataset.agentId = interaction.subagent.agentId;
+      const color = getSubagentColor(interaction.subagent);
+      group.style.setProperty('--subagent-color', color);
+      if (currentAgentId !== _lastRenderedAgentId) {
+        group.style.borderTop = `2px solid ${color}`;
+      }
+    } else if (_lastRenderedAgentId !== null && currentAgentId === null) {
+      group.style.borderTop = '2px solid var(--border)';
+    }
+    _lastRenderedAgentId = currentAgentId;
 
     const el = document.createElement('div');
     el.className = 'timeline-entry turn-entry';
@@ -743,6 +828,11 @@
     const turnLabel = stepId ? `Turn ${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${turnNum}`;
     const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
       ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
+    const subagentLabel = interaction.subagent ? getSubagentLabel(interaction.subagent) : '';
+    const subagentColor = interaction.subagent?.agentId ? getSubagentColor(interaction.subagent) : '';
+    const subagentTag = (interaction.subagent && (interaction.subagent.agentType || interaction.subagent.agentId || interaction.subagent.description))
+      ? `<span class="entry-subagent" title="${escHtml(interaction.subagent.description || '')}"${subagentColor ? ` style="color:${subagentColor};background:color-mix(in srgb, ${subagentColor} 12%, transparent)"` : ''}>${escHtml(subagentLabel)}</span>`
+      : '';
     const tokenSummary = compactTokens(interaction.usage);
     const cost = computeCost(interaction.usage, interaction.pricing);
     const costHtml = turnCostGauge(cost);
@@ -751,6 +841,7 @@
       <div class="entry-header">
         <span class="entry-num">${turnLabel}</span>
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+        ${subagentTag}
         ${instanceTag}
       </div>
       <div class="entry-model" data-model="${interaction.id}">
@@ -780,7 +871,7 @@
 
     const toolCalls = extractToolCalls(interaction);
     toolCalls.forEach((tc, tIdx) => {
-      const toolEl = createToolEntryEl(interaction.id, tIdx, tc.name, toolSummary(tc.name, tc.input), tc.input);
+      const toolEl = createToolEntryEl(interaction.id, tIdx, tc.name, toolSummary(tc.name, tc.input), tc.input, interaction.subagent);
       toolsContainer.appendChild(toolEl);
     });
 
@@ -829,7 +920,55 @@
     timelineList.appendChild(group);
   }
 
+  function findHookSubagent(hookInteraction) {
+    if (!hookInteraction.toolUseId) return null;
+    for (let i = state.interactions.length - 1; i >= 0; i--) {
+      const turn = state.interactions[i];
+      if (turn.isHook || turn.isMcp) continue;
+      if (turn.instanceId !== hookInteraction.instanceId) continue;
+      const tools = extractToolCalls(turn);
+      if (tools.some(tc => tc.id === hookInteraction.toolUseId)) return turn.subagent || null;
+    }
+    return null;
+  }
+
   function appendHookEntryToTimeline(interaction, idx) {
+    const hookEvent = interaction.hookEvent || 'Hook';
+    const toolName = interaction.toolName || '';
+    const arrow = /post/i.test(hookEvent) ? '←' : '→';
+    const subagent = findHookSubagent(interaction);
+
+    const agentLabel = subagent ? getSubagentLabel(subagent) : '';
+    const agentColor = subagent?.agentId ? getSubagentColor(subagent) : '';
+    const agentTag = subagent?.agentType
+      ? `<span class="tool-entry-tag tag-agent"${agentColor ? ` style="color:${agentColor};background:color-mix(in srgb, ${agentColor} 10%, transparent);border-color:color-mix(in srgb, ${agentColor} 20%, transparent)"` : ''}>${escHtml(agentLabel)}</span>` : '';
+
+    // Try to nest under the most recent LLM turn for the same instance
+    const parentContainer = findParentToolContainer(interaction);
+    if (parentContainer) {
+      const el = document.createElement('div');
+      el.className = 'timeline-entry tool-entry hook-tool-entry';
+      el.dataset.id = interaction.id;
+      el.innerHTML = `
+        <span class="tool-connector hook-connector"></span>
+        <span class="hook-arrow">${arrow}</span>
+        <span class="tool-entry-name hook-entry-name">${escHtml(hookEvent)}</span>
+        <span class="tool-entry-tag tag-hook">hook</span>
+        ${agentTag}
+        <span class="tool-entry-summary">${escHtml(toolName)}</span>
+      `;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sel = { type: 'turn', id: interaction.id };
+        if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
+        _userPinnedSelection = true;
+        select(sel);
+      });
+      parentContainer.appendChild(el);
+      return;
+    }
+
+    // Fallback: standalone entry if no parent turn found
     const group = document.createElement('div');
     group.className = 'turn-group hook-call-group';
     group.dataset.turnId = interaction.id;
@@ -837,10 +976,6 @@
     const el = document.createElement('div');
     el.className = 'timeline-entry turn-entry hook-call-entry';
     el.dataset.id = interaction.id;
-
-    const hookEvent = interaction.hookEvent || 'Hook';
-    const toolName = interaction.toolName || '';
-    const arrow = /post/i.test(hookEvent) ? '←' : '→';
 
     el.innerHTML = `
       <span class="hook-arrow">${arrow}</span>
@@ -860,24 +995,44 @@
     timelineList.appendChild(group);
   }
 
+  function findParentToolContainer(hookInteraction) {
+    // Walk backwards through rendered turn groups to find the last LLM turn for this instance
+    const groups = timelineList.querySelectorAll('.turn-group:not(.hook-call-group):not(.mcp-call-group)');
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const turnId = groups[i].dataset.turnId;
+      const turn = state.interactions.find(t => t.id === turnId);
+      if (turn && turn.instanceId === hookInteraction.instanceId) {
+        return groups[i].querySelector('.tool-entries');
+      }
+    }
+    return null;
+  }
+
   function appendToolToTimeline(interactionId, toolIdx, name, summary) {
     const container = document.querySelector(`[data-tools-for="${interactionId}"]`);
     if (!container) return;
     if (container.querySelector(`[data-tool-id="${interactionId}-${toolIdx}"]`)) return;
-    const toolEl = createToolEntryEl(interactionId, toolIdx, name, summary);
+    const interaction = state.interactions.find(i => i.id === interactionId);
+    const toolEl = createToolEntryEl(interactionId, toolIdx, name, summary, null, interaction?.subagent);
     container.appendChild(toolEl);
+    if (!_userPinnedSelection) scrollTimelineToBottom();
   }
 
-  function createToolEntryEl(interactionId, toolIdx, name, summary, input) {
+  function createToolEntryEl(interactionId, toolIdx, name, summary, input, subagent) {
     const toolEl = document.createElement('div');
     const isSkill = name === 'Skill' && input?.skill;
     toolEl.className = 'timeline-entry tool-entry' + (isSkill ? ' skill-call' : '');
     toolEl.dataset.toolId = `${interactionId}-${toolIdx}`;
     const displayName = isSkill ? `/${input.skill}` : name;
+    const agentLabel = subagent ? getSubagentLabel(subagent) : '';
+    const agentColor = subagent?.agentId ? getSubagentColor(subagent) : '';
+    const agentTag = subagent?.agentType
+      ? `<span class="tool-entry-tag tag-agent"${agentColor ? ` style="color:${agentColor};background:color-mix(in srgb, ${agentColor} 10%, transparent);border-color:color-mix(in srgb, ${agentColor} 20%, transparent)"` : ''}>${escHtml(agentLabel)}</span>` : '';
     toolEl.innerHTML = `
       <span class="tool-connector"></span>
       <span class="tool-entry-name" data-tool-name="${interactionId}-${toolIdx}">${escHtml(displayName)}</span>
       ${isSkill ? '<span class="tool-entry-tag tag-sk">skill</span>' : ''}
+      ${agentTag}
       <span class="tool-entry-summary" data-tool-summary="${interactionId}-${toolIdx}">${escHtml(summary)}</span>
     `;
     toolEl.addEventListener('click', (e) => {
@@ -893,14 +1048,16 @@
   function rebuildToolEntries(interactionId) {
     const container = document.querySelector(`[data-tools-for="${interactionId}"]`);
     if (!container) return;
+    const hookEls = [...container.querySelectorAll('.hook-tool-entry')];
     container.innerHTML = '';
     const interaction = state.interactions.find(i => i.id === interactionId);
     if (!interaction) return;
     const toolCalls = extractToolCalls(interaction);
     toolCalls.forEach((tc, tIdx) => {
-      const toolEl = createToolEntryEl(interactionId, tIdx, tc.name, toolSummary(tc.name, tc.input), tc.input);
+      const toolEl = createToolEntryEl(interactionId, tIdx, tc.name, toolSummary(tc.name, tc.input), tc.input, interaction.subagent);
       container.appendChild(toolEl);
     });
+    for (const h of hookEls) container.appendChild(h);
   }
 
   const _durationTimers = new Map();
@@ -929,6 +1086,49 @@
       if (interaction) startDurationTimer(interaction);
     } else {
       stopDurationTimer(id);
+    }
+  }
+
+  function updateTurnSubagentBadge(interaction) {
+    const entry = document.querySelector(`.turn-entry[data-id="${interaction.id}"]`);
+    if (!entry) return;
+    const header = entry.querySelector('.entry-header');
+    if (!header) return;
+    const existing = header.querySelector('.entry-subagent');
+    if (existing) existing.remove();
+
+    if (interaction.subagent?.agentId) registerSubagent(interaction.subagent);
+
+    if (interaction.subagent && (interaction.subagent.agentType || interaction.subagent.agentId || interaction.subagent.description)) {
+      const label = getSubagentLabel(interaction.subagent);
+      const color = interaction.subagent.agentId ? getSubagentColor(interaction.subagent) : '';
+      const badge = document.createElement('span');
+      badge.className = 'entry-subagent';
+      badge.title = interaction.subagent.description || '';
+      badge.textContent = label;
+      if (color) {
+        badge.style.color = color;
+        badge.style.background = `color-mix(in srgb, ${color} 12%, transparent)`;
+      }
+      const instanceEl = header.querySelector('.entry-instance');
+      if (instanceEl) {
+        header.insertBefore(badge, instanceEl);
+      } else {
+        header.appendChild(badge);
+      }
+    }
+    const group = entry.closest('.turn-group');
+    if (group) {
+      group.classList.remove('sidechain-group', 'subagent-group');
+      if (interaction.subagent?.isSidechain) group.classList.add('sidechain-group');
+      else if (interaction.subagent?.agentType) {
+        group.classList.add('subagent-group');
+        if (interaction.subagent.agentId) {
+          group.dataset.agentId = interaction.subagent.agentId;
+          const color = getSubagentColor(interaction.subagent);
+          group.style.setProperty('--subagent-color', color);
+        }
+      }
     }
   }
 
@@ -1011,8 +1211,8 @@
   }
 
   function scrollTimelineToBottom() {
-    const timeline = document.getElementById('timeline');
-    timeline.scrollTop = timeline.scrollHeight;
+    const el = document.getElementById('timeline-list');
+    el.scrollTop = el.scrollHeight;
   }
 
   // ============================================================
@@ -1022,7 +1222,7 @@
   function selectLastAndFollow() {
     _userPinnedSelection = false;
     const filtered = activeInstanceTab === 'all'
-      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId))
+      ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId) )
       : state.interactions.filter(i => i.instanceId === activeInstanceTab);
     const last = filtered[filtered.length - 1];
     if (last) {
@@ -1033,6 +1233,7 @@
       detailContent.classList.add('hidden');
       emptyState.classList.remove('hidden');
     }
+    scrollTimelineToBottom();
   }
 
   function isAlreadySelected(sel) {
@@ -1050,7 +1251,10 @@
 
     if (sel.type === 'turn') {
       const el = document.querySelector(`.turn-entry[data-id="${sel.id}"]`);
-      if (el) el.classList.add('selected');
+      if (el) {
+        el.classList.add('selected');
+        if (_userPinnedSelection) el.scrollIntoView({ block: 'nearest' });
+      }
 
       const interaction = state.interactions.find(i => i.id === sel.id);
       if (!interaction) return;
@@ -1060,7 +1264,10 @@
       renderTurnDetail(interaction);
     } else if (sel.type === 'tool') {
       const el = document.querySelector(`[data-tool-id="${sel.interactionId}-${sel.toolIndex}"]`);
-      if (el) el.classList.add('selected');
+      if (el) {
+        el.classList.add('selected');
+        if (_userPinnedSelection) el.scrollIntoView({ block: 'nearest' });
+      }
 
       const interaction = state.interactions.find(i => i.id === sel.interactionId);
       if (!interaction) return;
@@ -1183,6 +1390,16 @@
       <span class="info-label">Auto-memory</span><span class="info-value">${interaction.disableAutoMemory ? 'disabled' : 'enabled'}</span>
       <span class="info-label">Time</span><span class="info-value">${new Date(interaction.timestamp).toLocaleTimeString()}</span>
     </div>`;
+
+    if (interaction.subagent && (interaction.subagent.agentType || interaction.subagent.agentId || interaction.subagent.description)) {
+      const sa = interaction.subagent;
+      html += `<div class="info-grid subagent-info">
+        <span class="info-label">Agent</span><span class="info-value" style="color:var(--cyan)">${escHtml(sa.agentType || 'unknown')}</span>
+        <span class="info-label">Agent ID</span><span class="info-value">${escHtml(sa.agentId || '--')}</span>
+        <span class="info-label">Description</span><span class="info-value">${escHtml(sa.description || '--')}</span>
+        <span class="info-label">Sidechain</span><span class="info-value">${sa.isSidechain ? 'yes' : 'no'}</span>
+      </div>`;
+    }
 
     if (req.system) {
       const systemText = typeof req.system === 'string' ? req.system : JSON.stringify(req.system, null, 2);
@@ -1721,8 +1938,8 @@
           appendTurnToTimeline(msg.interaction);
           if (!_userPinnedSelection) {
             select({ type: 'turn', id: msg.interaction.id });
+            scrollTimelineToBottom();
           }
-          scrollTimelineToBottom();
         }
         updateStats();
         updateInspectorBusy();
@@ -1775,6 +1992,7 @@
               instanceId: inst.instanceId, profileName: inst.profileName,
               status: inst.status, spawnedAt: inst.spawnedAt,
               cwd: inst.cwd || existing?.cwd || null,
+              tabId: inst.tabId || existing?.tabId || null,
             });
           }
         }
@@ -1789,6 +2007,37 @@
         renderInspectorTabStrip();
         renderTimeline();
         updateStats();
+        break;
+      }
+
+      case 'inspector:sessionLoaded': {
+        const instanceId = msg.instanceId || `cli-${msg.sessId}`;
+        const newInteractions = msg.interactions || [];
+        const existingIds = new Set(state.interactions.map(i => i.id));
+        const toAdd = newInteractions.filter(i => !existingIds.has(i.id));
+        state.interactions.push(...toAdd);
+        state.interactions.sort((a, b) => a.timestamp - b.timestamp);
+        if (!knownInstances.has(instanceId)) {
+          knownInstances.set(instanceId, {
+            instanceId, profileName: null, status: 'running',
+            spawnedAt: toAdd[0]?.timestamp || Date.now(), cwd: null,
+          });
+        }
+        renderInspectorTabStrip();
+        if (activeInstanceTab === instanceId) renderTimeline();
+        updateStats();
+        break;
+      }
+
+      case 'interaction:enriched': {
+        const interaction = state.interactions.find(i => i.id === msg.interactionId);
+        if (interaction) {
+          interaction.subagent = msg.subagent;
+          updateTurnSubagentBadge(interaction);
+          if (state.selection?.type === 'turn' && state.selection.id === msg.interactionId) {
+            select({ type: 'turn', id: msg.interactionId });
+          }
+        }
         break;
       }
     }

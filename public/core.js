@@ -939,7 +939,10 @@ function handleMessage(msg) {
     case 'sse_event':
     case 'interaction:complete':
     case 'interaction:error':
+    case 'interaction:enriched':
     case 'cleared':
+    case 'inspector:instancesCleared':
+    case 'inspector:sessionLoaded':
       window.inspectorModule?.handleMessage(msg);
       break;
 

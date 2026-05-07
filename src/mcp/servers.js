@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { readJSON, writeJSON, ensureDir } = require('../utils');
+const { readJSON, writeJSON, ensureDir, DATA_HOME } = require('../utils');
 
 // --- Integrated MCP server directory ---
 
@@ -10,7 +10,7 @@ let serversDir = null;
 
 function getServersDir() {
   if (!serversDir) {
-    serversDir = path.join(path.dirname(path.dirname(__dirname)), 'mcp-servers');
+    serversDir = path.join(DATA_HOME, 'mcp-servers');
     ensureDir(serversDir);
   }
   return serversDir;
@@ -93,10 +93,6 @@ function loadTool(slug) {
 function saveTool(tool, oldSlug) {
   const meta = readMeta();
   if (!meta) return { error: 'Integrated server not initialized.' };
-
-  // Prevent saving over builtin tools
-  const existing = (meta.tools || []).find(t => t.slug === (tool.slug || slugify(tool.name)));
-  if (existing?.builtin) return { error: 'Cannot modify built-in tool.' };
 
   const slug = tool.slug || slugify(tool.name);
   if (!validateSlug(slug)) return { error: 'Invalid tool name. Use lowercase letters, numbers, hyphens. Min 2 chars.' };
@@ -350,12 +346,24 @@ function readToolSource(slug) {
   return { source: fs.readFileSync(filePath, 'utf8'), slug, builtin: !!tool.builtin };
 }
 
+function restoreToolSource(slug) {
+  const meta = readMeta();
+  if (!meta) return { error: 'Integrated server not initialized.' };
+  const tool = (meta.tools || []).find(t => t.slug === slug);
+  if (!tool) return { error: 'Tool not found.' };
+  const origPath = path.join(serverDir(), 'tools', slug + '.original.js');
+  if (!fs.existsSync(origPath)) return { error: 'No original version found for this tool.' };
+  const origSource = fs.readFileSync(origPath, 'utf8');
+  const filePath = path.join(serverDir(), 'tools', tool.file);
+  fs.writeFileSync(filePath, origSource);
+  return { ok: true, slug };
+}
+
 function saveToolSource(slug, source) {
   const meta = readMeta();
   if (!meta) return { error: 'Integrated server not initialized.' };
   const tool = (meta.tools || []).find(t => t.slug === slug);
   if (!tool) return { error: 'Tool not found.' };
-  if (tool.builtin) return { error: 'Cannot modify built-in tool.' };
   const filePath = path.join(serverDir(), 'tools', tool.file);
   fs.writeFileSync(filePath, source);
   return { ok: true, slug };
@@ -366,7 +374,7 @@ module.exports = {
   ensureIntegratedServer, readMeta, writeMeta,
   listTools, loadTool, saveTool, deleteTool, toggleTool,
   generateServerJs, writeToolFile,
-  readToolSource, saveToolSource,
+  readToolSource, saveToolSource, restoreToolSource,
   listFiles, readFile, writeFile, deleteFile,
   listDeps, installDep, uninstallDep, installAll,
 };
