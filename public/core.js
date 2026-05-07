@@ -1062,7 +1062,9 @@ function switchView(view) {
     }
   }
 
-  if (view === 'apps' && window.appsModule?.render) window.appsModule.render();
+  if (view === 'apps' && window.appsModule?.render) {
+    window.appsModule.render();
+  }
 }
 
 document.getElementById('headerTabs').addEventListener('click', e => {

@@ -36,7 +36,6 @@
         <button class="header-tab" data-view="dashboard">Inspector</button>
         <button class="header-tab" data-view="claude">CLIs</button>
         <button class="header-tab" data-view="directories">Directories</button>
-        <button class="header-tab header-tab-pro" data-view="apps">Apps <span class="pro-badge">PRO</span></button>
         <span class="header-tab-sep"></span>
         <button class="header-tab header-tab-config" data-view="models">Models</button>
         <button class="header-tab header-tab-config" data-view="rules">Rules</button>
@@ -44,6 +43,8 @@
       </nav>
     </div>
     <div class="header-actions">
+      <button id="proUpdateBtn" class="pro-update-btn" style="display:none" title="Update pro to latest version">&#8593; Update</button>
+      <button id="proHeaderBtn" class="pro-header-btn" title="VistaClair Pro">PRO</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
       <span id="status" class="status disconnected">disconnected</span>
       <button class="theme-toggle" id="themeToggle" title="Toggle theme">bright</button>
@@ -1356,36 +1357,39 @@ jq -r '.tool_input.command' |
     </div>
   </div>
 
-  <!-- ===== APPS VIEW ===== -->
-  <div id="view-apps" class="hidden" style="display:none">
-    <div id="appsTeaser" class="pro-teaser">
-      <div class="pro-teaser-icon">
-        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      </div>
-      <h2 class="pro-teaser-title">VistaClair Apps</h2>
-      <p class="pro-teaser-desc">Build and run AI-powered apps inside VistaClair. Each app gets a full GUI, shell access, file I/O, and Claude CLI integration.</p>
-      <div class="pro-teaser-features">
-        <div class="pro-feature-card">
-          <strong>AI Pentester</strong>
-          <span>Automated security scanning with AI-powered threat analysis</span>
+  <!-- Pro Teaser Modal -->
+  <div id="proModal" class="pro-modal-backdrop" style="display:none">
+    <div class="pro-modal">
+      <button class="pro-modal-close" id="proModalClose">&times;</button>
+      <div class="pro-teaser">
+        <div class="pro-teaser-icon">
+          <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
         </div>
-        <div class="pro-feature-card">
-          <strong>Custom App Builder</strong>
-          <span>Describe what you want, AI builds the app for you</span>
+        <h2 class="pro-teaser-title">VistaClair Pro</h2>
+        <p class="pro-teaser-desc">Build and run AI-powered apps inside VistaClair. Each app gets a full GUI, shell access, file I/O, and Claude CLI integration.</p>
+        <div class="pro-teaser-features">
+          <div class="pro-feature-card">
+            <strong>AI Pentester</strong>
+            <span>Automated security scanning with AI-powered threat analysis</span>
+          </div>
+          <div class="pro-feature-card">
+            <strong>Custom App Builder</strong>
+            <span>Describe what you want, AI builds the app for you</span>
+          </div>
+          <div class="pro-feature-card">
+            <strong>Shell + Browser Bridge</strong>
+            <span>Apps can run CLI tools, capture screenshots, spawn processes</span>
+          </div>
         </div>
-        <div class="pro-feature-card">
-          <strong>Shell + Browser Bridge</strong>
-          <span>Apps can run CLI tools, capture screenshots, spawn processes</span>
-        </div>
-      </div>
-      <div class="pro-teaser-activate">
-        <div id="proVariantButtons" class="pro-variant-buttons"></div>
-        <div id="proClaimMsg" class="pro-activate-msg"></div>
-        <div class="pro-key-activate">
-          <div class="pro-key-divider"><span>or activate with a license key</span></div>
-          <div class="pro-key-row">
-            <input type="text" id="proKeyInput" class="pro-key-input" placeholder="HPFR-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off">
-            <button class="pro-key-btn" id="proKeyBtn" onclick="activateWithKey()">Activate</button>
+        <div class="pro-teaser-activate">
+          <div id="proVariantButtons" class="pro-variant-buttons"></div>
+          <div id="proClaimMsg" class="pro-activate-msg"></div>
+          <div class="pro-key-activate">
+            <div class="pro-key-divider"><span>or activate with a license key</span></div>
+            <div class="pro-key-row">
+              <input type="text" id="proKeyInput" class="pro-key-input" placeholder="HPFR-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off">
+              <button class="pro-key-btn" id="proKeyBtn" onclick="activateWithKey()">Activate</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1451,6 +1455,27 @@ jq -r '.tool_input.command' |
   <script src="rules.js"></script>
   <script src="directories.js"></script>
   <script>
+  function applyProUpdate() {
+    var btn = document.getElementById('proUpdateBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Pulling update...'; }
+    fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.updated) {
+        if (btn) { btn.textContent = 'Updated! Restarting...'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
+        fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});
+      } else {
+        if (btn) { btn.textContent = 'Already up to date'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
+        setTimeout(function() {
+          if (btn) { btn.disabled = false; btn.textContent = '↑ Update'; btn.style.borderColor = ''; btn.style.color = ''; btn.style.display = 'none'; }
+        }, 2000);
+      }
+    }).catch(function() {
+      if (btn) { btn.disabled = false; btn.textContent = 'Update failed'; btn.style.borderColor = '#f85149'; btn.style.color = '#f85149'; }
+      setTimeout(function() {
+        if (btn) { btn.textContent = '↑ Update'; btn.style.borderColor = ''; btn.style.color = ''; }
+      }, 2000);
+    });
+  }
+
   function activateWithKey() {
     var input = document.getElementById('proKeyInput');
     var btn = document.getElementById('proKeyBtn');
@@ -1480,6 +1505,38 @@ jq -r '.tool_input.command' |
   }
 
   (function() {
+    var proLoaded = false;
+    var checkoutListenerAdded = false;
+    var portalUrl = null;
+
+    var proHeaderBtn = document.getElementById('proHeaderBtn');
+    var proUpdateBtn = document.getElementById('proUpdateBtn');
+    var proModal = document.getElementById('proModal');
+    var proModalClose = document.getElementById('proModalClose');
+
+    function showProModal() { if (proModal) proModal.style.display = 'flex'; }
+    function hideProModal() { if (proModal) proModal.style.display = 'none'; }
+
+    if (proModalClose) proModalClose.addEventListener('click', hideProModal);
+    if (proModal) {
+      proModal.addEventListener('click', function(e) { if (e.target === proModal) hideProModal(); });
+      proModal.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideProModal(); });
+    }
+
+    if (proHeaderBtn) proHeaderBtn.addEventListener('click', function() {
+      if (proHeaderBtn.classList.contains('active') && portalUrl) {
+        window.open(portalUrl, '_blank');
+      } else if (!proHeaderBtn.classList.contains('active')) {
+        showProModal();
+      }
+    });
+
+    if (proUpdateBtn) proUpdateBtn.addEventListener('click', function() {
+      proUpdateBtn.disabled = true;
+      proUpdateBtn.textContent = 'Updating...';
+      applyProUpdate();
+    });
+
     function showRegistryError(reason) {
       var container = document.getElementById('proVariantButtons');
       if (!container) return;
@@ -1488,11 +1545,25 @@ jq -r '.tool_input.command' |
         + '<span>' + reason + '</span></div>';
     }
 
-    fetch('/api/pro/status').then(function(r) { return r.json(); }).then(function(s) {
+    function renderProStatus(s) {
+      if (proHeaderBtn) {
+        if (s.loaded || s.licensed) {
+          proHeaderBtn.classList.add('active');
+          proHeaderBtn.textContent = 'Manage subscription';
+          proHeaderBtn.title = 'Manage your VistaClair Pro subscription';
+        } else {
+          proHeaderBtn.classList.remove('active');
+          proHeaderBtn.textContent = 'PRO';
+          proHeaderBtn.title = 'Get VistaClair Pro';
+        }
+      }
+
+      if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
+      if (proUpdateBtn) proUpdateBtn.style.display = s.updateAvailable ? '' : 'none';
+
       if (s.loaded) {
-        fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(u) {
-          if (u.updated) console.log('[Pro] Updated to ' + u.version + ' — restart to apply');
-        }).catch(function() {});
+        if (proLoaded) return;
+        proLoaded = true;
         var link = document.createElement('link');
         link.rel = 'stylesheet'; link.href = '/pro/apps.css';
         document.head.appendChild(link);
@@ -1507,9 +1578,19 @@ jq -r '.tool_input.command' |
         return;
       }
 
+      if (s.needsRestart) {
+        var msg = document.getElementById('proClaimMsg');
+        if (msg) { msg.textContent = 'Pro features licensed. Restarting to activate...'; msg.className = 'pro-activate-msg success'; }
+        fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});
+        return;
+      }
+
       if (s.productInfo && s.productInfo.variants && s.productInfo.variants.length) {
         var container = document.getElementById('proVariantButtons');
         if (!container) return;
+        container.innerHTML = '';
+        document.getElementById('proClaimMsg').textContent = '';
+        document.getElementById('proClaimMsg').className = 'pro-activate-msg';
         s.productInfo.variants.forEach(function(v) {
           if (!v.checkoutUrl) return;
           var btn = document.createElement('button');
@@ -1526,44 +1607,55 @@ jq -r '.tool_input.command' |
           container.appendChild(btn);
         });
 
-        var lsScript = document.createElement('script');
-        lsScript.src = 'https://app.lemonsqueezy.com/js/lemon.js';
-        lsScript.defer = true;
-        document.head.appendChild(lsScript);
+        if (!document.querySelector('script[src*="lemon.js"]')) {
+          var lsScript = document.createElement('script');
+          lsScript.src = 'https://app.lemonsqueezy.com/js/lemon.js';
+          lsScript.defer = true;
+          document.head.appendChild(lsScript);
+        }
 
-        window.addEventListener('message', function(e) {
-          if (!e.data || e.data.event !== 'Checkout.Success') return;
-          var order = e.data.data;
-          if (!order || !order.order) return;
-          var orderId = order.order.id || order.order.data?.id;
-          if (!orderId) return;
-          var msg = document.getElementById('proClaimMsg');
-          if (msg) { msg.textContent = 'Activating license...'; msg.className = 'pro-activate-msg'; }
-          var btns = container.querySelectorAll('.pro-buy-btn');
-          btns.forEach(function(b) { b.disabled = true; });
+        if (!checkoutListenerAdded) {
+          checkoutListenerAdded = true;
+          window.addEventListener('message', function(e) {
+            if (!e.data || e.data.event !== 'Checkout.Success') return;
+            var order = e.data.data;
+            if (!order || !order.order) return;
+            var orderId = order.order.id || order.order.data?.id;
+            if (!orderId) return;
+            var msg = document.getElementById('proClaimMsg');
+            if (msg) { msg.textContent = 'Activating license...'; msg.className = 'pro-activate-msg'; }
+            var btns = document.querySelectorAll('.pro-buy-btn');
+            btns.forEach(function(b) { b.disabled = true; });
 
-          fetch('/api/pro/claim', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orderId: String(orderId) })
-          }).then(function(r) { return r.json(); }).then(function(data) {
-            if (data.ok) {
-              if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
-            } else {
-              if (msg) { msg.textContent = data.error || 'Claim failed'; msg.className = 'pro-activate-msg error'; }
+            fetch('/api/pro/claim', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ orderId: String(orderId) })
+            }).then(function(r) { return r.json(); }).then(function(data) {
+              if (data.ok) {
+                if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
+              } else {
+                if (msg) { msg.textContent = data.error || 'Claim failed'; msg.className = 'pro-activate-msg error'; }
+                btns.forEach(function(b) { b.disabled = false; });
+              }
+            }).catch(function(err) {
+              if (msg) { msg.textContent = 'Connection error: ' + err.message; msg.className = 'pro-activate-msg error'; }
               btns.forEach(function(b) { b.disabled = false; });
-            }
-          }).catch(function(err) {
-            if (msg) { msg.textContent = 'Connection error: ' + err.message; msg.className = 'pro-activate-msg error'; }
-            btns.forEach(function(b) { b.disabled = false; });
+            });
           });
-        });
+        }
       } else {
         showRegistryError('This feature is still in development and will be available soon.');
       }
-    }).catch(function() {
-      showRegistryError('Unable to reach the server. Check your connection and try refreshing.');
-    });
+    }
+
+    function checkProStatus(refresh) {
+      var url = '/api/pro/status' + (refresh ? '?check=1' : '');
+      fetch(url).then(function(r) { return r.json(); }).then(renderProStatus).catch(function() {});
+    }
+
+    window.checkProStatus = checkProStatus;
+    checkProStatus(false);
   })();
   </script>
 </body>

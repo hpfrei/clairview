@@ -1,3 +1,4 @@
+require('dotenv').config();
 const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -15,8 +16,15 @@ const mcp = require('./src/mcp');
 let pro = null;
 let proLicenseValid = false;
 const proDir = path.join(DATA_HOME, 'vistaclair-pro');
-const LICENSE_SERVER = process.env.VISTACLAIR_LICENSE_URL || 'https://licencing.hpfreilabs.com';
-const PRODUCT_SLUG = process.env.HPFREILABS_PRODUCT || 'vistaclair-pro';
+const isDev = process.argv.includes('dev');
+if (isDev && !process.env.DEV_LICENCING_SERVER) {
+  console.error('Error: DEV_LICENCING_SERVER is not set. Create a .env file with DEV_LICENCING_SERVER=http://localhost:8888');
+  process.exit(1);
+}
+const LICENSE_SERVER = isDev
+  ? process.env.DEV_LICENCING_SERVER
+  : (process.env.PROD_LICENCING_SERVER || 'https://licencing.hpfreilabs.com');
+const PRODUCT_SLUG = process.env.HPFREILABS_PRODUCT || 'vistaclair-pro-subscription';
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 
@@ -70,18 +78,19 @@ async function validateLicense() {
       r.end();
     });
 
-    return { valid: !!response.valid, reason: response.valid ? 'ok' : (response.error || 'invalid') };
+    return { valid: !!response.valid, reason: response.valid ? 'ok' : (response.error || 'invalid'), customerPortalUrl: response.customerPortalUrl || null };
   } catch {
     return { valid: true, reason: 'offline-grace' };
   }
 }
 
 let productInfo = null;
+let customerPortalUrl = null;
 
 async function fetchProductInfo() {
   try {
     const https = require('https');
-    const infoUrl = new URL(`/api/product/${PRODUCT_SLUG}/info`, LICENSE_SERVER);
+    const infoUrl = new URL(`/api/product/group/${PRODUCT_SLUG}`, LICENSE_SERVER);
     const data = await new Promise((resolve, reject) => {
       const mod = infoUrl.protocol === 'https:' ? https : require('http');
       const r = mod.request(infoUrl, { timeout: 10000 }, (resp) => {
@@ -106,6 +115,7 @@ setInterval(fetchProductInfo, 60 * 60 * 1000);
 if (fs.existsSync(proDir)) {
   const result = await validateLicense();
   proLicenseValid = result.valid;
+  customerPortalUrl = result.customerPortalUrl || null;
   if (proLicenseValid) {
     try { pro = require('./vistaclair-pro'); } catch (e) {
       console.error('  Pro: failed to load:', e.message);
@@ -261,22 +271,41 @@ dashboardApp.use(express.static(path.join(__dirname, 'public')));
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
 
+function rewriteGitUrl(url, auth) {
+  const parsed = new URL(url);
+  const target = new URL(LICENSE_SERVER);
+  parsed.protocol = target.protocol;
+  parsed.hostname = target.hostname;
+  parsed.port = target.port;
+  if (auth) parsed.username = auth.username;
+  if (auth) parsed.password = auth.password;
+  return parsed.toString();
+}
+
 function installPro(response, licenseKey) {
   const { execFileSync } = require('child_process');
-  const gitAuth = response.gitCredentials
-    ? `${encodeURIComponent(response.gitCredentials.username)}:${encodeURIComponent(response.gitCredentials.password)}@`
-    : '';
+  const creds = response.gitCredentials
+    ? { username: encodeURIComponent(response.gitCredentials.username), password: encodeURIComponent(response.gitCredentials.password) }
+    : null;
 
   if (!fs.existsSync(proDir)) {
-    const cloneUrl = response.gitUrl.replace('https://', `https://${gitAuth}`);
-    execFileSync('git', ['clone', cloneUrl, 'vistaclair-pro'], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
+    const cloneUrl = rewriteGitUrl(response.gitUrl, creds);
+    const safeUrl = cloneUrl.replace(/:\/\/[^@]+@/, '://***@');
+    console.log(`[pro] Cloning from ${safeUrl}`);
+    try {
+      execFileSync('git', ['clone', cloneUrl, 'vistaclair-pro'], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
+      console.log('[pro] Clone successful');
+    } catch (err) {
+      console.error(`[pro] Clone failed: ${err.message}`);
+      throw err;
+    }
   }
 
   if (response.extras) {
     for (const extra of response.extras) {
       const dir = path.join(DATA_HOME, extra.name);
       if (!fs.existsSync(dir)) {
-        const extraUrl = extra.gitUrl.replace('https://', `https://${gitAuth}`);
+        const extraUrl = rewriteGitUrl(extra.gitUrl, creds);
         try {
           execFileSync('git', ['clone', extraUrl, extra.name], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
         } catch (e) {
@@ -384,7 +413,26 @@ dashboardApp.post('/api/pro/activate', async (req, res) => {
   }
 });
 
-// Pro update check — pulls latest if pro is installed
+// Pro update check/apply
+let proUpdateAvailable = false;
+
+function checkProUpdates() {
+  if (!fs.existsSync(proDir)) return;
+  try {
+    const { execSync } = require('child_process');
+    execSync('git fetch', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
+    const local = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
+    const remote = execSync('git rev-parse @{u}', { cwd: proDir, encoding: 'utf-8' }).trim();
+    proUpdateAvailable = local !== remote;
+    if (proUpdateAvailable) console.log('[pro] Update available');
+  } catch {}
+}
+
+if (fs.existsSync(proDir) && proLicenseValid) {
+  checkProUpdates();
+  setInterval(checkProUpdates, 60 * 60 * 1000);
+}
+
 dashboardApp.post('/api/pro/update', async (req, res) => {
   try {
     const { execSync } = require('child_process');
@@ -394,27 +442,49 @@ dashboardApp.post('/api/pro/update', async (req, res) => {
     try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); } catch {}
     const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
 
-    // Also update vistaclair-apps if present
     const appsDir = path.join(DATA_HOME, 'vistaclair-apps');
     if (fs.existsSync(path.join(appsDir, '.git'))) {
       try { execSync('git pull --ff-only', { cwd: appsDir, stdio: 'pipe', timeout: 30000 }); } catch {}
     }
 
     const updated = before !== after;
+    proUpdateAvailable = false;
     res.json({ ok: true, updated, version: after.slice(0, 8) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-dashboardApp.get('/api/pro/status', (req, res) => {
+dashboardApp.get('/api/pro/status', async (req, res) => {
+  if (req.query.check === '1') {
+    const result = await validateLicense();
+    proLicenseValid = result.valid;
+    customerPortalUrl = result.customerPortalUrl || customerPortalUrl;
+  }
   const installed = fs.existsSync(proDir);
   res.json({
     installed,
     licensed: proLicenseValid,
     loaded: !!pro,
+    needsRestart: installed && proLicenseValid && !pro,
+    updateAvailable: proUpdateAvailable,
+    customerPortalUrl: proLicenseValid ? customerPortalUrl : undefined,
     productInfo: (!pro && !proLicenseValid) ? productInfo : undefined,
   });
+});
+
+dashboardApp.post('/api/pro/restart', (req, res) => {
+  if (!proLicenseValid || !fs.existsSync(proDir)) return res.status(400).json({ error: 'Not ready' });
+  res.json({ ok: true });
+  setTimeout(() => {
+    broadcaster.broadcast({ type: 'server:restarting' });
+    const child = spawn(process.argv[0], process.argv.slice(1), {
+      detached: true, stdio: 'inherit', cwd: process.cwd(),
+      env: { ...process.env, AUTH_TOKEN },
+    });
+    child.unref();
+    process.exit(0);
+  }, 500);
 });
 
 const dashboardServer = http.createServer(dashboardApp);
