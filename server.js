@@ -146,6 +146,7 @@ const proxyServer = http.createServer(proxyApp);
 
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
+dashboardApp.set('trust proxy', true);
 dashboardApp.use(express.json({ limit: '50mb' }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
@@ -442,10 +443,7 @@ dashboardApp.post('/api/pro/update', async (req, res) => {
     try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); } catch {}
     const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
 
-    const appsDir = path.join(DATA_HOME, 'vistaclair-apps');
-    if (fs.existsSync(path.join(appsDir, '.git'))) {
-      try { execSync('git pull --ff-only', { cwd: appsDir, stdio: 'pipe', timeout: 30000 }); } catch {}
-    }
+    if (pro?.update) await pro.update();
 
     const updated = before !== after;
     proUpdateAvailable = false;
@@ -466,6 +464,7 @@ dashboardApp.get('/api/pro/status', async (req, res) => {
     installed,
     licensed: proLicenseValid,
     loaded: !!pro,
+    clientModules: pro ? proClientModules : undefined,
     needsRestart: installed && proLicenseValid && !pro,
     updateAvailable: proUpdateAvailable,
     customerPortalUrl: proLicenseValid ? customerPortalUrl : undefined,
@@ -505,6 +504,10 @@ dashboardServer.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
+
+  // VNC WebSocket proxy for GUI apps
+  if (proResult?.handleUpgrade?.(req, socket, head)) return;
+
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
   });
@@ -519,8 +522,11 @@ createProxyRouter._cliSettingsGetter = (instanceId) => cliSessionManager.getSett
 mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
 // Initialize Pro (Apps Platform) if available
+let proClientModules = null;
+let proResult = null;
 if (pro) {
-  pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager });
+  proResult = pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager });
+  proClientModules = proResult?.clientModules || null;
   console.log('  Pro: loaded');
 }
 

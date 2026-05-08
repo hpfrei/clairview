@@ -14,7 +14,7 @@ class DashboardBroadcaster {
     this._proxyPort = opts.proxyPort || 3456;
     this.cliSessionManager = opts.cliSessionManager || null;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
-    this.appsHandler = null; // Set externally by src/apps/index.js
+    this._pluginHandlers = [];
 
     this.wss.on('connection', (ws) => {
       // Send full history on connect
@@ -50,8 +50,10 @@ class DashboardBroadcaster {
       if (this.mcpHandler) this.mcpHandler.onConnect(ws);
       // Rule handler init
       if (this.ruleHandler) this.ruleHandler.onConnect(ws);
-      // Apps platform init
-      if (this.appsHandler) this.appsHandler.onConnect(ws);
+      // Plugin handlers init
+      for (const { handler } of this._pluginHandlers) {
+        if (handler.onConnect) handler.onConnect(ws);
+      }
 
       // CLI tabs init
       if (this.cliSessionManager) {
@@ -237,8 +239,8 @@ class DashboardBroadcaster {
             if (this.mcpHandler?.handleBridgeReport) this.mcpHandler.handleBridgeReport(msg);
           } else if (msg.type.startsWith('rule:')) {
             if (this.ruleHandler) this.ruleHandler.handleMessage(ws, msg, this);
-          } else if (msg.type.startsWith('app:')) {
-            if (this.appsHandler) this.appsHandler.handleMessage(ws, msg, this);
+          } else if (this._dispatchPlugin(ws, msg)) {
+            // Handled by plugin
           } else if (msg.type.startsWith('mcp:')) {
             if (this.mcpHandler) this.mcpHandler.handleMessage(ws, msg, this);
           // --- CLI Terminal ---
@@ -312,6 +314,22 @@ class DashboardBroadcaster {
         } catch (err) { console.error('WS message handling error:', err); }
       });
     });
+  }
+
+  registerHandler(prefix, handler) {
+    this._pluginHandlers.push({ prefix, handler });
+  }
+
+  _dispatchPlugin(ws, msg) {
+    let best = null;
+    for (const p of this._pluginHandlers) {
+      if (msg.type.startsWith(p.prefix) && (!best || p.prefix.length > best.prefix.length)) {
+        best = p;
+      }
+    }
+    if (!best) return false;
+    best.handler.handleMessage(ws, msg, this);
+    return true;
   }
 
   broadcast(message) {

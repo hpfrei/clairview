@@ -1526,6 +1526,26 @@ jq -r '.tool_input.command' |
     if (proHeaderBtn) proHeaderBtn.addEventListener('click', function() {
       if (proHeaderBtn.classList.contains('active') && portalUrl) {
         window.open(portalUrl, '_blank');
+      } else if (proHeaderBtn.classList.contains('active') && !portalUrl) {
+        proHeaderBtn.textContent = 'Loading...';
+        proHeaderBtn.disabled = true;
+        fetch('/api/pro/status?check=1')
+          .then(function(r) { return r.json(); })
+          .then(function(s) {
+            if (s.customerPortalUrl) {
+              portalUrl = s.customerPortalUrl;
+              window.open(portalUrl, '_blank');
+            } else {
+              alert('Unable to load subscription management page. Please try again or contact support.');
+            }
+          })
+          .catch(function() {
+            alert('Connection error. Please check your network and try again.');
+          })
+          .finally(function() {
+            proHeaderBtn.textContent = 'Manage subscription';
+            proHeaderBtn.disabled = false;
+          });
       } else if (!proHeaderBtn.classList.contains('active')) {
         showProModal();
       }
@@ -1561,20 +1581,23 @@ jq -r '.tool_input.command' |
       if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
       if (proUpdateBtn) proUpdateBtn.style.display = s.updateAvailable ? '' : 'none';
 
-      if (s.loaded) {
-        if (proLoaded) return;
+      if (s.loaded && s.clientModules && !proLoaded) {
         proLoaded = true;
-        var link = document.createElement('link');
-        link.rel = 'stylesheet'; link.href = '/pro/apps.css';
-        document.head.appendChild(link);
-        var s1 = document.createElement('script');
-        s1.src = '/pro/apps.js';
-        s1.onload = function() {
-          var s2 = document.createElement('script');
-          s2.src = '/pro/app-bridge-client.js';
-          document.body.appendChild(s2);
-        };
-        document.body.appendChild(s1);
+        s.clientModules.forEach(function(mod) {
+          (mod.styles || []).forEach(function(href) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet'; link.href = href;
+            document.head.appendChild(link);
+          });
+          var scripts = mod.scripts || [];
+          (function loadNext(i) {
+            if (i >= scripts.length) return;
+            var el = document.createElement('script');
+            el.src = scripts[i];
+            el.onload = function() { loadNext(i + 1); };
+            document.body.appendChild(el);
+          })(0);
+        });
         return;
       }
 
