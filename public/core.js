@@ -873,14 +873,12 @@ window.dashboard = {
   emptyState,
   statsEl,
   _pluginHandlers: [],
-  registerModule(prefix, handler) {
-    this._pluginHandlers.push({ prefix, handler });
-  },
+  registerModule: null,
   _viewCallbacks: {},
-  registerView(viewId, renderFn) {
-    this._viewCallbacks[viewId] = renderFn;
-  },
+  registerView: null,
 };
+dashboard.registerModule = (prefix, handler) => { dashboard._pluginHandlers.push({ prefix, handler }); };
+dashboard.registerView = (viewId, renderFn) => { dashboard._viewCallbacks[viewId] = renderFn; };
 
 // --- WebSocket ---
 function connect() {
