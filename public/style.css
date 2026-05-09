@@ -79,11 +79,11 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
   padding: 6px 16px;
   font-size: 12px;
   font-weight: 500;
-  background: rgb(30 32 48 / 79%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.55);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -93,13 +93,13 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
   font-family: inherit;
   transition: color 0.15s, background 0.15s;
 }
-.view-tab:hover { color: #fff; background: rgb(30 32 48 / 95%); }
+.view-tab:hover { color: #fff; background: rgba(255, 255, 255, 0.18); }
 .view-tab.active,
 .view-tab.active:hover {
   background: var(--paper-bg);
   color: var(--text);
   border-color: var(--paper-border);
-  border-bottom-color: transparent;
+  border-bottom-color: var(--paper-bg);
   box-shadow: var(--tab-active-shadow);
   font-weight: 600;
   margin-bottom: -1px;
@@ -116,16 +116,16 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
 .view-tab-new {
   padding: 5px 10px;
   font-size: 13px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-bottom: none;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.45);
   cursor: pointer;
   border-radius: 8px 8px 0 0;
   flex-shrink: 0;
   transition: color 0.15s, background 0.15s;
 }
-.view-tab-new:hover { color: #fff; background: rgba(255, 255, 255, 0.2); }
+.view-tab-new:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.16); }
 .view-tab-action {
   position: relative;
   margin-left: auto;
@@ -1217,34 +1217,54 @@ footer {
 }
 .tab-close:hover { opacity: 1; }
 
-/* CLI subtab theming */
+/* CLI subtab theming — always dark to match the terminal area */
 #cliTabStrip .view-tab {
-  background: var(--bg-hover);
-  color: var(--tab-inactive-text);
-  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.10);
+  color: rgba(200, 210, 230, 0.6);
+  border-color: rgba(255, 255, 255, 0.10);
   border-bottom: none;
 }
 #cliTabStrip .view-tab:hover {
-  background: var(--bg-selected);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(230, 235, 245, 0.9);
 }
 #cliTabStrip .view-tab.active,
 #cliTabStrip .view-tab.active:hover {
-  background: var(--bg-surface);
-  color: var(--accent);
-  border-color: var(--accent);
-  border-bottom-color: transparent;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  border-color: rgba(160, 160, 255, 0.4);
+  border-bottom-color: #1a1a2e;
   font-weight: 600;
 }
+#cliTabStrip .view-tab.instance-exited {
+  color: rgba(255, 127, 127, 0.7);
+}
+#cliTabStrip .view-tab.instance-exited.active {
+  color: rgba(200, 200, 220, 0.5);
+}
+#cliTabStrip .tab-close:hover {
+  color: #f7768e;
+}
 #cliTabStrip .view-tab-new {
-  background: var(--bg-hover);
-  color: var(--tab-inactive-text);
-  border-color: var(--border);
+  background: rgba(160, 160, 255, 0.12);
+  color: rgba(180, 190, 230, 0.7);
+  border-color: rgba(160, 160, 255, 0.2);
   border-bottom: none;
 }
 #cliTabStrip .view-tab-new:hover {
-  background: var(--bg-selected);
-  color: var(--text);
+  background: rgba(160, 160, 255, 0.22);
+  color: rgba(220, 225, 245, 0.95);
+}
+
+/* Directory subtab "+" button — slightly brighter than inactive tabs */
+#dirTabStrip .view-tab-new {
+  background: rgba(255, 255, 255, 0.13);
+  color: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+#dirTabStrip .view-tab-new:hover {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
 }
 
 /* CLI "+" dropdown menu */

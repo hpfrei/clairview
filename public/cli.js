@@ -11,6 +11,7 @@
   const pendingAskOverlays = new Map();
   let _firstTabSync = true;
   const _respawnQueue = [];
+  const _scrollbackLoaded = new Set();
 
   function _saveOpenTabs() {
     const entries = [];
@@ -82,6 +83,10 @@
     renderTabStrip();
     const tab = tabs.get(tabId);
     if (tab) {
+      if (!_scrollbackLoaded.has(tabId)) {
+        _scrollbackLoaded.add(tabId);
+        sendWs({ type: 'cli:requestScrollback', tabId });
+      }
       setTimeout(() => {
         try { tab.fitAddon.fit(); } catch {}
         tab.terminal.focus();
@@ -212,6 +217,7 @@
 
   function removeTab(tabId) {
     dismissAskOverlay(tabId);
+    _scrollbackLoaded.delete(tabId);
     const tab = tabs.get(tabId);
     if (tab) {
       tab.terminal.dispose();
@@ -605,6 +611,7 @@
           if (typeof switchView === 'function') switchView('claude');
         }
         if (tab) {
+          _scrollbackLoaded.add(msg.tabId);
           tab.status = 'running';
           tab.cwd = msg.cwd;
           if (msg.instanceId) {
@@ -616,6 +623,10 @@
           tab.settings = msg.settings || {};
           _saveOpenTabs();
           renderTabStrip();
+        }
+        // Staggered respawn: trigger next tab after this one spawns
+        if (_respawnQueue.length > 0) {
+          sendWs({ type: 'cli:newTab' });
         }
         break;
       }
@@ -705,11 +716,13 @@
             if (!tabs.has(st.tabId)) createTab(st.tabId);
           }
         } else {
-          // Server has none of our tabs (server restarted) — re-spawn from stored state
+          // Server has none of our tabs (server restarted) — stagger re-spawns
           for (const entry of prev) {
             if (!entry.cwd || !entry.sessId) continue;
-            sendWs({ type: 'cli:newTab' });
             _respawnQueue.push(entry);
+          }
+          if (_respawnQueue.length > 0) {
+            sendWs({ type: 'cli:newTab' });
           }
           return;
         }

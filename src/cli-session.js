@@ -60,15 +60,21 @@ class CliSession {
     this.store.registerSession(this.instanceId, this.sessId);
 
     if (resumeSessionId) {
-      const historical = this.store.loadSessionIntoMemory(this.sessId);
-      if (historical.length > 0) {
-        this.broadcaster.broadcast({
-          type: 'inspector:sessionLoaded',
-          sessId: this.sessId,
-          instanceId: this.instanceId,
-          interactions: historical.map(sanitizeForDashboard),
-        });
-      }
+      const store = this.store;
+      const sessId = this.sessId;
+      const instanceId = this.instanceId;
+      const broadcaster = this.broadcaster;
+      setImmediate(() => {
+        const historical = store.loadSessionIntoMemory(sessId);
+        if (historical.length > 0) {
+          broadcaster.broadcast({
+            type: 'inspector:sessionLoaded',
+            sessId,
+            instanceId,
+            interactions: historical.map(sanitizeForDashboard),
+          });
+        }
+      });
     }
 
     const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];

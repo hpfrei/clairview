@@ -6,6 +6,26 @@ const caps = require('./capabilities');
 
 const PROJECT_ROOT = DATA_HOME;
 
+const SCROLLBACK_CHUNK_SIZE = 16 * 1024;
+
+function sendScrollbackChunked(ws, tabId, data) {
+  if (data.length <= SCROLLBACK_CHUNK_SIZE) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'cli:output', tabId, data }));
+    }
+    return;
+  }
+  let offset = 0;
+  function sendNext() {
+    if (offset >= data.length || ws.readyState !== WebSocket.OPEN) return;
+    const chunk = data.slice(offset, offset + SCROLLBACK_CHUNK_SIZE);
+    offset += SCROLLBACK_CHUNK_SIZE;
+    ws.send(JSON.stringify({ type: 'cli:output', tabId, data: chunk }));
+    setImmediate(sendNext);
+  }
+  sendNext();
+}
+
 class DashboardBroadcaster {
   constructor(wss, store, opts = {}) {
     this.wss = wss;
@@ -55,15 +75,9 @@ class DashboardBroadcaster {
         if (handler.onConnect) handler.onConnect(ws);
       }
 
-      // CLI tabs init
+      // CLI tabs init — send tab metadata only; scrollback is loaded on demand
       if (this.cliSessionManager) {
         ws.send(JSON.stringify({ type: 'cli:tabs', tabs: this.cliSessionManager.list() }));
-        for (const [tabId, session] of this.cliSessionManager.sessions) {
-          const scrollback = session.getScrollback();
-          if (scrollback) {
-            ws.send(JSON.stringify({ type: 'cli:output', tabId, data: scrollback }));
-          }
-        }
       }
 
       ws.on('message', (data) => {
@@ -300,6 +314,14 @@ class DashboardBroadcaster {
                 settings: session ? session.getSettings() : {},
                 models,
               }));
+            }
+          } else if (msg.type === 'cli:requestScrollback') {
+            if (this.cliSessionManager && msg.tabId) {
+              const session = this.cliSessionManager.get(msg.tabId);
+              const scrollback = session?.getScrollback();
+              if (scrollback) {
+                sendScrollbackChunked(ws, msg.tabId, scrollback);
+              }
             }
           } else if (msg.type === 'cli:getSavedSessions') {
             if (this.cliSessionManager) {
