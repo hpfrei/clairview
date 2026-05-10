@@ -111,6 +111,64 @@ Open **http://localhost:3457** and log in with the token.
 > [!WARNING]
 > The dashboard binds to `0.0.0.0` for remote access. It is protected by the auth token, but do not expose it to untrusted networks without TLS/VPN.
 
+### Running with full system access
+
+By default, Claude Code sessions spawned from vistaclair run under your user account. To unlock its full potential -- letting Claude install packages, configure services, modify system files, and set up entire environments from scratch -- run vistaclair as root:
+
+```bash
+sudo npm start
+```
+
+This gives every Claude Code session spawned from the dashboard full root access. Combined with the **full** profile (`bypassPermissions`), Claude can:
+
+- Install system packages (`apt install`, `brew install`, `snap install`)
+- Configure and start services (nginx, PostgreSQL, Docker, systemd units)
+- Manage users, permissions, and SSH keys
+- Set up development toolchains and language runtimes
+- Modify system configuration files (`/etc/`, crontabs, environment)
+- Build and deploy applications end-to-end
+- Mount filesystems, manage disks and network interfaces
+
+#### Recommended: use a VM
+
+Running an AI agent as root is powerful but carries risk on your primary machine. A virtual machine gives you the best of both worlds -- full system access in an isolated sandbox where nothing can escape:
+
+```bash
+# On a fresh Ubuntu VM:
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+
+# Install Claude Code CLI
+npm install -g @anthropic-ai/claude-code
+claude login   # authenticate once
+
+# Clone and run vistaclair as root
+git clone https://github.com/hpfrei/vistaclair.git
+cd vistaclair && npm install
+sudo npm start
+```
+
+Then open `http://<vm-ip>:3457` from your host browser. You now have a remote, browser-controlled Claude with root access in a disposable environment.
+
+> [!TIP]
+> **Snapshot before, experiment freely.** Take a VM snapshot before starting. If Claude misconfigures something, roll back in seconds. This is the fastest way to iterate on complex system setups.
+
+> [!TIP]
+> **Headless servers and cloud VMs work great.** vistaclair's dashboard is fully browser-based -- no desktop environment needed. A $5/month VPS or a local QEMU/VirtualBox VM is all it takes.
+
+#### What you can ask Claude to do with root
+
+Once running with `sudo`, spawn a **full** profile session and try things like:
+
+- *"Set up a complete LAMP stack with PHP 8.3, MariaDB, and a sample WordPress site"*
+- *"Install Docker, pull the postgres:16 image, create a database, and set up pgAdmin"*
+- *"Configure nginx as a reverse proxy for three Node.js apps with SSL via Let's Encrypt"*
+- *"Install and configure Tailscale so I can access this VM from anywhere"*
+- *"Set up a Python 3.12 virtualenv, install PyTorch with CUDA support, and verify GPU access"*
+- *"Create a systemd service that runs this Node.js app on boot with automatic restart"*
+
+Claude handles the full loop -- installing dependencies, writing configs, starting services, verifying everything works, and fixing issues along the way.
+
 ---
 
 ## Features
