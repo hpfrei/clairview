@@ -47,6 +47,58 @@ const createApiRouter = require('./src/api');
   process.exit(child.status ?? 1);
 })();
 
+function getMachineId() {
+  const os = require('os');
+  const fs = require('fs');
+
+  let raw = null;
+  if (process.platform === 'linux') {
+    try { raw = fs.readFileSync('/etc/machine-id', 'utf-8').trim(); } catch {}
+  } else if (process.platform === 'darwin') {
+    try {
+      const out = require('child_process').execSync('ioreg -rd1 -c IOPlatformExpertDevice', { encoding: 'utf-8', timeout: 5000 });
+      const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+      if (m) raw = m[1];
+    } catch {}
+  } else if (process.platform === 'win32') {
+    try {
+      const out = require('child_process').execSync('wmic csproduct get UUID', { encoding: 'utf-8', timeout: 5000 });
+      const lines = out.trim().split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length >= 2 && lines[1] !== 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF') raw = lines[1];
+    } catch {}
+  }
+  if (!raw) raw = os.hostname() + '|' + os.userInfo().username;
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+}
+
+const OFFLINE_GRACE_DAYS = 7;
+
+function fetchSigningKey() {
+  return new Promise((resolve, reject) => {
+    const keyUrl = new URL('/api/signing-key', LICENSE_SERVER);
+    const mod = keyUrl.protocol === 'https:' ? require('https') : require('http');
+    const r = mod.request(keyUrl, { timeout: 10000 }, (resp) => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => resolve(data.trim()));
+    });
+    r.on('error', reject);
+    r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
+    r.end();
+  });
+}
+
+function verifySignature(signedFields, signature, publicKeyPem) {
+  if (!signature || !signedFields || !publicKeyPem) return false;
+  try {
+    const pubKey = crypto.createPublicKey(publicKeyPem);
+    const canonical = JSON.stringify(signedFields);
+    return crypto.verify(null, Buffer.from(canonical), pubKey, Buffer.from(signature, 'base64'));
+  } catch {
+    return false;
+  }
+}
+
 async function validateLicense() {
   const fs = require('fs');
   const licPath = path.join(DATA_HOME, 'data', 'license.json');
@@ -56,9 +108,7 @@ async function validateLicense() {
   try { stored = JSON.parse(fs.readFileSync(licPath, 'utf-8')); } catch { return { valid: false, reason: 'corrupt' }; }
   if (!stored.key) return { valid: false, reason: 'no-key' };
 
-  const os = require('os');
-  const machineId = crypto.createHash('sha256')
-    .update(os.hostname() + os.userInfo().username).digest('hex').slice(0, 16);
+  const machineId = getMachineId();
 
   try {
     const https = require('https');
@@ -78,9 +128,30 @@ async function validateLicense() {
       r.end();
     });
 
+    if (response.valid && response.signature) {
+      // Fetch and cache public key if we don't have it or if it changed
+      if (!stored.signingKey) {
+        try { stored.signingKey = await fetchSigningKey(); } catch {}
+      }
+      if (stored.signingKey && verifySignature(response.signedFields, response.signature, stored.signingKey)) {
+        stored.lastValidation = response.signedFields;
+        stored.lastSignature = response.signature;
+        fs.writeFileSync(licPath, JSON.stringify(stored));
+      }
+    }
+
     return { valid: !!response.valid, reason: response.valid ? 'ok' : (response.error || 'invalid'), customerPortalUrl: response.customerPortalUrl || null };
   } catch {
-    return { valid: true, reason: 'offline-grace' };
+    if (stored.lastValidation && stored.lastSignature && stored.signingKey) {
+      if (verifySignature(stored.lastValidation, stored.lastSignature, stored.signingKey)) {
+        const ageMs = Date.now() - new Date(stored.lastValidation.validatedAt).getTime();
+        if (ageMs <= OFFLINE_GRACE_DAYS * 24 * 60 * 60 * 1000) {
+          return { valid: true, reason: 'offline-grace' };
+        }
+        return { valid: false, reason: 'offline-grace-expired' };
+      }
+    }
+    return { valid: false, reason: 'offline-no-cache' };
   }
 }
 
@@ -252,6 +323,9 @@ dashboardApp.post('/api/ask', async (req, res) => {
 // Landing page (public, no auth)
 dashboardApp.use('/landing_page', express.static(path.join(__dirname, 'public', 'landing_page')));
 
+// Health check (no auth — used by client to detect restart completion)
+dashboardApp.get('/api/ping', (req, res) => res.json({ ok: true }));
+
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
   // Allow internal requests from MCP tools (localhost + internal header)
@@ -329,7 +403,7 @@ dashboardApp.post('/api/pro/claim', async (req, res) => {
     const os = require('os');
     const hostname = os.hostname();
     const username = os.userInfo().username;
-    const machineId = crypto.createHash('sha256').update(hostname + username).digest('hex').slice(0, 16);
+    const machineId = getMachineId();
 
     const body = JSON.stringify({ orderId, product: PRODUCT_SLUG, machineId, hostname, username });
     const claimUrl = new URL('/api/claim', LICENSE_SERVER);
@@ -353,16 +427,7 @@ dashboardApp.post('/api/pro/claim', async (req, res) => {
 
     res.json({ ok: true, message: 'Pro activated. Restarting...' });
 
-    setTimeout(() => {
-      broadcaster.broadcast({ type: 'server:restarting' });
-      cliSessionManager.killAll();
-      const child = spawn(process.argv[0], process.argv.slice(1), {
-        detached: true, stdio: 'inherit', cwd: process.cwd(),
-        env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
-      });
-      child.unref();
-      process.exit(0);
-    }, 500);
+    scheduleRestart();
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -377,7 +442,7 @@ dashboardApp.post('/api/pro/activate', async (req, res) => {
     const os = require('os');
     const hostname = os.hostname();
     const username = os.userInfo().username;
-    const machineId = crypto.createHash('sha256').update(hostname + username).digest('hex').slice(0, 16);
+    const machineId = getMachineId();
 
     const body = JSON.stringify({ key, product: PRODUCT_SLUG, machineId, hostname, username });
     const activateUrl = new URL('/api/activate', LICENSE_SERVER);
@@ -401,16 +466,7 @@ dashboardApp.post('/api/pro/activate', async (req, res) => {
 
     res.json({ ok: true, message: 'Pro activated. Restarting...' });
 
-    setTimeout(() => {
-      broadcaster.broadcast({ type: 'server:restarting' });
-      cliSessionManager.killAll();
-      const child = spawn(process.argv[0], process.argv.slice(1), {
-        detached: true, stdio: 'inherit', cwd: process.cwd(),
-        env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
-      });
-      child.unref();
-      process.exit(0);
-    }, 500);
+    scheduleRestart();
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -477,16 +533,7 @@ dashboardApp.get('/api/pro/status', async (req, res) => {
 dashboardApp.post('/api/pro/restart', (req, res) => {
   if (!proLicenseValid || !fs.existsSync(proDir)) return res.status(400).json({ error: 'Not ready' });
   res.json({ ok: true });
-  setTimeout(() => {
-    broadcaster.broadcast({ type: 'server:restarting' });
-    cliSessionManager.killAll();
-    const child = spawn(process.argv[0], process.argv.slice(1), {
-      detached: true, stdio: 'inherit', cwd: process.cwd(),
-      env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
-    });
-    child.unref();
-    process.exit(0);
-  }, 500);
+  scheduleRestart();
 });
 
 const dashboardServer = http.createServer(dashboardApp);
@@ -538,16 +585,12 @@ ruleHandler.init({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DAS
 // Mount REST API
 dashboardApp.use('/api', createApiRouter({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN, cliSessionManager }));
 
-// Restart endpoint (auth handled by middleware)
-dashboardApp.post('/api/restart', (req, res) => {
-  res.json({ ok: true, message: 'Server restarting...' });
+function scheduleRestart() {
   setTimeout(() => {
     broadcaster.broadcast({ type: 'server:restarting' });
-    // Force-close all WebSocket clients
     for (const client of wss.clients) {
       try { client.terminate(); } catch {}
     }
-    // Force-close all HTTP connections so server.close() completes
     dashboardServer.closeAllConnections?.();
     proxyServer.closeAllConnections?.();
     cliSessionManager.saveAllToHistory();
@@ -567,9 +610,14 @@ dashboardApp.post('/api/restart', (req, res) => {
     const onClosed = () => { if (++closed >= 2) spawnNew(); };
     dashboardServer.close(onClosed);
     proxyServer.close(onClosed);
-    // Fallback: force exit and spawn even if close callbacks haven't fired
     setTimeout(spawnNew, 2000);
   }, 300);
+}
+
+// Restart endpoint (auth handled by middleware)
+dashboardApp.post('/api/restart', (req, res) => {
+  res.json({ ok: true, message: 'Server restarting...' });
+  scheduleRestart();
 });
 
 // Kill stale processes on our ports before binding (handles unclean restarts)

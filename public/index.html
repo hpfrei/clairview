@@ -1461,6 +1461,7 @@ jq -r '.tool_input.command' |
     fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.updated) {
         if (btn) { btn.textContent = 'Updated! Restarting...'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
+        showRestartingOverlay();
         fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});
       } else {
         if (btn) { btn.textContent = 'Already up to date'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
@@ -1492,6 +1493,7 @@ jq -r '.tool_input.command' |
     }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.ok) {
         if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
+        showRestartingOverlay();
       } else {
         if (msg) { msg.textContent = data.error || 'Activation failed'; msg.className = 'pro-activate-msg error'; }
         btn.disabled = false;
@@ -1604,6 +1606,7 @@ jq -r '.tool_input.command' |
       if (s.needsRestart) {
         var msg = document.getElementById('proClaimMsg');
         if (msg) { msg.textContent = 'Pro features licensed. Restarting to activate...'; msg.className = 'pro-activate-msg success'; }
+        showRestartingOverlay();
         fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});
         return;
       }
@@ -1657,6 +1660,7 @@ jq -r '.tool_input.command' |
             }).then(function(r) { return r.json(); }).then(function(data) {
               if (data.ok) {
                 if (msg) { msg.textContent = 'Activated! Restarting...'; msg.className = 'pro-activate-msg success'; }
+                showRestartingOverlay();
               } else {
                 if (msg) { msg.textContent = data.error || 'Claim failed'; msg.className = 'pro-activate-msg error'; }
                 btns.forEach(function(b) { b.disabled = false; });

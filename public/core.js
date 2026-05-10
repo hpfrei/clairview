@@ -38,6 +38,7 @@ const state = {
   editingModel: null,
   mcpServers: [],
   serverRestarting: false,
+  wasConnected: false,
 };
 
 // --- Utilities ---
@@ -328,6 +329,7 @@ function showAlert(message) {
 
 // --- Restart server ---
 function showRestartingOverlay() {
+  if (state.serverRestarting) return;
   state.serverRestarting = true;
   state.restartStartedAt = Date.now();
   document.querySelector('.restart-overlay')?.remove();
@@ -335,6 +337,32 @@ function showRestartingOverlay() {
   overlay.className = 'restart-overlay';
   overlay.innerHTML = `<div class="restart-overlay-content"><div class="restart-spinner"></div><div class="restart-overlay-text">Server restarting\u2026</div></div>`;
   document.body.appendChild(overlay);
+  setTimeout(pollForRestart, 2000);
+}
+
+function pollForRestart() {
+  if (!state.serverRestarting) return;
+  if (Date.now() - (state.restartStartedAt || 0) > 30000) {
+    state.serverRestarting = false;
+    const overlay = document.querySelector('.restart-overlay');
+    if (overlay) {
+      overlay.querySelector('.restart-spinner')?.remove();
+      const text = overlay.querySelector('.restart-overlay-text');
+      if (text) text.textContent = 'Restart timed out.';
+      const btn = document.createElement('button');
+      btn.textContent = 'Reload Page';
+      btn.className = 'restart-reload-btn';
+      btn.onclick = () => location.reload();
+      overlay.querySelector('.restart-overlay-content')?.appendChild(btn);
+    }
+    return;
+  }
+  fetch('/api/ping').then(function(r) {
+    if (r.ok) location.reload();
+    else setTimeout(pollForRestart, 1500);
+  }).catch(function() {
+    setTimeout(pollForRestart, 1500);
+  });
 }
 
 async function doRestart() {
@@ -890,6 +918,7 @@ function connect() {
     statusEl.textContent = 'connected';
     statusEl.className = 'status connected';
     state.reconnectDelay = 1000;
+    state.wasConnected = true;
     if (state.serverRestarting) {
       state.serverRestarting = false;
       document.querySelector('.restart-overlay')?.remove();
@@ -897,35 +926,17 @@ function connect() {
   };
 
   ws.onclose = (evt) => {
+    statusEl.textContent = 'disconnected';
+    statusEl.className = 'status disconnected';
     if (state.serverRestarting) {
-      if (Date.now() - (state.restartStartedAt || 0) > 20000) {
-        state.serverRestarting = false;
-        const overlay = document.querySelector('.restart-overlay');
-        if (overlay) {
-          overlay.querySelector('.restart-spinner')?.remove();
-          const text = overlay.querySelector('.restart-overlay-text');
-          if (text) text.textContent = 'Restart timed out.';
-          const btn = document.createElement('button');
-          btn.textContent = 'Reload Page';
-          btn.className = 'restart-reload-btn';
-          btn.onclick = () => location.reload();
-          overlay.querySelector('.restart-overlay-content')?.appendChild(btn);
-        }
-        return;
-      }
       statusEl.textContent = 'restarting';
-      statusEl.className = 'status disconnected';
-      setTimeout(connect, 1500);
       return;
     }
-    if (evt.code === 1006 && state.reconnectDelay === 1000) {
+    if (evt.code === 1006 && !state.wasConnected) {
       statusEl.textContent = 'unauthorized';
-      statusEl.className = 'status disconnected';
       window.location.href = '/login';
       return;
     }
-    statusEl.textContent = 'disconnected';
-    statusEl.className = 'status disconnected';
     setTimeout(connect, state.reconnectDelay);
     state.reconnectDelay = Math.min(state.reconnectDelay * 2, 10000);
   };
