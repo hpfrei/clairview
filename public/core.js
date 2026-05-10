@@ -358,8 +358,12 @@ function pollForRestart() {
     return;
   }
   fetch('/api/ping').then(function(r) {
-    if (r.ok) location.reload();
-    else setTimeout(pollForRestart, 1500);
+    if (!r.ok) return setTimeout(pollForRestart, 1500);
+    if (state.authToken) {
+      window.location.href = '/login/auto?token=' + encodeURIComponent(state.authToken);
+    } else {
+      location.reload();
+    }
   }).catch(function() {
     setTimeout(pollForRestart, 1500);
   });
