@@ -217,7 +217,7 @@ class CliSession {
   ensureJsonlWatcher(transcriptPath) {
     if (this._jsonlWatcher) return;
 
-    this._jsonlWatcher = new JsonlWatcher(transcriptPath, this.sessId, (requestId, enrichment) => {
+    this._jsonlWatcher = new JsonlWatcher(transcriptPath, (requestId, enrichment) => {
       const interaction = this.store.findByRequestId(requestId);
       if (interaction) {
         this.store.enrichInteraction(interaction.id, enrichment);

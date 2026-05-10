@@ -2,12 +2,11 @@ const fs = require('fs');
 const path = require('path');
 
 class JsonlWatcher {
-  constructor(transcriptPath, sessId, onEnrichment) {
+  constructor(transcriptPath, onEnrichment) {
     this.mainJsonl = transcriptPath;
-    this.sessId = sessId;
     this.onEnrichment = onEnrichment;
 
-    this.sessionDir = path.join(path.dirname(transcriptPath), sessId);
+    this.sessionDir = path.join(path.dirname(transcriptPath), path.basename(transcriptPath, '.jsonl'));
     this.subagentDir = path.join(this.sessionDir, 'subagents');
 
     this._fileOffsets = new Map();

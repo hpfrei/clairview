@@ -355,9 +355,10 @@ dashboardApp.post('/api/pro/claim', async (req, res) => {
 
     setTimeout(() => {
       broadcaster.broadcast({ type: 'server:restarting' });
+      cliSessionManager.killAll();
       const child = spawn(process.argv[0], process.argv.slice(1), {
         detached: true, stdio: 'inherit', cwd: process.cwd(),
-        env: { ...process.env, AUTH_TOKEN },
+        env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
       });
       child.unref();
       process.exit(0);
@@ -402,9 +403,10 @@ dashboardApp.post('/api/pro/activate', async (req, res) => {
 
     setTimeout(() => {
       broadcaster.broadcast({ type: 'server:restarting' });
+      cliSessionManager.killAll();
       const child = spawn(process.argv[0], process.argv.slice(1), {
         detached: true, stdio: 'inherit', cwd: process.cwd(),
-        env: { ...process.env, AUTH_TOKEN },
+        env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
       });
       child.unref();
       process.exit(0);
@@ -477,9 +479,10 @@ dashboardApp.post('/api/pro/restart', (req, res) => {
   res.json({ ok: true });
   setTimeout(() => {
     broadcaster.broadcast({ type: 'server:restarting' });
+    cliSessionManager.killAll();
     const child = spawn(process.argv[0], process.argv.slice(1), {
       detached: true, stdio: 'inherit', cwd: process.cwd(),
-      env: { ...process.env, AUTH_TOKEN },
+      env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
     });
     child.unref();
     process.exit(0);
@@ -548,12 +551,13 @@ dashboardApp.post('/api/restart', (req, res) => {
     dashboardServer.closeAllConnections?.();
     proxyServer.closeAllConnections?.();
     cliSessionManager.saveAllToHistory();
+    cliSessionManager.killAll();
     mcp.shutdown();
 
     const spawnNew = () => {
       const child = spawn(process.argv[0], process.argv.slice(1), {
         detached: true, stdio: 'inherit', cwd: process.cwd(),
-        env: { ...process.env, AUTH_TOKEN },
+        env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
       });
       child.unref();
       process.exit(0);
@@ -635,6 +639,7 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
 // Clean shutdown: unregister MCP servers and stop running apps
 function gracefulShutdown() {
   cliSessionManager.saveAllToHistory();
+  cliSessionManager.killAll();
   if (pro) pro.shutdown();
   mcp.shutdown();
   process.exit(0);
