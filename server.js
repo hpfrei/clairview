@@ -5,7 +5,7 @@ const { spawn } = require('child_process');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const path = require('path');
-const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, getActiveProcessCount } = require('./src/utils');
+const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, getActiveProcessCount, spawnClaude } = require('./src/utils');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
@@ -575,7 +575,7 @@ mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_P
 let proClientModules = null;
 let proResult = null;
 if (pro) {
-  proResult = pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager });
+  proResult = pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager, spawnClaude });
   proClientModules = proResult?.clientModules || null;
   console.log('  Pro: loaded');
 }
