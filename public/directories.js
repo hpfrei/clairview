@@ -10,6 +10,22 @@
   const tabs = new Map();
   let activeTabId = null;
   let tabCounter = 0;
+  let _pendingTerminalRestores = [];
+
+  function _saveDirTabs() {
+    const entries = [];
+    let activeIndex = -1, i = 0;
+    for (const [, tab] of tabs) {
+      if (tab.id === activeTabId) activeIndex = i;
+      entries.push({ cwd: tab.cwd, shellOpen: !!tab._shellOpen, shellTabId: tab._shellTabId || null });
+      i++;
+    }
+    try { sessionStorage.setItem('dir-open-tabs', JSON.stringify({ tabs: entries, activeIndex })); } catch {}
+  }
+
+  function _loadDirTabs() {
+    try { return JSON.parse(sessionStorage.getItem('dir-open-tabs') || 'null'); } catch { return null; }
+  }
 
   // ── Monaco lazy loader (shared pattern with rules.js) ──────────────
 
@@ -74,6 +90,7 @@
       showPreviews: false,
     };
     tabs.set(tabId, tab);
+    _saveDirTabs();
     return tab;
   }
 
@@ -217,6 +234,7 @@
     activeTabId = tabId;
     placeholder.style.display = tabs.size > 0 ? 'none' : '';
     renderTabStrip();
+    _saveDirTabs();
   }
 
   function renderTabStrip() {
@@ -269,6 +287,7 @@
     } else {
       renderTabStrip();
     }
+    _saveDirTabs();
   }
 
   // ── Directory loading ──────────────────────────────────────────────
@@ -299,6 +318,7 @@
       renderFileList(tab);
       renderTabStrip();
       resetPreviewPanel(tab);
+      _saveDirTabs();
     } catch {
       if (seq !== tab.loadSeq) return;
       listEl.innerHTML = '<div style="padding:12px;color:#e55;font-size:12px">Failed to load directory</div>';
@@ -803,7 +823,7 @@
       : { background: '#f8f8f8', foreground: '#1a1a1a', cursor: '#3355aa', selectionBackground: 'rgba(50,80,170,0.2)' };
   }
 
-  function openTerminal(tab) {
+  function openTerminal(tab, reconnectShellId) {
     if (tab._shellOpen) return;
     tab._shellOpen = true;
 
@@ -890,7 +910,7 @@
     ro.observe(termBody);
     tab._termResizeObserver = ro;
 
-    const shellId = 'dir-shell-' + (++dirShellSeq);
+    const shellId = reconnectShellId || ('dir-shell-' + (++dirShellSeq));
     tab._shellTabId = shellId;
     shellTabs.set(shellId, tab);
     dirShellIds.add(shellId);
@@ -902,13 +922,22 @@
       sendWs({ type: 'cli:resize', tabId: shellId, cols, rows });
     });
 
-    const { cols, rows } = { cols: tab._terminal.cols, rows: tab._terminal.rows };
-    sendWs({ type: 'cli:spawn', tabId: shellId, cwd: tab.cwd || '/', cols, rows, shell: true });
-
-    setTimeout(() => {
-      try { tab._termFitAddon.fit(); } catch {}
-      tab._terminal.focus();
-    }, 100);
+    if (reconnectShellId) {
+      sendWs({ type: 'cli:requestScrollback', tabId: shellId });
+      setTimeout(() => {
+        try { tab._termFitAddon.fit(); } catch {}
+        const { cols, rows } = { cols: tab._terminal.cols, rows: tab._terminal.rows };
+        sendWs({ type: 'cli:resize', tabId: shellId, cols, rows });
+      }, 100);
+    } else {
+      const { cols, rows } = { cols: tab._terminal.cols, rows: tab._terminal.rows };
+      sendWs({ type: 'cli:spawn', tabId: shellId, cwd: tab.cwd || '/', cols, rows, shell: true });
+      setTimeout(() => {
+        try { tab._termFitAddon.fit(); } catch {}
+        tab._terminal.focus();
+      }, 100);
+    }
+    _saveDirTabs();
   }
 
   function closeTerminal(tab) {
@@ -942,11 +971,23 @@
       tab._browserContent = null;
     }
     wrap.style.flexDirection = '';
+    _saveDirTabs();
   }
 
   function handleShellMessage(msg) {
-    if (msg.type === 'cli:tabs' && dirShellIds.size > 0) {
-      msg.tabs = (msg.tabs || []).filter(t => !dirShellIds.has(t.tabId));
+    if (msg.type === 'cli:tabs') {
+      if (_pendingTerminalRestores.length > 0) {
+        const serverIds = new Set((msg.tabs || []).map(t => t.tabId));
+        const pending = _pendingTerminalRestores.splice(0);
+        for (const entry of pending) {
+          if (serverIds.has(entry.shellTabId)) {
+            openTerminal(entry.tab, entry.shellTabId);
+          }
+        }
+      }
+      if (dirShellIds.size > 0) {
+        msg.tabs = (msg.tabs || []).filter(t => !dirShellIds.has(t.tabId));
+      }
       return false;
     }
 
@@ -1267,6 +1308,27 @@
         monaco.editor.setTheme(getMonacoTheme());
       }, 100);
     });
+  }
+
+  // ── Restore saved directory tabs on load ────────────────────────────
+
+  const _savedState = _loadDirTabs();
+  if (_savedState && _savedState.tabs && _savedState.tabs.length > 0) {
+    for (const entry of _savedState.tabs) {
+      if (!entry.cwd) continue;
+      const tab = createTab(entry.cwd);
+      loadDir(tab.id, entry.cwd);
+      if (entry.shellOpen && entry.shellTabId) {
+        dirShellIds.add(entry.shellTabId);
+        const seq = parseInt(entry.shellTabId.replace('dir-shell-', ''), 10);
+        if (seq >= dirShellSeq) dirShellSeq = seq;
+        _pendingTerminalRestores.push({ tab, shellTabId: entry.shellTabId });
+      }
+    }
+    const allIds = Array.from(tabs.keys());
+    const idx = _savedState.activeIndex >= 0 && _savedState.activeIndex < allIds.length
+      ? _savedState.activeIndex : 0;
+    if (allIds.length > 0) switchTab(allIds[idx]);
   }
 
   window.directoriesModule = { tabs, handleShellMessage };
