@@ -226,11 +226,19 @@ Model definitions are configured in `capabilities/models.json`. API keys stored 
 
 ### Proxy Rules
 
-Programmable request/response manipulation at the proxy layer.
+Programmable request/response manipulation at the proxy layer. Rules are JavaScript functions that run on every API request before it reaches the upstream LLM -- they can inspect and modify the request body, block requests, or short-circuit responses.
 
-- Match requests by path, headers, or body patterns
-- Transform, block, or redirect matched requests
-- Configured via `capabilities/proxy-rules.json`
+- Toggle rules on/off from the dashboard Rules tab
+- Rules are hot-reloaded on file change (no restart needed)
+- Configured via `capabilities/proxy-rules.json` + JS files in `capabilities/proxy-rules/`
+
+**Built-in rules:**
+
+| Rule | Description |
+|---|---|
+| **Model Override** | Rewrites the model field on requests (e.g. `claude-opus-4-7` to `claude-opus-4-6`) -- lets you pin all Claude Code sessions to a specific model version |
+| **Tool Filter** | Strips dangerous or unwanted tools from the request before they reach the LLM (e.g. `CronCreate`, `PushNotification`, remote triggers) |
+| **Title Schema Shortcut** | Short-circuits Claude Code's automatic title-generation requests with a dummy response, saving tokens on every new conversation |
 
 ### MCP Tool Manager
 

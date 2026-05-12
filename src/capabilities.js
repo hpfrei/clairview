@@ -811,6 +811,8 @@ const OPENAI_MODEL_EXCLUDE = /^(ft:|babbage|davinci|whisper|dall-e|text-embeddin
 const OPENAI_DATED_RE = /-(20\d{2}-\d{2}-\d{2})$|-chat-latest$/;
 // Non-text Gemini models, aliases, and pinned versions
 const GEMINI_MODEL_EXCLUDE = /tts|image|nano-banana|robotics|computer-use|deep-research|lyria|^gemma|-latest$|-customtools|-\d{3}$/i;
+// Dated Anthropic variants (claude-opus-4-7-20250715)
+const ANTHROPIC_DATED_RE = /-(\d{8})$/;
 
 function _sanitizeModelName(modelId, existingNames) {
   let name = modelId.toLowerCase()
@@ -945,7 +947,11 @@ async function _fetchAnthropicModels(apiKey) {
       clearTimeout(timer);
     }
   }
-  return all;
+  // Dedup dated variants: keep base name, drop dated suffixes
+  const baseIds = new Set(all.map(m => m.modelId.replace(ANTHROPIC_DATED_RE, '')));
+  return all
+    .filter(m => !ANTHROPIC_DATED_RE.test(m.modelId) || !baseIds.has(m.modelId.replace(ANTHROPIC_DATED_RE, '')) || m.modelId === m.modelId.replace(ANTHROPIC_DATED_RE, ''))
+    .filter(m => !ANTHROPIC_DATED_RE.test(m.modelId));
 }
 
 async function scanProviderModels(baseDir) {

@@ -545,7 +545,21 @@
     const titleInput = document.getElementById('cliSettingsTitle');
     if (titleInput) titleInput.value = tab?.title || '';
     const modelMap = settings.modelMap || { opus: null, sonnet: null, haiku: null };
+    const generalModel = settings.generalModel || null;
     const modelOptions = (models || []).map(m => m.name);
+    const anthropicModels = (models || []).filter(m => m.providerKey === 'anthropic');
+
+    const generalSel = document.getElementById('cliSettingsGeneralModel');
+    if (generalSel) {
+      generalSel.innerHTML = '<option value="">Default (no override)</option>';
+      anthropicModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.name;
+        opt.textContent = m.label || m.name;
+        if (generalModel === m.name) opt.selected = true;
+        generalSel.appendChild(opt);
+      });
+    }
 
     ['opus', 'sonnet', 'haiku'].forEach(family => {
       const sel = settingsModal.querySelector(`[data-map="${family}"]`);
@@ -569,12 +583,14 @@
     const tab = tabs.get(tabId);
     if (tab) tab.title = newTitle;
     sendWs({ type: 'cli:rename', tabId, title: newTitle });
+    const generalSel = document.getElementById('cliSettingsGeneralModel');
+    const generalModel = generalSel?.value || null;
     const modelMap = {};
     ['opus', 'sonnet', 'haiku'].forEach(family => {
       const sel = settingsModal.querySelector(`[data-map="${family}"]`);
       modelMap[family] = sel?.value || null;
     });
-    sendWs({ type: 'cli:settings', tabId, settings: { modelMap } });
+    sendWs({ type: 'cli:settings', tabId, settings: { modelMap, generalModel } });
     settingsModal.classList.add('hidden');
     renderTabStrip();
     window.inspectorModule?.renderInspectorTabStrip?.();

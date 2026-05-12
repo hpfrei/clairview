@@ -300,25 +300,10 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
     const isCliInstance = req.instanceId && req.instanceId.startsWith('cli-');
 
-    // --- CLI instance: model mapping + settings-based tool filtering ---
+    // CLI instance settings (for tool filtering etc.)
     let cliSettings = null;
-    let cliModelDef = null;
     if (isCliInstance && createProxyRouter._cliSettingsGetter) {
       cliSettings = createProxyRouter._cliSettingsGetter(req.instanceId);
-    }
-    if (cliSettings?.modelMap && body.model) {
-      const modelLower = body.model.toLowerCase();
-      let mappedModelName = null;
-      if (modelLower.includes('opus') && cliSettings.modelMap.opus) mappedModelName = cliSettings.modelMap.opus;
-      else if (modelLower.includes('sonnet') && cliSettings.modelMap.sonnet) mappedModelName = cliSettings.modelMap.sonnet;
-      else if (modelLower.includes('haiku') && cliSettings.modelMap.haiku) mappedModelName = cliSettings.modelMap.haiku;
-      if (mappedModelName) {
-        cliModelDef = caps.loadModel(PROJECT_ROOT, mappedModelName);
-        if (cliModelDef) {
-          console.log(`[proxy] CLI model map: ${body.model} \u2192 ${cliModelDef.label || cliModelDef.name} (${cliModelDef.provider})`);
-          body.model = cliModelDef.modelId || cliModelDef.name;
-        }
-      }
     }
 
     const instCtx = getInstanceContext(req.instanceId);
@@ -395,7 +380,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     });
 
     // --- Check for model translation ---
-    const modelDef = cliModelDef || null;
+    const modelDef = null;
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider && modelDef.provider !== 'anthropic') {
