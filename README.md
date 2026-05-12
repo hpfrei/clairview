@@ -189,15 +189,23 @@ Claude handles the full loop -- installing dependencies, writing configs, starti
 
 ### Inspector
 
-A transparent proxy that captures every API call between Claude Code and the upstream LLM -- across all sessions, all providers, in real time.
+A transparent proxy that captures every API call between Claude Code and the upstream LLM -- across all sessions, all providers, in real time. The primary debugging tool for understanding what Claude is doing and why.
 
-- Full request/response capture with headers, payloads, and timing
-- Live SSE event stream -- watch `message_start`, `content_block_delta`, tool calls as they arrive
-- Hierarchical timeline: turns > tool calls, with search and filtering
-- Token usage breakdown: input, output, cache read, cache creation
-- **Cost tracking** per interaction, per model, per provider
+- Full request/response capture with headers, payloads, and timing (TTFB + total duration)
+- **System prompt viewer** -- see the full system prompt Claude receives, with character-count gauge
+- **Message history viewer** -- expand every message in the conversation with role, content, and token contribution
+- **Tool definition viewer** -- inspect every tool schema Claude has access to in each turn
+- Live SSE event stream -- watch `message_start`, `content_block_delta`, tool calls as they arrive; raw SSE event log available per turn
+- **Tool call inspector** -- view tool inputs (interactive JSON tree) and matched tool results, including error states
+- **Thinking block display** -- see extended thinking / reasoning output inline
+- Token usage breakdown: input, output, cache read, cache creation, reasoning tokens
+- **Cost tracking** per interaction, per user-turn group, and session totals with color-coded gauges
 - Live **markdown rendering** of assistant responses in the detail panel
-- All interactions saved to disk as structured JSON for offline analysis
+- **cURL export** -- generate a ready-to-run `curl` command for any captured request (API key masked)
+- **Subagent tracking** -- color-coded badges and parallel swimlane view showing which turns belong to which subagent
+- **Hook call inspector** -- PreToolUse / PostToolUse hook events nested under the turn that triggered them, with full input/output
+- Per-instance tab isolation with running/idle status indicators
+- All interactions saved to disk as structured JSON for offline analysis, with full history reload
 
 ### CLI (Multi-tab Terminal)
 
