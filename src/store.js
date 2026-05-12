@@ -225,6 +225,31 @@ class InteractionStore {
       .filter(i => i && activeInstanceIds.has(i.instanceId));
   }
 
+  getAllFromDisk() {
+    const dirs = [];
+    try { dirs.push(...fs.readdirSync(INTERACTIONS_DIR)); } catch { return []; }
+    const sessionDirs = dirs.filter(name => {
+      try { return fs.statSync(path.join(INTERACTIONS_DIR, name)).isDirectory(); } catch { return false; }
+    });
+    const allFiles = [];
+    for (const sessId of sessionDirs) {
+      const dir = path.join(INTERACTIONS_DIR, sessId);
+      let files;
+      try { files = fs.readdirSync(dir).filter(f => f.endsWith('.json')); } catch { continue; }
+      for (const file of files) {
+        const seqNum = parseInt(file);
+        allFiles.push({ sessId, seqNum, filePath: path.join(dir, file) });
+      }
+    }
+    const results = [];
+    for (const { sessId, seqNum, filePath } of allFiles) {
+      const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
+      if (interaction) results.push(interaction);
+    }
+    results.sort((a, b) => a.timestamp - b.timestamp);
+    return results;
+  }
+
   removeFromMemory(instanceIds) {
     const idSet = new Set(instanceIds);
     const toRemove = new Set();

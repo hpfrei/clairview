@@ -6,6 +6,7 @@
 
   // --- Auto-select suppression: don't jump away from user-selected turns ---
   let _userPinnedSelection = false;
+  let _autoClearInactive = localStorage.getItem('inspectorAutoClear') === '1';
 
   // --- Subagent registry: track numbering and colors for parallel subagents ---
   const _subagentRegistry = new Map();    // agentId -> { agentType, number, colorIndex }
@@ -190,8 +191,26 @@
       btn.appendChild(close);
       inspectorTabStrip.appendChild(btn);
     }
-    // "Clear inactive" button — only show if there are exited instances
+    // "Clear inactive" button + autoclear checkbox
     const hasExited = [...knownInstances.values()].some(i => i.status === 'exited');
+
+    // Autoclear: if enabled, clear exited instances immediately
+    if (hasExited && _autoClearInactive) {
+      const exitedIds = [];
+      for (const [id, info] of knownInstances) {
+        if (info.status === 'exited') exitedIds.push(id);
+      }
+      for (const id of exitedIds) knownInstances.delete(id);
+      if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
+      if (!knownInstances.has(activeInstanceTab)) {
+        const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
+        activeInstanceTab = fallback;
+      }
+      // Re-render after autoclear (defer to avoid recursion)
+      queueMicrotask(() => renderInspectorTabStrip());
+      return;
+    }
+
     if (hasExited) {
       const clearBtn = document.createElement('button');
       clearBtn.className = 'view-tab-action';
@@ -212,13 +231,25 @@
       });
       inspectorTabStrip.appendChild(clearBtn);
     }
+
+    // Autoclear checkbox — always visible
+    const autoLabel = document.createElement('label');
+    autoLabel.className = 'tl-autoclear-label';
+    autoLabel.innerHTML = `<input type="checkbox" class="tl-autoclear-cb"${_autoClearInactive ? ' checked' : ''}> autoclear`;
+    autoLabel.querySelector('input').addEventListener('change', (e) => {
+      _autoClearInactive = e.target.checked;
+      localStorage.setItem('inspectorAutoClear', _autoClearInactive ? '1' : '0');
+      if (_autoClearInactive) renderInspectorTabStrip();
+    });
+    inspectorTabStrip.appendChild(autoLabel);
+
     updateStreamingState();
   }
 
   function switchInstanceTab(instanceId) {
     activeInstanceTab = instanceId;
     renderInspectorTabStrip();
-    renderTimeline();
+    renderTimelineActive();
     // Select last matching interaction
     const filtered = activeInstanceTab === 'all'
       ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId) )
@@ -765,24 +796,553 @@
 
   let _lastRenderedAgentId = null;
 
+  // --- Timeline view mode toggle (single column vs parallel columns) ---
+  let _timelineMode = localStorage.getItem('timelineMode') || 'single';
+
+  let _allHistoryLoaded = false;
+
+  function initTimelineToggle() {
+    const header = document.getElementById('timeline-header');
+    if (!header || header.querySelector('.timeline-view-toggle')) return;
+    const toggle = document.createElement('div');
+    toggle.className = 'timeline-view-toggle';
+    const singleSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="3" x2="10" y2="3"/><line x1="2" y1="6" x2="10" y2="6"/><line x1="2" y1="9" x2="10" y2="9"/></svg>`;
+    const parallelSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="2" x2="3" y2="10"/><line x1="6" y1="2" x2="6" y2="10"/><line x1="9" y1="2" x2="9" y2="10"/></svg>`;
+    const allSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 2h8v8H2z"/><line x1="2" y1="5" x2="10" y2="5"/><line x1="2" y1="8" x2="10" y2="8"/></svg>`;
+    toggle.innerHTML = `
+      <span class="tl-view-label">view</span>
+      <button class="tl-toggle-btn tl-view-toggle" title="Toggle single / parallel columns">${_timelineMode === 'parallel' ? parallelSvg : singleSvg}</button>
+      <button class="tl-toggle-btn tl-load-all-btn${_allHistoryLoaded ? ' active' : ''}" title="Load full history from disk">${allSvg}</button>
+    `;
+    const viewBtn = toggle.querySelector('.tl-view-toggle');
+    viewBtn.addEventListener('click', () => {
+      _timelineMode = _timelineMode === 'single' ? 'parallel' : 'single';
+      localStorage.setItem('timelineMode', _timelineMode);
+      viewBtn.innerHTML = _timelineMode === 'parallel' ? parallelSvg : singleSvg;
+      const aside = document.getElementById('timeline');
+      if (aside) aside.classList.toggle('parallel-mode', _timelineMode === 'parallel');
+      renderTimelineActive();
+    });
+    toggle.querySelector('.tl-load-all-btn').addEventListener('click', (e) => {
+      if (_allHistoryLoaded) return;
+      e.currentTarget.style.opacity = '0.5';
+      sendWs({ type: 'inspector:loadAll' });
+    });
+    header.appendChild(toggle);
+    const aside = document.getElementById('timeline');
+    if (aside) aside.classList.toggle('parallel-mode', _timelineMode === 'parallel');
+  }
+
+  function renderTimelineActive() {
+    if (_timelineMode === 'parallel') renderTimelineParallel();
+    else renderTimeline();
+  }
+
   function renderTimeline() {
     timelineList.innerHTML = '';
     resetSubagentRegistry();
     _lastRenderedAgentId = null;
     let turnNum = 0;
+    const subagentTurnCounts = new Map();
     state.interactions.forEach((interaction) => {
       // Apply instance filter
       if (activeInstanceTab === 'all') {
         // "Others" — exclude interactions that belong to a known instance tab (but include dir-spawned)
         if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
       } else if (interaction.instanceId !== activeInstanceTab) return;
-      if (!interaction.isMcp && !interaction.isHook) turnNum++;
-      appendTurnToTimeline(interaction, turnNum);
+      if (!interaction.isMcp && !interaction.isHook) {
+        const agentId = interaction.subagent?.agentId;
+        if (agentId) {
+          const n = (subagentTurnCounts.get(agentId) || 0) + 1;
+          subagentTurnCounts.set(agentId, n);
+          appendTurnToTimeline(interaction, n, true);
+        } else {
+          turnNum++;
+          appendTurnToTimeline(interaction, turnNum, false);
+        }
+      } else {
+        appendTurnToTimeline(interaction);
+      }
     });
     updateUserTurnTotals();
   }
 
-  function appendTurnToTimeline(interaction, turnNum) {
+  // === PARALLEL TIMELINE (multi-column swimlane view) ===
+
+  let _parallelState = null; // persisted between incremental appends; reset on full re-render
+
+  function resolveHookAgentId(hookInteraction, interactions) {
+    if (!hookInteraction.toolUseId) return null;
+    for (let i = interactions.length - 1; i >= 0; i--) {
+      const turn = interactions[i];
+      if (turn.isHook || turn.isMcp) continue;
+      if (turn.instanceId !== hookInteraction.instanceId) continue;
+      const tools = extractToolCalls(turn);
+      if (tools.some(tc => tc.id === hookInteraction.toolUseId)) {
+        return turn.subagent?.agentId || null;
+      }
+    }
+    return null;
+  }
+
+  function buildColumnAssignment(interactions) {
+    const columnFor = new Map();
+    const rowFor = new Map();
+    const activeColumns = new Map();     // agentId -> colIndex (currently running)
+    const historicalColumns = new Map();  // agentId -> colIndex (persists after free)
+    const columnAgents = new Map();      // colIndex -> subagent object
+    const freeColumns = [];
+    let nextColumn = 1;
+
+    // Pass 1: assign columns
+    for (let idx = 0; idx < interactions.length; idx++) {
+      const interaction = interactions[idx];
+      let agentId = null;
+
+      if (interaction.isHook) {
+        agentId = resolveHookAgentId(interaction, interactions.slice(0, idx));
+      } else if (!interaction.isMcp) {
+        agentId = interaction.subagent?.agentId || null;
+      }
+
+      if (agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
+        const col = freeColumns.length > 0 ? freeColumns.pop() : nextColumn++;
+        activeColumns.set(agentId, col);
+        historicalColumns.set(agentId, col);
+        if (interaction.subagent) {
+          registerSubagent(interaction.subagent);
+          columnAgents.set(col, interaction.subagent);
+        }
+      }
+
+      const resolvedCol = agentId
+        ? (activeColumns.get(agentId) || historicalColumns.get(agentId) || 0)
+        : 0;
+      // Backfill column header info when the first LLM turn with subagent data arrives
+      if (resolvedCol > 0 && interaction.subagent && !columnAgents.has(resolvedCol)) {
+        registerSubagent(interaction.subagent);
+        columnAgents.set(resolvedCol, interaction.subagent);
+      }
+      columnFor.set(interaction.id, resolvedCol);
+
+      if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
+        let closedAgentId = null;
+        for (let j = idx - 1; j >= 0; j--) {
+          const prev = interactions[j];
+          if (prev.isHook || prev.isMcp) continue;
+          const aid = prev.subagent?.agentId;
+          if (aid && activeColumns.has(aid)) { closedAgentId = aid; break; }
+        }
+        if (closedAgentId) {
+          freeColumns.push(activeColumns.get(closedAgentId));
+          activeColumns.delete(closedAgentId);
+        }
+      }
+    }
+
+    const totalColumns = nextColumn;
+
+    // Pass 2: assign rows — parallel-aware
+    // Main thread items act as barriers (must come after all prior activity).
+    // Subagent items stack within their column, starting where the main thread left off.
+    // Items in different non-main columns can share the same row.
+    const colNextRow = new Map(); // col -> next available row
+    let nextRow = 1;
+
+    for (const interaction of interactions) {
+      const col = columnFor.get(interaction.id) || 0;
+      let row;
+
+      if (col === 0) {
+        // Main thread: barrier — must be after everything
+        row = nextRow;
+        for (const r of colNextRow.values()) {
+          if (r > row) row = r;
+        }
+      } else {
+        // Subagent column: start from where main thread left off, or continue stacking
+        row = colNextRow.get(col) || colNextRow.get(0) || nextRow;
+      }
+
+      colNextRow.set(col, row + 1);
+      if (row + 1 > nextRow) nextRow = row + 1;
+      rowFor.set(interaction.id, row);
+    }
+
+    const totalRows = nextRow - 1;
+    return { columnFor, rowFor, totalColumns, totalRows, columnAgents };
+  }
+
+  function buildParallelTurnEl(interaction, turnNum, isSubagentTurn) {
+    const group = document.createElement('div');
+    group.className = 'turn-group' + (isNewUserTurn(interaction) ? ' new-user-turn' : '');
+    group.dataset.turnId = interaction.id;
+
+    if (interaction.subagent?.agentId) {
+      registerSubagent(interaction.subagent);
+      group.dataset.agentId = interaction.subagent.agentId;
+      const color = getSubagentColor(interaction.subagent);
+      group.style.setProperty('--subagent-color', color);
+    }
+
+    const el = document.createElement('div');
+    el.className = 'timeline-entry turn-entry';
+    el.dataset.id = interaction.id;
+
+    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
+    const statusClass = badgeClass(interaction.status);
+    const profile = interaction.profile || '';
+    const stepId = interaction.stepId || '';
+    const model = interaction.request?.model || 'unknown';
+    const shortModel = model.replace('claude-', '').split('-202')[0];
+    const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
+
+    let modelLabel;
+    if (!isStandardLlm) {
+      const ep = interaction.endpoint.replace('/v1/messages/', '');
+      modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
+    } else {
+      modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+    }
+    const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
+    const turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
+    const tokenSummary = compactTokens(interaction.usage);
+    const cost = computeCost(interaction.usage, interaction.pricing);
+    const costHtml = turnCostGauge(cost);
+
+    el.innerHTML = `
+      <div class="entry-header">
+        <span class="entry-num">${turnLabel}</span>
+        <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+      </div>
+      <div class="entry-model" data-model="${interaction.id}">
+        <span class="entry-model-label">${modelLabel}</span>
+        <span class="entry-duration" data-duration="${interaction.id}">${durationHtml}</span>
+      </div>
+      <div class="entry-meta" data-tokens="${interaction.id}">
+        <span class="entry-tokens" data-tokenlabel="${interaction.id}">${tokenSummary}</span>
+        <span class="entry-cost" data-costgauge="${interaction.id}">${costHtml}</span>
+      </div>
+    `;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
+      _userPinnedSelection = true;
+      select(sel);
+    });
+
+    group.appendChild(el);
+
+    const toolsContainer = document.createElement('div');
+    toolsContainer.className = 'tool-entries';
+    toolsContainer.dataset.toolsFor = interaction.id;
+    group.appendChild(toolsContainer);
+
+    const toolCalls = extractToolCalls(interaction);
+    toolCalls.forEach((tc, tIdx) => {
+      const toolEl = createToolEntryEl(interaction.id, tIdx, tc.name, toolSummary(tc.name, tc.input), tc.input, interaction.subagent);
+      toolsContainer.appendChild(toolEl);
+    });
+
+    if (interaction.status === 'pending' || interaction.status === 'streaming') {
+      startDurationTimer(interaction);
+    }
+
+    return group;
+  }
+
+  function buildParallelHookEl(interaction) {
+    const hookEvent = interaction.hookEvent || 'Hook';
+    const toolName = interaction.toolName || '';
+    const arrow = /post/i.test(hookEvent) ? '←' : '→';
+
+    const group = document.createElement('div');
+    group.className = 'turn-group hook-call-group';
+    group.dataset.turnId = interaction.id;
+
+    const el = document.createElement('div');
+    el.className = 'timeline-entry turn-entry hook-call-entry';
+    el.dataset.id = interaction.id;
+
+    el.innerHTML = `
+      <span class="hook-arrow">${arrow}</span>
+      <span class="hook-label">${escHtml(hookEvent)}</span>
+      <span class="hook-tool-name">${escHtml(toolName)}</span>
+    `;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
+      _userPinnedSelection = true;
+      select(sel);
+    });
+
+    group.appendChild(el);
+    return group;
+  }
+
+  function buildParallelMcpEl(interaction) {
+    const group = document.createElement('div');
+    group.className = 'turn-group mcp-call-group';
+    group.dataset.turnId = interaction.id;
+
+    const el = document.createElement('div');
+    el.className = 'timeline-entry turn-entry mcp-call-entry';
+    el.dataset.id = interaction.id;
+
+    const toolName = interaction.request?.tool || 'unknown';
+    const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
+    const isError = interaction.status === 'error';
+    const source = interaction.mcpSource === 'claude-code' ? 'claude' : 'test';
+
+    el.innerHTML = `
+      <div class="entry-header">
+        <span class="entry-num mcp-label">MCP</span>
+        <span class="entry-badge ${isError ? 'error' : 'complete'}">${isError ? 'error' : 'ok'}</span>
+      </div>
+      <div class="entry-model mcp-tool-name">${escHtml(toolName)}</div>
+      <div class="entry-meta">
+        <span class="mcp-source-tag mcp-src-${source}">${source}</span>
+        <span>${durationHtml}</span>
+      </div>
+    `;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sel = { type: 'turn', id: interaction.id };
+      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
+      _userPinnedSelection = true;
+      select(sel);
+    });
+
+    group.appendChild(el);
+    return group;
+  }
+
+  function renderTimelineParallel() {
+    timelineList.innerHTML = '';
+    resetSubagentRegistry();
+
+    const filtered = state.interactions.filter(i => isVisibleInTimeline(i));
+    const { columnFor, rowFor, totalColumns, totalRows, columnAgents } = buildColumnAssignment(filtered);
+
+    // Sticky column headers
+    const headerRow = document.createElement('div');
+    headerRow.className = 'parallel-timeline-headers';
+    for (let col = 0; col < totalColumns; col++) {
+      const header = document.createElement('div');
+      header.className = 'parallel-column-header';
+      const agentInfo = columnAgents.get(col);
+      if (col === 0) {
+        header.textContent = 'Main Thread';
+      } else if (agentInfo) {
+        const label = getSubagentLabel(agentInfo);
+        const color = getSubagentColor(agentInfo);
+        header.textContent = label;
+        if (color) {
+          header.style.color = color;
+          header.style.borderBottomColor = color;
+        }
+      } else {
+        header.textContent = `Agent ${col}`;
+      }
+      headerRow.appendChild(header);
+    }
+    timelineList.appendChild(headerRow);
+
+    // CSS Grid: rows assigned by parallel-aware algorithm
+    const grid = document.createElement('div');
+    grid.className = 'parallel-timeline-grid';
+    grid.style.gridTemplateColumns = `repeat(${totalColumns}, 260px)`;
+
+    let turnNum = 0;
+    const subagentTurnCounts = new Map();
+
+    for (const interaction of filtered) {
+      const col = columnFor.get(interaction.id) || 0;
+      const row = rowFor.get(interaction.id) || 1;
+      let el;
+
+      if (interaction.isMcp) {
+        el = buildParallelMcpEl(interaction);
+      } else if (interaction.isHook) {
+        el = buildParallelHookEl(interaction);
+      } else {
+        const agentId = interaction.subagent?.agentId;
+        let num, isSub;
+        if (agentId) {
+          const n = (subagentTurnCounts.get(agentId) || 0) + 1;
+          subagentTurnCounts.set(agentId, n);
+          num = n;
+          isSub = true;
+        } else {
+          turnNum++;
+          num = turnNum;
+          isSub = false;
+        }
+        el = buildParallelTurnEl(interaction, num, isSub);
+      }
+
+      el.style.gridRow = row;
+      el.style.gridColumn = col + 1;
+      grid.appendChild(el);
+    }
+
+    // Column separators spanning all rows
+    for (let col = 0; col < totalColumns - 1; col++) {
+      const sep = document.createElement('div');
+      sep.className = 'parallel-grid-separator';
+      sep.style.gridColumn = col + 1;
+      sep.style.gridRow = `1 / ${(totalRows || 1) + 1}`;
+      grid.appendChild(sep);
+    }
+
+    timelineList.appendChild(grid);
+
+    // Save state for incremental appends
+    _parallelState = { columnFor, rowFor, columnAgents, grid, headerRow, turnNum, subagentTurnCounts,
+      totalColumns, totalRows,
+      activeColumns: new Map(), historicalColumns: new Map(),
+      freeColumns: [], nextColumn: totalColumns,
+      colNextRow: new Map(), nextRowCounter: (totalRows || 0) + 1 };
+    // Rebuild active/historical columns from the assignment
+    for (const interaction of filtered) {
+      const agentId = interaction.subagent?.agentId;
+      if (agentId) {
+        const col = columnFor.get(interaction.id);
+        if (col > 0) {
+          _parallelState.activeColumns.set(agentId, col);
+          _parallelState.historicalColumns.set(agentId, col);
+        }
+      }
+      if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
+        for (let j = filtered.indexOf(interaction) - 1; j >= 0; j--) {
+          const prev = filtered[j];
+          if (prev.isHook || prev.isMcp) continue;
+          const aid = prev.subagent?.agentId;
+          if (aid && _parallelState.activeColumns.has(aid)) {
+            _parallelState.freeColumns.push(_parallelState.activeColumns.get(aid));
+            _parallelState.activeColumns.delete(aid);
+            break;
+          }
+        }
+      }
+    }
+    // Seed colNextRow from rowFor
+    for (const interaction of filtered) {
+      const col = columnFor.get(interaction.id) || 0;
+      const row = rowFor.get(interaction.id) || 1;
+      _parallelState.colNextRow.set(col, Math.max(_parallelState.colNextRow.get(col) || 0, row + 1));
+    }
+  }
+
+  function appendToParallelTimeline(interaction) {
+    if (!_parallelState) {
+      renderTimelineParallel();
+      return;
+    }
+    const ps = _parallelState;
+
+    // Determine column for this interaction
+    let agentId = null;
+    if (interaction.isHook) {
+      agentId = resolveHookAgentId(interaction, state.interactions);
+    } else if (!interaction.isMcp) {
+      agentId = interaction.subagent?.agentId || null;
+    }
+
+    let col = 0;
+    if (agentId) {
+      if (!ps.activeColumns.has(agentId) && !ps.historicalColumns.has(agentId)) {
+        col = ps.freeColumns.length > 0 ? ps.freeColumns.pop() : ps.nextColumn++;
+        ps.activeColumns.set(agentId, col);
+        ps.historicalColumns.set(agentId, col);
+        // Expand grid and add header if this is a new column
+        if (col >= ps.totalColumns) {
+          ps.totalColumns = col + 1;
+          ps.grid.style.gridTemplateColumns = `repeat(${ps.totalColumns}, 260px)`;
+          const header = document.createElement('div');
+          header.className = 'parallel-column-header';
+          if (interaction.subagent) {
+            registerSubagent(interaction.subagent);
+            const label = getSubagentLabel(interaction.subagent);
+            const color = getSubagentColor(interaction.subagent);
+            header.textContent = label;
+            if (color) { header.style.color = color; header.style.borderBottomColor = color; }
+            ps.columnAgents.set(col, interaction.subagent);
+          } else {
+            header.textContent = `Agent ${col}`;
+          }
+          ps.headerRow.appendChild(header);
+        }
+      }
+      col = ps.activeColumns.get(agentId) || ps.historicalColumns.get(agentId) || 0;
+    }
+
+    // Build element
+    let el;
+    if (interaction.isMcp) {
+      el = buildParallelMcpEl(interaction);
+    } else if (interaction.isHook) {
+      el = buildParallelHookEl(interaction);
+    } else {
+      if (agentId) {
+        const n = (ps.subagentTurnCounts.get(agentId) || 0) + 1;
+        ps.subagentTurnCounts.set(agentId, n);
+        el = buildParallelTurnEl(interaction, n, true);
+      } else {
+        ps.turnNum++;
+        el = buildParallelTurnEl(interaction, ps.turnNum, false);
+      }
+    }
+
+    // Parallel-aware row assignment
+    let row;
+    if (col === 0) {
+      row = ps.nextRowCounter;
+      for (const r of ps.colNextRow.values()) {
+        if (r > row) row = r;
+      }
+    } else {
+      row = ps.colNextRow.get(col) || ps.colNextRow.get(0) || ps.nextRowCounter;
+    }
+    ps.colNextRow.set(col, row + 1);
+    if (row + 1 > ps.nextRowCounter) ps.nextRowCounter = row + 1;
+    ps.totalRows = Math.max(ps.totalRows, row);
+
+    el.style.gridRow = row;
+    el.style.gridColumn = col + 1;
+    ps.grid.appendChild(el);
+
+    // Extend column separators
+    ps.grid.querySelectorAll('.parallel-grid-separator').forEach(sep => {
+      sep.style.gridRow = `1 / ${ps.totalRows + 1}`;
+    });
+
+    ps.columnFor.set(interaction.id, col);
+    ps.rowFor.set(interaction.id, row);
+
+    // Check if this hook closes a subagent column
+    if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
+      for (let j = state.interactions.length - 2; j >= 0; j--) {
+        const prev = state.interactions[j];
+        if (prev.isHook || prev.isMcp) continue;
+        const aid = prev.subagent?.agentId;
+        if (aid && ps.activeColumns.has(aid)) {
+          ps.freeColumns.push(ps.activeColumns.get(aid));
+          ps.activeColumns.delete(aid);
+          break;
+        }
+      }
+    }
+  }
+
+  // === END PARALLEL TIMELINE ===
+
+  function appendTurnToTimeline(interaction, turnNum, isSubagentTurn) {
     if (turnNum === undefined) turnNum = llmTurnNumber(interaction);
 
     if (interaction.isMcp) {
@@ -817,6 +1377,7 @@
     el.className = 'timeline-entry turn-entry';
     el.dataset.id = interaction.id;
 
+    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
     const statusClass = badgeClass(interaction.status);
     const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
@@ -824,8 +1385,15 @@
     const shortModel = model.replace('claude-', '').split('-202')[0];
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
-    const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
-    const turnLabel = stepId ? `Turn ${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `Turn ${turnNum}`;
+    let modelLabel;
+    if (!isStandardLlm) {
+      const ep = interaction.endpoint.replace('/v1/messages/', '');
+      modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
+    } else {
+      modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+    }
+    const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
+    const turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
     const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
       ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
     const subagentLabel = interaction.subagent ? getSubagentLabel(interaction.subagent) : '';
@@ -996,7 +1564,20 @@
   }
 
   function findParentToolContainer(hookInteraction) {
-    // Walk backwards through rendered turn groups to find the last LLM turn for this instance
+    // If the hook has a toolUseId, find the turn that owns that tool call
+    if (hookInteraction.toolUseId) {
+      const groups = timelineList.querySelectorAll('.turn-group:not(.hook-call-group):not(.mcp-call-group)');
+      for (let i = groups.length - 1; i >= 0; i--) {
+        const turnId = groups[i].dataset.turnId;
+        const turn = state.interactions.find(t => t.id === turnId);
+        if (!turn) continue;
+        const tools = extractToolCalls(turn);
+        if (tools.some(tc => tc.id === hookInteraction.toolUseId)) {
+          return groups[i].querySelector('.tool-entries');
+        }
+      }
+    }
+    // Fallback: most recent LLM turn for the same instance
     const groups = timelineList.querySelectorAll('.turn-group:not(.hook-call-group):not(.mcp-call-group)');
     for (let i = groups.length - 1; i >= 0; i--) {
       const turnId = groups[i].dataset.turnId;
@@ -1463,10 +2044,16 @@
 
     html += `<div id="response-blocks">`;
 
+    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
     if (interaction.isStreaming && resp.sseEvents?.length > 0) {
       html += renderAccumulatedBlocks(resp.sseEvents);
     } else if (resp.body) {
-      if (resp.body.content) {
+      if (!isStandardLlm) {
+        html += `<div class="content-block">
+          <div class="content-block-header">Response Body</div>
+          <pre class="content-block-body json-block">${escHtml(JSON.stringify(resp.body, null, 2))}</pre>
+        </div>`;
+      } else if (resp.body.content) {
         const merged = mergeConsecutiveTextBlocks(resp.body.content);
         for (const block of merged) html += renderStaticBlock(block);
       }
@@ -1909,7 +2496,8 @@
           if (ext) ext.status = 'exited';
         }
         renderInspectorTabStrip();
-        renderTimeline();
+        initTimelineToggle();
+        renderTimelineActive();
         updateStats();
         updateInspectorBusy();
         if (state.interactions.length > 0) {
@@ -1935,7 +2523,8 @@
           ? (!msg.interaction.instanceId || !knownInstances.has(msg.interaction.instanceId))
           : msg.interaction.instanceId === activeInstanceTab;
         if (matchesFilter) {
-          appendTurnToTimeline(msg.interaction);
+          if (_timelineMode === 'parallel') appendToParallelTimeline(msg.interaction);
+          else appendTurnToTimeline(msg.interaction);
           if (!_userPinnedSelection) {
             select({ type: 'turn', id: msg.interaction.id });
             scrollTimelineToBottom();
@@ -2005,7 +2594,7 @@
         for (const id of cleared) knownInstances.delete(id);
         if (cleared.has(activeInstanceTab)) activeInstanceTab = 'all';
         renderInspectorTabStrip();
-        renderTimeline();
+        renderTimelineActive();
         updateStats();
         break;
       }
@@ -2024,8 +2613,34 @@
           });
         }
         renderInspectorTabStrip();
-        if (activeInstanceTab === instanceId) renderTimeline();
+        if (activeInstanceTab === instanceId) renderTimelineActive();
         updateStats();
+        break;
+      }
+
+      case 'inspector:allLoaded': {
+        const allInteractions = msg.interactions || [];
+        const existingIds = new Set(state.interactions.map(i => i.id));
+        const toAdd = allInteractions.filter(i => !existingIds.has(i.id));
+        if (toAdd.length > 0) {
+          for (const i of toAdd) stampExtInteraction(i);
+          state.interactions.push(...toAdd);
+          state.interactions.sort((a, b) => a.timestamp - b.timestamp);
+          for (const i of toAdd) {
+            if (i.instanceId && !knownInstances.has(i.instanceId)) {
+              knownInstances.set(i.instanceId, {
+                instanceId: i.instanceId, profileName: i.profile,
+                status: 'exited', spawnedAt: i.timestamp, cwd: null,
+              });
+            }
+          }
+          renderInspectorTabStrip();
+          renderTimelineActive();
+          updateStats();
+        }
+        _allHistoryLoaded = true;
+        const loadAllBtn = document.querySelector('.tl-load-all-btn');
+        if (loadAllBtn) { loadAllBtn.classList.add('active'); loadAllBtn.style.opacity = ''; }
         break;
       }
 
@@ -2033,7 +2648,11 @@
         const interaction = state.interactions.find(i => i.id === msg.interactionId);
         if (interaction) {
           interaction.subagent = msg.subagent;
-          updateTurnSubagentBadge(interaction);
+          if (_timelineMode === 'parallel') {
+            renderTimelineParallel();
+          } else {
+            updateTurnSubagentBadge(interaction);
+          }
           if (state.selection?.type === 'turn' && state.selection.id === msg.interactionId) {
             select({ type: 'turn', id: msg.interactionId });
           }
@@ -2051,7 +2670,7 @@
       if (instanceIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds });
       state.interactions.length = 0;
       updateStats();
-      renderTimeline();
+      renderTimelineActive();
       state.selection = null;
       detailContent.classList.add('hidden');
       emptyState.classList.remove('hidden');
@@ -2083,7 +2702,7 @@
         detailContent.classList.add('hidden');
         emptyState.classList.remove('hidden');
       }
-      renderTimeline();
+      renderTimelineActive();
       updateStats();
     });
   }

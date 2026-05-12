@@ -103,6 +103,9 @@ class DashboardBroadcaster {
                 interactions,
               }));
             }
+          } else if (msg.type === 'inspector:loadAll') {
+            const all = this.store.getAllFromDisk().map(sanitizeForDashboard);
+            ws.send(JSON.stringify({ type: 'inspector:allLoaded', interactions: all }));
           } else if (msg.type === 'ask:answer') {
             // Resolve a pending AskUserQuestion
             const pending = pendingQuestions.get(msg.toolUseId);
