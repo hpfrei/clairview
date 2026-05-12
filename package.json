@@ -1,6 +1,6 @@
 {
   "name": "vistaclair",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Dashboard and transparent proxy for Claude Code",
   "author": "hpfreilabs.com",
   "license": "Apache-2.0",
