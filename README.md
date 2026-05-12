@@ -2,9 +2,9 @@
 
 <img src="public/favicon.svg" width="80" alt="vistaclair logo"/>
 
-# $\Huge\textsf{vistaclair}$
+# vistaclair
 
-$\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route}$
+**inspect · chat · route**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
@@ -27,11 +27,11 @@ multi-session chat, file management, terminal access, and multi-provider model r
 
 | | |
 |---|---|
-| $\color{#58a6ff}{\textsf{Study the wire protocol}}$ | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
-| $\color{#3fb950}{\textsf{Remote access}}$ | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
-| $\color{#bc8cff}{\textsf{Multi-provider routing}}$ | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
-| $\color{#79c0ff}{\textsf{Tool development}}$ | Create and test custom MCP tools from a form-driven editor without leaving the browser |
-| $\color{#d29922}{\textsf{File management}}$ | Browse, preview, and manage files on the remote machine with a full-featured file manager |
+| **Study the wire protocol** | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
+| **Remote access** | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
+| **Multi-provider routing** | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
+| **Tool development** | Create and test custom MCP tools from a form-driven editor without leaving the browser |
+| **File management** | Browse, preview, and manage files on the remote machine with a full-featured file manager |
 
 ---
 
@@ -183,7 +183,7 @@ Claude handles the full loop -- installing dependencies, writing configs, starti
 
 ## Features
 
-### $\color{#58a6ff}{\textsf{Inspector}}$
+### Inspector
 
 A transparent proxy that captures every API call between Claude Code and the upstream LLM -- across all sessions, all providers, in real time.
 
@@ -195,7 +195,7 @@ A transparent proxy that captures every API call between Claude Code and the ups
 - Live **markdown rendering** of assistant responses in the detail panel
 - All interactions saved to disk as structured JSON for offline analysis
 
-### $\color{#3fb950}{\textsf{CLI (Multi-tab Terminal)}}$
+### CLI (Multi-tab Terminal)
 
 Multi-tab Claude Code terminal sessions managed from the browser.
 
@@ -209,7 +209,7 @@ Multi-tab Claude Code terminal sessions managed from the browser.
 - Stop running sessions at any time
 - Inline tab rename via double-click
 
-### $\color{#bc8cff}{\textsf{LLM Provider Adapters}}$
+### LLM Provider Adapters
 
 Route Claude Code through non-Anthropic models. The proxy translates Anthropic Messages API requests into the target provider's format and translates responses back -- Claude Code sees a normal Anthropic API.
 
@@ -224,7 +224,7 @@ Route Claude Code through non-Anthropic models. The proxy translates Anthropic M
 
 Model definitions are configured in `capabilities/models.json`. API keys stored separately in `capabilities/secrets.json` (gitignored). Each model can specify system prompt handling (`replace` / `prepend` / `append` / `passthrough`), reasoning mode, context window, max output tokens, and cost per million tokens.
 
-### $\color{#f778ba}{\textsf{Proxy Rules}}$
+### Proxy Rules
 
 Programmable request/response manipulation at the proxy layer.
 
@@ -232,7 +232,7 @@ Programmable request/response manipulation at the proxy layer.
 - Transform, block, or redirect matched requests
 - Configured via `capabilities/proxy-rules.json`
 
-### $\color{#79c0ff}{\textsf{MCP Tool Manager}}$
+### MCP Tool Manager
 
 Extend Claude Code with custom tools through one integrated MCP server.
 
@@ -250,7 +250,7 @@ Extend Claude Code with custom tools through one integrated MCP server.
 
 The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations (e.g. an orchestrator using `chat` to delegate research tasks).
 
-### $\color{#8bb97a}{\textsf{Directories (File Manager)}}$
+### Directories (File Manager)
 
 Full-featured file browser with multi-tab support.
 
@@ -263,13 +263,13 @@ Full-featured file browser with multi-tab support.
 - File search with filename/content regex and date filters
 - Download any file directly from the browser
 
-### $\color{#f0883e}{\textsf{Skills, Agents, and Hooks}}$
+### Skills, Agents, and Hooks
 
 - **Skills** -- create and edit skills (`.claude/skills/<name>/SKILL.md`) with supporting template files
 - **Agents** -- custom sub-agents with their own system prompts, models, and tool restrictions
 - **Hooks** -- lifecycle hooks (`PreToolUse`, `PostToolUse`, `Stop`, etc.) with command, prompt, or agent handlers
 
-### $\textsf{Themes}$
+### Themes
 
 Two built-in themes toggled from the header: **Bright** (checker-paper grid, default) and **Dark** (Tokyo Night palette).
 
@@ -345,12 +345,12 @@ When `claude` calls the `AskUserQuestion` tool during a session:
 ```
 server.js                  Entry point -- proxy + dashboard servers, auth
 src/
-  proxy.js                 API forwarding, SSE passthrough, provider routing, per-session profiles
+  proxy.js                 API forwarding, SSE passthrough, provider routing, per-session isolation
   proxy-rule-handler.js    Programmable proxy request/response rules
   sse-passthrough.js       Zero-copy SSE transform stream
   api.js                   REST API endpoints (filesystem browsing, file serving, search, delete)
   ask-schema.js            AskUserQuestion schema definitions
-  cli-session.js           Spawns claude with profile flags and session resume
+  cli-session.js           Spawns claude with session settings and resume
   cli-sessions.js          Multi-tab session manager
   dashboard-ws.js          WebSocket server and broadcast hub
   capabilities.js          Models, providers, hooks, skills, agents CRUD
