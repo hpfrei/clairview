@@ -4,13 +4,14 @@
 
 # vistaclair
 
-**inspect · chat · route**
+**automate · inspect · access**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
-A development dashboard that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with real-time API inspection,
-multi-session chat, file management, terminal access, and multi-provider model routing.
+Turn your home PC into an AI-automated workstation you control from any browser.
+Wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with remote terminal sessions, real-time API inspection,
+file management, and multi-provider model routing — so Claude can build, configure, and maintain your machine while you watch and steer from a phone, tablet, or laptop anywhere on the network.
 
 [Getting started](#getting-started) ·
 [Features](#features) ·
@@ -29,8 +30,9 @@ https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
 
 | | |
 |---|---|
+| **Automate your home PC** | Point Claude at your machine and let it install packages, write configs, start services, and fix issues — all unattended or with you steering from a browser |
+| **Remote access** | Run Claude Code on a powerful home machine and control it from a phone, tablet, or any browser — no SSH, no desktop environment needed |
 | **Study the wire protocol** | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
-| **Remote access** | Run Claude Code on a powerful machine and control it from a phone, tablet, or any browser |
 | **Multi-provider routing** | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
 | **Tool development** | Create and test custom MCP tools from a form-driven editor without leaving the browser |
 | **File management** | Browse, preview, and manage files on the remote machine with a full-featured file manager |
@@ -206,7 +208,6 @@ Multi-tab Claude Code terminal sessions managed from the browser.
 - Per-session settings: model routing, working directory
 - **Session save and resume** -- close a session and pick it up later with full context
 - **AskUserQuestion** interception -- Claude's questions appear inline, answers are injected back transparently
-- Live **task panel** -- `TaskCreate`/`TaskUpdate` tool calls rendered as a draggable status board
 - Directory-spawned tabs shown with distinct `>dirname` label and green accent
 - Stop running sessions at any time
 - Inline tab rename via double-click
@@ -215,14 +216,16 @@ Multi-tab Claude Code terminal sessions managed from the browser.
 
 Route Claude Code through non-Anthropic models. The proxy translates Anthropic Messages API requests into the target provider's format and translates responses back -- Claude Code sees a normal Anthropic API.
 
-| Provider | Models | Notes |
+| Provider | Highlights | Notes |
 |---|---|---|
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | Direct passthrough (no translation) |
-| **OpenAI** | GPT-5.4, GPT-5.4 Pro / Mini / Nano | via `api.openai.com` |
-| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Flash | 1M context, reasoning support |
-| **DeepSeek** | V3.2, R1 Thinking | 128K context |
-| **Moonshot (Kimi)** | K2.5, K2 Thinking | 256K context |
+| **Anthropic** | Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5 | Direct passthrough (no translation) |
+| **OpenAI** | GPT-5.4, GPT-5.4 Mini / Nano, GPT-5, o3, o4-mini, gpt-4.1 | via `api.openai.com` |
+| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Flash / Flash Lite | 1M context, reasoning support |
+| **DeepSeek** | V3.2, R1 Thinking, V4 Flash, V4 Pro | 128K context |
+| **Moonshot (Kimi)** | K2.6, K2.5, K2 Thinking | 256K context |
 | **Ollama** | Any local model | localhost base URL |
+
+40+ models ship pre-configured (some disabled by default). The table above shows highlights — see `capabilities/models.json` for the full catalog.
 
 Model definitions are configured in `capabilities/models.json`. API keys stored separately in `capabilities/secrets.json` (gitignored). Each model can specify system prompt handling (`replace` / `prepend` / `append` / `passthrough`), reasoning mode, context window, max output tokens, and cost per million tokens.
 
@@ -240,7 +243,8 @@ Programmable request/response manipulation at the proxy layer. Rules are JavaScr
 |---|---|
 | **Model Override** | Rewrites the model field on requests (e.g. `claude-opus-4-7` to `claude-opus-4-6`) -- lets you pin all Claude Code sessions to a specific model version |
 | **Tool Filter** | Strips dangerous or unwanted tools from the request before they reach the LLM (e.g. `CronCreate`, `PushNotification`, remote triggers) |
-| **Title Schema Shortcut** | Short-circuits Claude Code's automatic title-generation requests with a dummy response, saving tokens on every new conversation |
+| **AskUserQuestion MCP Rewrite** | Rewrites AskUserQuestion tool calls between the CLI and the MCP tool handler so questions route through the dashboard UI |
+| **Title Schema Shortcut** | Short-circuits Claude Code's automatic title-generation requests with a dummy response, saving tokens on every new conversation (disabled by default) |
 
 ### MCP Tool Manager
 
@@ -252,13 +256,14 @@ Extend Claude Code with custom tools through one integrated MCP server.
 - Inline testing with parameter inputs and result display
 - All MCP tool calls logged in the Inspector
 
-**Built-in MCP tools** (always available):
+**Built-in MCP tools:**
 
-| Tool | Description |
-|---|---|
-| `chat` | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
+| Tool | Default | Description |
+|---|---|---|
+| `vista-AskUserQuestion` | enabled | Routes AskUserQuestion forms through the dashboard UI so you can answer from any browser |
+| `chat` | disabled | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
 
-The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations (e.g. an orchestrator using `chat` to delegate research tasks).
+The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations (e.g. an orchestrator using `chat` to delegate research tasks). Enable it from the MCP tool manager.
 
 ### Directories (File Manager)
 
@@ -358,6 +363,7 @@ src/
   proxy.js                 API forwarding, SSE passthrough, provider routing, per-session isolation
   proxy-rule-handler.js    Programmable proxy request/response rules
   sse-passthrough.js       Zero-copy SSE transform stream
+  jsonl-watcher.js         Watches JSONL conversation files for real-time tool-call events
   api.js                   REST API endpoints (filesystem browsing, file serving, search, delete)
   ask-schema.js            AskUserQuestion schema definitions
   cli-session.js           Spawns claude with session settings and resume
@@ -392,10 +398,12 @@ public/
   rules.js                 Proxy rules editor UI
   mcp.js                   MCP tool manager UI
   mcp.css                  MCP-specific styles
+  favicon.svg              App icon
   style.css                Layout and structural styles
   theme-bright.css         Bright theme (default)
   theme-dark.css           Dark theme (Tokyo Night)
   tools.html               Standalone MCP tool testing page
+  landing_page/            Static landing page assets
 capabilities/
   models.json              Pre-configured LLM provider models
   anthropic-pricing.json   Anthropic model pricing (auto-refreshable)
