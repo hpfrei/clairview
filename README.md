@@ -19,6 +19,8 @@ multi-session chat, file management, terminal access, and multi-provider model r
 [Contributing](CONTRIBUTING.md) ·
 [Pro](https://hpfreilabs.com)
 
+https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
+
 </div>
 
 ---
