@@ -69,13 +69,19 @@ npm --version
 ### Install
 
 ```bash
+npm install -g vistaclair
+```
+
+Or clone the repository:
+
+```bash
 git clone https://github.com/hpfrei/vistaclair.git
 cd vistaclair
 npm install
 ```
 
 > [!IMPORTANT]
-> Always run `npm install` after cloning or pulling new changes to install dependencies.
+> If cloning, always run `npm install` after cloning or pulling new changes to install dependencies.
 
 Run `claude` once manually to authenticate if you haven't already. With a Max subscription, just run `claude login` -- no API key needed.
 
@@ -116,15 +122,15 @@ Open **http://localhost:3457** and log in with the token.
 > [!WARNING]
 > The dashboard binds to `0.0.0.0` for remote access. It is protected by the auth token, but do not expose it to untrusted networks without TLS/VPN.
 
-### Running with full system access
+### Unlocking full system access
 
-By default, Claude Code sessions spawned from vistaclair run under your user account. To unlock its full potential -- letting Claude install packages, configure services, modify system files, and set up entire environments from scratch -- run vistaclair as root:
+By default, Claude Code sessions run under your user account. If your user can `sudo`, Claude can install packages, configure services, and set up entire environments — just make sure vistaclair runs under an account with sudo privileges:
 
 ```bash
-sudo npm start
+npm start
 ```
 
-This gives every Claude Code session spawned from the dashboard full root access. Combined with the **full** profile (`bypassPermissions`), Claude can:
+With sudo access available, Claude can:
 
 - Install system packages (`apt install`, `brew install`, `snap install`)
 - Configure and start services (nginx, PostgreSQL, Docker, systemd units)
@@ -132,11 +138,10 @@ This gives every Claude Code session spawned from the dashboard full root access
 - Set up development toolchains and language runtimes
 - Modify system configuration files (`/etc/`, crontabs, environment)
 - Build and deploy applications end-to-end
-- Mount filesystems, manage disks and network interfaces
 
 #### Recommended: use a VM
 
-Running an AI agent as root is powerful but carries risk on your primary machine. A virtual machine gives you the best of both worlds -- full system access in an isolated sandbox where nothing can escape:
+Running an AI agent with sudo is powerful but carries risk on your primary machine. A virtual machine gives you the best of both worlds -- full system access in an isolated sandbox:
 
 ```bash
 # On a fresh Ubuntu VM:
@@ -147,13 +152,13 @@ sudo apt-get install -y nodejs git
 npm install -g @anthropic-ai/claude-code
 claude login   # authenticate once
 
-# Clone and run vistaclair as root
+# Clone and run vistaclair
 git clone https://github.com/hpfrei/vistaclair.git
 cd vistaclair && npm install
-sudo npm start
+npm start
 ```
 
-Then open `http://<vm-ip>:3457` from your host browser. You now have a remote, browser-controlled Claude with root access in a disposable environment.
+Then open `http://<vm-ip>:3457` from your host browser. You now have a remote, browser-controlled Claude with sudo access in a disposable environment.
 
 > [!TIP]
 > **Snapshot before, experiment freely.** Take a VM snapshot before starting. If Claude misconfigures something, roll back in seconds. This is the fastest way to iterate on complex system setups.
@@ -161,9 +166,9 @@ Then open `http://<vm-ip>:3457` from your host browser. You now have a remote, b
 > [!TIP]
 > **Headless servers and cloud VMs work great.** vistaclair's dashboard is fully browser-based -- no desktop environment needed. A $5/month VPS or a local QEMU/VirtualBox VM is all it takes.
 
-#### What you can ask Claude to do with root
+#### What you can ask Claude to do
 
-Once running with `sudo`, spawn a **full** profile session and try things like:
+With sudo available, try things like:
 
 - *"Set up a complete LAMP stack with PHP 8.3, MariaDB, and a sample WordPress site"*
 - *"Install Docker, pull the postgres:16 image, create a database, and set up pgAdmin"*
@@ -188,7 +193,6 @@ A transparent proxy that captures every API call between Claude Code and the ups
 - Token usage breakdown: input, output, cache read, cache creation
 - **Cost tracking** per interaction, per model, per provider
 - Live **markdown rendering** of assistant responses in the detail panel
-- Profile flags (bare mode, auto-memory) shown per request
 - All interactions saved to disk as structured JSON for offline analysis
 
 ### $\color{#3fb950}{\textsf{CLI (Multi-tab Terminal)}}$
@@ -197,43 +201,13 @@ Multi-tab Claude Code terminal sessions managed from the browser.
 
 - **Multiple independent tabs**, each running a separate `claude` process
 - Spawn sessions in any directory with the filesystem picker
-- Per-session settings: model routing, profiles, working directory
+- Per-session settings: model routing, working directory
 - **Session save and resume** -- close a session and pick it up later with full context
 - **AskUserQuestion** interception -- Claude's questions appear inline, answers are injected back transparently
 - Live **task panel** -- `TaskCreate`/`TaskUpdate` tool calls rendered as a draggable status board
 - Directory-spawned tabs shown with distinct `>dirname` label and green accent
 - Stop running sessions at any time
 - Inline tab rename via double-click
-
-### $\color{#d29922}{\textsf{Profiles}}$
-
-Named capability bundles that control how `claude` is spawned.
-
-| Setting | CLI flag | Description |
-|---|---|---|
-| Model | `--model` | sonnet, opus, haiku, or custom model ID |
-| Effort | `--effort` | low, medium, high, max |
-| Permission mode | `--permission-mode` | default, acceptEdits, plan, bypassPermissions, dontAsk, auto |
-| Allowed/disabled tools | `--allowedTools` / `--disallowedTools` | Per-tool enable/disable via checkboxes |
-| Model definition | profile `modelDef` field | Route through a third-party model |
-| Bare mode | `--bare` | Strip skills and MCP servers |
-| Disable auto-memory | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | Prevent auto-memory writes |
-| Slash commands | `--disable-slash-commands` | Enable/disable built-in skills |
-| Max turns | `--max-turns` | Cap agentic loop iterations |
-| Budget | `--max-budget-usd` | Dollar spend limit per run |
-| System prompt | `--append-system-prompt` / `--system-prompt` | Append to or replace the default system prompt |
-| MCP servers | `--mcp-config` | Integrated server with custom tools |
-
-**Built-in profiles:**
-
-| Profile | Permission mode | Description |
-|---|---|---|
-| $\color{#3fb950}{\texttt{full}}$ | `bypassPermissions` | All tools, no prompts |
-| $\color{#d29922}{\texttt{safe}}$ | `acceptEdits` | No bash, write, edit, or destructive tools |
-| $\color{#58a6ff}{\texttt{readonly}}$ | `plan` | Only Read, Glob, Grep, AskUserQuestion |
-| $\color{#8b949e}{\texttt{minimal}}$ | `plan` | Only Read, Glob, Grep; slash commands disabled |
-
-Duplicate any built-in profile to create an editable custom profile with full control over all settings.
 
 ### $\color{#bc8cff}{\textsf{LLM Provider Adapters}}$
 
@@ -274,7 +248,7 @@ Extend Claude Code with custom tools through one integrated MCP server.
 |---|---|
 | `chat` | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
 
-The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations with different profiles (e.g. an orchestrator using `chat` to delegate research to a `readonly` session).
+The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations (e.g. an orchestrator using `chat` to delegate research tasks).
 
 ### $\color{#8bb97a}{\textsf{Directories (File Manager)}}$
 
@@ -311,7 +285,7 @@ Two built-in themes toggled from the header: **Bright** (checker-paper grid, def
 | MCP tool manager | ✓ | ✓ |
 | File manager | ✓ | ✓ |
 | Proxy rules engine | ✓ | ✓ |
-| Profiles & model config | ✓ | ✓ |
+| Model config & routing | ✓ | ✓ |
 | Skills, agents, hooks | ✓ | ✓ |
 | **Apps Platform** | — | ✓ |
 
@@ -336,13 +310,13 @@ vistaclair runs two servers from a single Node.js process:
 
 ### Per-session isolation
 
-Every `claude` process gets its profile baked into its base URL at spawn time:
+Every `claude` process gets a unique instance ID baked into its base URL at spawn time:
 
 ```
-ANTHROPIC_BASE_URL = http://localhost:3456/p/{profileName}
+ANTHROPIC_BASE_URL = http://localhost:3456/i/{instanceId}
 ```
 
-This means the profile is **immutable for the process lifetime**. Switching profiles in the browser never affects a running session. Concurrent chats and API calls are fully isolated.
+This means each session's API traffic is tracked independently. Concurrent chats and API calls are fully isolated.
 
 ### Request flow
 
@@ -379,7 +353,7 @@ src/
   cli-session.js           Spawns claude with profile flags and session resume
   cli-sessions.js          Multi-tab session manager
   dashboard-ws.js          WebSocket server and broadcast hub
-  capabilities.js          Profiles, models, providers, hooks, skills, agents CRUD
+  capabilities.js          Models, providers, hooks, skills, agents CRUD
   store.js                 In-memory interaction store with disk persistence
   utils.js                 Central spawn function, process tracking, stream parsing
   providers/
@@ -401,7 +375,7 @@ public/
   login.html               Auth token login page
   home.js                  Home view documentation (overview, architecture, tools)
   core.js                  WebSocket, view switching, markdown rendering, process counter
-  capabilities.js          Profile/model/tool/skill/agent/hook management UI
+  capabilities.js          Model/tool/skill/agent/hook management UI
   inspector.js             Inspector timeline and detail panel
   cli.js                   Multi-tab CLI session UI and settings
   directories.js           File manager -- browsing, previews, overlay, selection, shell
@@ -417,7 +391,6 @@ capabilities/
   anthropic-pricing.json   Anthropic model pricing (auto-refreshable)
   proxy-rules.json         Proxy rule definitions
   secrets.json             API keys (gitignored)
-  profiles/                Custom profile JSON files
 mcp-servers/integrated/    Auto-generated MCP tool server + built-in tools
 interactions/              Saved API call history (per-session directories)
 docs/
