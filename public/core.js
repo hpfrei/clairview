@@ -59,7 +59,10 @@ function renderMarkdown(text, targetEl) {
     const lang = (typeof args === 'object' ? args.lang : arguments[1]) || '';
     // Render html and svg fenced blocks as live content
     if (lang === 'html' || lang === 'svg') {
-      return `<div class="rendered-block rendered-${lang}">${code}</div>`;
+      const clean = typeof DOMPurify !== 'undefined'
+        ? DOMPurify.sanitize(code, { ADD_TAGS: ['svg', 'circle', 'rect', 'line', 'polyline', 'polygon', 'path', 'text', 'g', 'defs', 'use', 'symbol', 'clipPath', 'mask', 'pattern', 'image', 'foreignObject', 'ellipse', 'tspan', 'textPath', 'linearGradient', 'radialGradient', 'stop', 'filter', 'feGaussianBlur', 'feOffset', 'feMerge', 'feMergeNode', 'feBlend', 'feColorMatrix', 'feComposite', 'animate', 'animateTransform', 'marker'], ADD_ATTR: ['viewBox', 'xmlns', 'fill', 'stroke', 'stroke-width', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'd', 'points', 'transform', 'opacity', 'font-size', 'text-anchor', 'dominant-baseline', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'clip-path', 'mask', 'filter', 'gradientUnits', 'offset', 'stop-color', 'stop-opacity', 'preserveAspectRatio', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient', 'stdDeviation', 'dx', 'dy', 'result', 'in', 'in2', 'mode', 'values', 'type', 'begin', 'dur', 'repeatCount', 'attributeName', 'from', 'to'] })
+        : escHtml(code);
+      return `<div class="rendered-block rendered-${lang}">${clean}</div>`;
     }
     // Default code block rendering with copy button
     return `<div class="code-block-wrap"><button class="code-copy-btn" title="Copy">Copy</button><pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre></div>`;
@@ -262,7 +265,6 @@ const statsEl = document.getElementById('footerStats');
 
 // Centralized settings state sync — called once, modules just re-render
 function syncSettings(msg) {
-  if (msg.authToken) state.authToken = msg.authToken;
   if (msg.capabilities) {
     state.capabilities = msg.capabilities;
   }
@@ -355,11 +357,7 @@ function pollForRestart() {
   }
   fetch('/api/ping').then(function(r) {
     if (!r.ok) return setTimeout(pollForRestart, 1500);
-    if (state.authToken) {
-      window.location.href = '/login/auto?token=' + encodeURIComponent(state.authToken);
-    } else {
-      location.reload();
-    }
+    location.reload();
   }).catch(function() {
     setTimeout(pollForRestart, 1500);
   });

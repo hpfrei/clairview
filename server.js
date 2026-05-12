@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
 const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, getActiveProcessCount, spawnClaude } = require('./src/utils');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
@@ -226,19 +227,32 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 function isLoopback(req) { return LOOPBACK.has(req.socket?.remoteAddress); }
 function isLoopbackSocket(socket) { return LOOPBACK.has(socket.remoteAddress); }
 
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
 function getTokenFromCookies(cookieHeader) {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(/(?:^|;\s*)token=([^;]+)/);
   return match ? match[1] : null;
 }
 
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, try again in a minute' },
+});
+
 // Login routes (no auth required)
 dashboardApp.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-dashboardApp.post('/login', (req, res) => {
-  if (req.body.token === AUTH_TOKEN) {
+dashboardApp.post('/login', authLimiter, (req, res) => {
+  if (safeEqual(req.body.token, AUTH_TOKEN)) {
     res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
     res.redirect('/');
   } else {
@@ -246,8 +260,9 @@ dashboardApp.post('/login', (req, res) => {
   }
 });
 
-dashboardApp.get('/login/auto', (req, res) => {
-  if (req.query.token === AUTH_TOKEN) {
+dashboardApp.get('/login/auto', authLimiter, (req, res) => {
+  if (!isLoopback(req)) return res.redirect('/login');
+  if (safeEqual(req.query.token, AUTH_TOKEN)) {
     res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
     return res.redirect('/');
   }
@@ -257,7 +272,7 @@ dashboardApp.get('/login/auto', (req, res) => {
 // Hook reporter endpoint (auth via body token, no cookie needed)
 let hookSeq = 0;
 dashboardApp.post('/api/hook-report', (req, res) => {
-  if (req.body?.token !== AUTH_TOKEN) return res.status(401).end();
+  if (!safeEqual(req.body?.token, AUTH_TOKEN)) return res.status(401).end();
   try {
     const hookData = typeof req.body.hookData === 'string' ? JSON.parse(req.body.hookData) : req.body.hookData;
     const id = `hook-${Date.now()}-${++hookSeq}`;
@@ -292,7 +307,7 @@ dashboardApp.post('/api/hook-report', (req, res) => {
 const { getInstanceContext } = require('./src/utils');
 let askSeq = 0;
 dashboardApp.post('/api/ask', async (req, res) => {
-  if (req.body?.token !== AUTH_TOKEN) return res.status(401).end();
+  if (!safeEqual(req.body?.token, AUTH_TOKEN)) return res.status(401).end();
   const { instanceId, formData, questions } = req.body;
   const askId = `ask-${Date.now()}-${++askSeq}`;
   const ctx = instanceId ? getInstanceContext(instanceId) : null;
@@ -331,10 +346,9 @@ dashboardApp.use((req, res, next) => {
   // Allow internal requests from MCP tools (localhost + internal header)
   if (req.headers['x-vistaclair-internal'] === 'true' && isLoopback(req)) return next();
   const token = getTokenFromCookies(req.headers.cookie);
-  if (token === AUTH_TOKEN) return next();
-  // Also accept Authorization: Bearer <token> for API clients
+  if (safeEqual(token, AUTH_TOKEN)) return next();
   const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ') && authHeader.slice(7) === AUTH_TOKEN) return next();
+  if (authHeader?.startsWith('Bearer ') && safeEqual(authHeader.slice(7), AUTH_TOKEN)) return next();
   // API routes get 401 JSON; browser routes get redirect
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
@@ -549,7 +563,7 @@ dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
   const internal = req.headers['x-vistaclair-internal'] === 'true' && isLoopbackSocket(socket);
   const token = getTokenFromCookies(req.headers.cookie);
-  if (!internal && token !== AUTH_TOKEN) {
+  if (!internal && !safeEqual(token, AUTH_TOKEN)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;

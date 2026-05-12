@@ -48,7 +48,6 @@ class DashboardBroadcaster {
         type: 'chat:settings',
         tabId: 'tab-1',
         cwd: process.cwd(),
-        authToken: this.authToken,
         knownTools: caps.KNOWN_TOOLS,
         knownSkills: caps.KNOWN_SKILLS,
         hookEvents: caps.HOOK_EVENTS,
