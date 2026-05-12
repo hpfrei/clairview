@@ -160,6 +160,9 @@ class CliSessionManager {
 
   spawn(tabId, cwd, cols, rows, { resumeSessionId, isolated } = {}) {
     const session = this.getOrCreate(tabId);
+    if (session.sessId && session.cwd) {
+      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
+    }
     session.spawn(cwd, cols, rows, { resumeSessionId, isolated });
     this.broadcastTabs();
   }
