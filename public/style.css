@@ -1048,6 +1048,7 @@ details[open] > summary { border-bottom: 1px solid var(--border); }
 .jt-bracket { color: var(--text-dim); }
 .jt-close { display: block; }
 .jt-line { display: block; }
+.jt-line:has(> .jt-node[open]) { display: flex; flex-wrap: wrap; align-items: baseline; }
 .jt-comma { color: var(--text-dim); }
 .jt-count { color: var(--text-dim); font-style: italic; font-size: 11px; }
 .jt-expand-btn { background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 11px; padding: 0 3px; margin-left: 4px; opacity: 0; transition: opacity 0.15s; vertical-align: middle; }
