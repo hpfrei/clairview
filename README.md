@@ -6,13 +6,18 @@
 
 $\large\textsf{\color{#58a6ff}inspect\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#3fb950}chat\color{#8b949e}{\kern{6mu}·\kern{6mu}}\color{#bc8cff}route}$
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+
 A development dashboard that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with real-time API inspection,
 multi-session chat, file management, terminal access, and multi-provider model routing.
 
 [Getting started](#getting-started) ·
 [Features](#features) ·
+[Free vs Pro](#free-vs-pro) ·
 [Architecture](#architecture) ·
-[Project structure](#project-structure)
+[Contributing](CONTRIBUTING.md) ·
+[Pro](https://hpfreilabs.com)
 
 </div>
 
@@ -296,6 +301,24 @@ Two built-in themes toggled from the header: **Bright** (checker-paper grid, def
 
 ---
 
+## Free vs Pro
+
+| Feature | Free | Pro |
+|---------|:----:|:---:|
+| API Inspector & cost tracking | ✓ | ✓ |
+| Multi-session CLI terminal | ✓ | ✓ |
+| LLM provider routing | ✓ | ✓ |
+| MCP tool manager | ✓ | ✓ |
+| File manager | ✓ | ✓ |
+| Proxy rules engine | ✓ | ✓ |
+| Profiles & model config | ✓ | ✓ |
+| Skills, agents, hooks | ✓ | ✓ |
+| **Apps Platform** | — | ✓ |
+
+[Get vistaclair Pro →](https://hpfreilabs.com)
+
+---
+
 ## Architecture
 
 <picture>
@@ -406,8 +429,8 @@ docs/
 
 ## License
 
-MIT License -- see [LICENSE](LICENSE). Copyright (c) 2026 [hpfreilabs.com](https://hpfreilabs.com)
+**Apache 2.0** — see [LICENSE](LICENSE). Copyright 2026 [hpfreilabs.com](https://hpfreilabs.com)
 
-Free to use, modify, and redistribute. Attribution required (keep the copyright notice).
+Free to use, modify, and redistribute. Attribution required — derivative works must preserve the [NOTICE](NOTICE) file and copyright notices.
 
-> **Note:** The "Apps" (Pro) feature is a separately licensed commercial add-on available via subscription. It is not part of this open-source repository.
+> **vistaclair Pro** — the Apps Platform and additional features — is a separately licensed commercial add-on. [Learn more →](https://hpfreilabs.com)

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: vistaclair Pro
+    url: https://hpfreilabs.com
+    about: Looking for the Apps Platform or other Pro features?
+  - name: Security vulnerability
+    url: https://github.com/hpfrei/vistaclair/security/advisories/new
+    about: Report security vulnerabilities privately.

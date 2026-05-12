@@ -29,6 +29,10 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 3. Test that the proxy and dashboard both work as expected
 4. Commit with a clear message describing what and why
 
+## Contributor License Agreement
+
+Before we can merge your first pull request, you'll need to agree to our [Contributor License Agreement](CLA.md). This allows us to use your contributions in both the open-source and commercial editions of vistaclair while you retain full ownership of your work.
+
 ## Submitting a Pull Request
 
 1. Push your branch to your fork
