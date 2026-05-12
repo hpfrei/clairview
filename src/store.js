@@ -199,7 +199,6 @@ class InteractionStore {
       instanceId: `cli-${sessId}`,
       stepId: req.stepId || null,
       runId: req.runId || null,
-      profile: req.profile || null,
       request: req,
       response: {
         status: resp.status ?? null,
@@ -310,7 +309,6 @@ class InteractionStore {
         endpoint: interaction.endpoint,
         timestamp: interaction.timestamp,
         isStreaming: interaction.isStreaming,
-        profile: interaction.profile || undefined,
         stepId: interaction.stepId || undefined,
         runId: interaction.runId || undefined,
       },

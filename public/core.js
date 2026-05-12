@@ -21,8 +21,6 @@ const state = {
   reconnectDelay: 1000,
   // Capabilities
   capabilities: null,
-  profiles: [],
-  activeProfileName: null,
   knownTools: [],
   knownSkills: [],
   agents: [],
@@ -267,9 +265,7 @@ function syncSettings(msg) {
   if (msg.authToken) state.authToken = msg.authToken;
   if (msg.capabilities) {
     state.capabilities = msg.capabilities;
-    state.activeProfileName = msg.capabilities.name;
   }
-  if (msg.profiles) state.profiles = msg.profiles;
   if (msg.knownTools) state.knownTools = msg.knownTools;
   if (msg.knownSkills) state.knownSkills = msg.knownSkills;
   if (msg.hookEvents) state.hookEvents = msg.hookEvents;
@@ -962,6 +958,7 @@ function handleMessage(msg) {
   switch (msg.type) {
     // Inspector
     case 'init':
+      document.querySelector('.header-tab[data-view="dashboard"]')?.classList.remove('tab-loading');
     case 'interaction:start':
     case 'interaction:update':
     case 'sse_event':
@@ -990,6 +987,8 @@ function handleMessage(msg) {
     case 'cli:exit':
     case 'cli:spawned':
     case 'cli:tabs':
+      document.querySelector('.header-tab[data-view="claude"]')?.classList.remove('tab-loading');
+      document.querySelector('.header-tab[data-view="directories"]')?.classList.remove('tab-loading');
     case 'cli:newTab':
     case 'cli:settingsData':
     case 'cli:savedSessions':
@@ -1008,9 +1007,6 @@ function handleMessage(msg) {
     case 'hook:list':
     case 'model:list':
     case 'provider:list':
-      window.capabilitiesModule?.handleMessage(msg);
-      break;
-    case 'profile:list':
       window.capabilitiesModule?.handleMessage(msg);
       break;
 
@@ -1151,4 +1147,11 @@ document.addEventListener('keydown', e => {
 })();
 
 // --- Init ---
+// Show loading indicators on main tabs until data arrives
+document.querySelectorAll('.header-tab[data-view]').forEach(tab => {
+  const view = tab.dataset.view;
+  if (view === 'dashboard' || view === 'claude' || view === 'directories') {
+    tab.classList.add('tab-loading');
+  }
+});
 connect();

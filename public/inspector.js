@@ -7,6 +7,7 @@
   // --- Auto-select suppression: don't jump away from user-selected turns ---
   let _userPinnedSelection = false;
   let _autoClearInactive = localStorage.getItem('inspectorAutoClear') === '1';
+  let _suppressAutoClear = false;
 
   // --- Subagent registry: track numbering and colors for parallel subagents ---
   const _subagentRegistry = new Map();    // agentId -> { agentType, number, colorIndex }
@@ -191,11 +192,11 @@
       btn.appendChild(close);
       inspectorTabStrip.appendChild(btn);
     }
-    // "Clear inactive" button + autoclear checkbox
+    // Combined "Clear inactive" button with autoclear toggle
     const hasExited = [...knownInstances.values()].some(i => i.status === 'exited');
 
     // Autoclear: if enabled, clear exited instances immediately
-    if (hasExited && _autoClearInactive) {
+    if (hasExited && _autoClearInactive && !_suppressAutoClear) {
       const exitedIds = [];
       for (const [id, info] of knownInstances) {
         if (info.status === 'exited') exitedIds.push(id);
@@ -206,42 +207,54 @@
         const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
         activeInstanceTab = fallback;
       }
-      // Re-render after autoclear (defer to avoid recursion)
       queueMicrotask(() => renderInspectorTabStrip());
       return;
     }
 
-    if (hasExited) {
+    {
       const clearBtn = document.createElement('button');
-      clearBtn.className = 'view-tab-action';
-      clearBtn.title = 'Close all inactive tabs';
-      clearBtn.textContent = 'Clear inactive';
-      clearBtn.addEventListener('click', (e) => {
+      clearBtn.className = 'view-tab-action' + (_autoClearInactive ? ' autoclear-on' : '');
+      clearBtn.title = _autoClearInactive ? 'Autoclear active — inactive tabs are removed automatically' : 'Clear all inactive tabs';
+
+      // Auto-toggle SVG — recycle arrows when off, check-circle when on
+      const autoToggle = document.createElement('span');
+      autoToggle.className = 'autoclear-toggle' + (_autoClearInactive ? ' active' : '');
+      autoToggle.title = _autoClearInactive ? 'Disable autoclear' : 'Enable autoclear';
+      autoToggle.innerHTML = _autoClearInactive
+        ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><polyline points="5 8.2 7.2 10.5 11 5.5"/></svg>'
+        : '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8a5.5 5.5 0 0 1 9.3-4"/><path d="M13.5 8a5.5 5.5 0 0 1-9.3 4"/><polyline points="12 1.5 12 4.5 9 4.5"/><polyline points="4 11.5 4 14.5 7 14.5"/></svg>';
+      autoToggle.addEventListener('click', (e) => {
         e.stopPropagation();
-        const exitedIds = [];
-        for (const [id, info] of knownInstances) {
-          if (info.status === 'exited') exitedIds.push(id);
-        }
-        for (const id of exitedIds) knownInstances.delete(id);
-        if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
-        if (!knownInstances.has(activeInstanceTab)) {
-          const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
-          switchInstanceTab(fallback);
-        } else renderInspectorTabStrip();
+        _autoClearInactive = !_autoClearInactive;
+        localStorage.setItem('inspectorAutoClear', _autoClearInactive ? '1' : '0');
+        renderInspectorTabStrip();
       });
+
+      const textSpan = document.createElement('span');
+      textSpan.className = 'autoclear-label-text';
+      textSpan.textContent = hasExited ? 'Clear inactive' : (_autoClearInactive ? 'Autoclear' : 'Clear inactive');
+
+      clearBtn.appendChild(autoToggle);
+      clearBtn.appendChild(textSpan);
+
+      if (hasExited && !_autoClearInactive) {
+        clearBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const exitedIds = [];
+          for (const [id, info] of knownInstances) {
+            if (info.status === 'exited') exitedIds.push(id);
+          }
+          for (const id of exitedIds) knownInstances.delete(id);
+          if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
+          if (!knownInstances.has(activeInstanceTab)) {
+            const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
+            switchInstanceTab(fallback);
+          } else renderInspectorTabStrip();
+        });
+      }
+
       inspectorTabStrip.appendChild(clearBtn);
     }
-
-    // Autoclear checkbox — always visible
-    const autoLabel = document.createElement('label');
-    autoLabel.className = 'tl-autoclear-label';
-    autoLabel.innerHTML = `<input type="checkbox" class="tl-autoclear-cb"${_autoClearInactive ? ' checked' : ''}> autoclear`;
-    autoLabel.querySelector('input').addEventListener('change', (e) => {
-      _autoClearInactive = e.target.checked;
-      localStorage.setItem('inspectorAutoClear', _autoClearInactive ? '1' : '0');
-      if (_autoClearInactive) renderInspectorTabStrip();
-    });
-    inspectorTabStrip.appendChild(autoLabel);
 
     updateStreamingState();
   }
@@ -785,10 +798,14 @@
   // TIMELINE RENDERING
   // ============================================================
 
+  function isStandardLlm(interaction) {
+    return !interaction.endpoint || interaction.endpoint === '/v1/messages';
+  }
+
   function llmTurnNumber(interaction) {
     let n = 0;
     for (const i of state.interactions) {
-      if (!i.isMcp && !i.isHook) n++;
+      if (!i.isMcp && !i.isHook && isStandardLlm(i)) n++;
       if (i === interaction) return n;
     }
     return n;
@@ -806,21 +823,27 @@
     if (!header || header.querySelector('.timeline-view-toggle')) return;
     const toggle = document.createElement('div');
     toggle.className = 'timeline-view-toggle';
-    const singleSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="3" x2="10" y2="3"/><line x1="2" y1="6" x2="10" y2="6"/><line x1="2" y1="9" x2="10" y2="9"/></svg>`;
-    const parallelSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="2" x2="3" y2="10"/><line x1="6" y1="2" x2="6" y2="10"/><line x1="9" y1="2" x2="9" y2="10"/></svg>`;
+
+    // Single button that swaps between narrow ↔ wide
+    const narrowSvg = `<svg width="12" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="3" y="1" width="8" height="10" rx="1.5"/><line x1="5" y1="4" x2="9" y2="4"/><line x1="5" y1="6.5" x2="9" y2="6.5"/><line x1="5" y1="9" x2="8" y2="9"/></svg>`;
+    const wideSvg = `<svg width="12" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1" y="1" width="12" height="10" rx="1.5"/><line x1="5" y1="1" x2="5" y2="11"/><line x1="9" y1="1" x2="9" y2="11"/></svg>`;
     const allSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 2h8v8H2z"/><line x1="2" y1="5" x2="10" y2="5"/><line x1="2" y1="8" x2="10" y2="8"/></svg>`;
+
+    const isWide = _timelineMode === 'parallel';
     toggle.innerHTML = `
-      <span class="tl-view-label">view</span>
-      <button class="tl-toggle-btn tl-view-toggle" title="Toggle single / parallel columns">${_timelineMode === 'parallel' ? parallelSvg : singleSvg}</button>
+      <button class="tl-toggle-btn tl-view-toggle${isWide ? ' active' : ''}" title="${isWide ? 'Switch to narrow view' : 'Switch to wide view'}">${isWide ? wideSvg : narrowSvg}<span class="tl-toggle-label">${isWide ? 'wide' : 'narrow'}</span></button>
       <button class="tl-toggle-btn tl-load-all-btn${_allHistoryLoaded ? ' active' : ''}" title="Load full history from disk">${allSvg}</button>
     `;
     const viewBtn = toggle.querySelector('.tl-view-toggle');
     viewBtn.addEventListener('click', () => {
       _timelineMode = _timelineMode === 'single' ? 'parallel' : 'single';
       localStorage.setItem('timelineMode', _timelineMode);
-      viewBtn.innerHTML = _timelineMode === 'parallel' ? parallelSvg : singleSvg;
+      const nowWide = _timelineMode === 'parallel';
+      viewBtn.innerHTML = (nowWide ? wideSvg : narrowSvg) + `<span class="tl-toggle-label">${nowWide ? 'wide' : 'narrow'}</span>`;
+      viewBtn.classList.toggle('active', nowWide);
+      viewBtn.title = nowWide ? 'Switch to narrow view' : 'Switch to wide view';
       const aside = document.getElementById('timeline');
-      if (aside) aside.classList.toggle('parallel-mode', _timelineMode === 'parallel');
+      if (aside) aside.classList.toggle('parallel-mode', nowWide);
       renderTimelineActive();
     });
     toggle.querySelector('.tl-load-all-btn').addEventListener('click', (e) => {
@@ -851,14 +874,18 @@
         if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
       } else if (interaction.instanceId !== activeInstanceTab) return;
       if (!interaction.isMcp && !interaction.isHook) {
-        const agentId = interaction.subagent?.agentId;
-        if (agentId) {
-          const n = (subagentTurnCounts.get(agentId) || 0) + 1;
-          subagentTurnCounts.set(agentId, n);
-          appendTurnToTimeline(interaction, n, true);
+        if (!isStandardLlm(interaction)) {
+          appendTurnToTimeline(interaction, undefined, false);
         } else {
-          turnNum++;
-          appendTurnToTimeline(interaction, turnNum, false);
+          const agentId = interaction.subagent?.agentId;
+          if (agentId) {
+            const n = (subagentTurnCounts.get(agentId) || 0) + 1;
+            subagentTurnCounts.set(agentId, n);
+            appendTurnToTimeline(interaction, n, true);
+          } else {
+            turnNum++;
+            appendTurnToTimeline(interaction, turnNum, false);
+          }
         }
       } else {
         appendTurnToTimeline(interaction);
@@ -989,7 +1016,7 @@
     el.className = 'timeline-entry turn-entry';
     el.dataset.id = interaction.id;
 
-    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
+    const stdLlm = isStandardLlm(interaction);
     const statusClass = badgeClass(interaction.status);
     const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
@@ -998,14 +1025,17 @@
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
     let modelLabel;
-    if (!isStandardLlm) {
+    if (!stdLlm) {
       const ep = interaction.endpoint.replace('/v1/messages/', '');
       modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
     } else {
       modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     }
-    const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
-    const turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
+    let turnLabel = '';
+    if (turnNum != null) {
+      const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
+      turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
+    }
     const tokenSummary = compactTokens(interaction.usage);
     const cost = computeCost(interaction.usage, interaction.pricing);
     const costHtml = turnCostGauge(cost);
@@ -1171,17 +1201,20 @@
       } else if (interaction.isHook) {
         el = buildParallelHookEl(interaction);
       } else {
-        const agentId = interaction.subagent?.agentId;
-        let num, isSub;
-        if (agentId) {
-          const n = (subagentTurnCounts.get(agentId) || 0) + 1;
-          subagentTurnCounts.set(agentId, n);
-          num = n;
-          isSub = true;
+        let num, isSub = false;
+        if (!isStandardLlm(interaction)) {
+          num = undefined;
         } else {
-          turnNum++;
-          num = turnNum;
-          isSub = false;
+          const agentId = interaction.subagent?.agentId;
+          if (agentId) {
+            const n = (subagentTurnCounts.get(agentId) || 0) + 1;
+            subagentTurnCounts.set(agentId, n);
+            num = n;
+            isSub = true;
+          } else {
+            turnNum++;
+            num = turnNum;
+          }
         }
         el = buildParallelTurnEl(interaction, num, isSub);
       }
@@ -1289,7 +1322,9 @@
     } else if (interaction.isHook) {
       el = buildParallelHookEl(interaction);
     } else {
-      if (agentId) {
+      if (!isStandardLlm(interaction)) {
+        el = buildParallelTurnEl(interaction, undefined, false);
+      } else if (agentId) {
         const n = (ps.subagentTurnCounts.get(agentId) || 0) + 1;
         ps.subagentTurnCounts.set(agentId, n);
         el = buildParallelTurnEl(interaction, n, true);
@@ -1377,7 +1412,7 @@
     el.className = 'timeline-entry turn-entry';
     el.dataset.id = interaction.id;
 
-    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
+    const stdLlm = isStandardLlm(interaction);
     const statusClass = badgeClass(interaction.status);
     const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
@@ -1386,14 +1421,17 @@
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
     let modelLabel;
-    if (!isStandardLlm) {
+    if (!stdLlm) {
       const ep = interaction.endpoint.replace('/v1/messages/', '');
       modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
     } else {
       modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     }
-    const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
-    const turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
+    let turnLabel = '';
+    if (turnNum != null) {
+      const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
+      turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
+    }
     const instanceTag = (activeInstanceTab === 'all' && interaction.instanceId)
       ? `<span class="entry-instance">${escHtml(instanceDisplayLabel(interaction.instanceId))}</span>` : '';
     const subagentLabel = interaction.subagent ? getSubagentLabel(interaction.subagent) : '';
@@ -1983,11 +2021,10 @@
     }
 
     if (req.system) {
-      const systemText = typeof req.system === 'string' ? req.system : JSON.stringify(req.system, null, 2);
       const charLen = typeof req.system === 'string' ? req.system.length : JSON.stringify(req.system).length;
       html += `<details>
         <summary>System Prompt ${charGauge(charLen)}</summary>
-        <div class="json-block">${escHtml(systemText)}</div>
+        ${jsonBlock(req.system)}</pre>
       </details>`;
     }
 
@@ -2008,10 +2045,9 @@
 
     if (req.tools?.length > 0) {
       const toolChars = JSON.stringify(req.tools).length;
-      const toolNames = req.tools.map(t => t.name || 'unnamed').join(', ');
       html += `<details>
-        <summary>Tools ${req.tools.length} ${charGauge(toolChars, escHtml(truncate(toolNames, 100)))}</summary>
-        ${jsonBlock(req.tools)}</pre>
+        <summary>Tools ${req.tools.length} ${charGauge(toolChars)}</summary>
+        <div class="json-block">${renderTools(req.tools)}</div>
       </details>`;
     }
 
@@ -2044,11 +2080,11 @@
 
     html += `<div id="response-blocks">`;
 
-    const isStandardLlm = !interaction.endpoint || interaction.endpoint === '/v1/messages';
+    const stdLlmResp = isStandardLlm(interaction);
     if (interaction.isStreaming && resp.sseEvents?.length > 0) {
       html += renderAccumulatedBlocks(resp.sseEvents);
     } else if (resp.body) {
-      if (!isStandardLlm) {
+      if (!stdLlmResp) {
         html += `<div class="content-block">
           <div class="content-block-header">Response Body</div>
           <pre class="content-block-body json-block">${escHtml(JSON.stringify(resp.body, null, 2))}</pre>
@@ -2084,6 +2120,7 @@
     html += `</div>`;
 
     detailContent.innerHTML = html;
+    detailContent.querySelectorAll('details.jt-node').forEach(d => d.open = true);
     processMarkdownBlocks(detailContent);
   }
 
@@ -2272,6 +2309,17 @@
       return `<details>
         <summary><strong>${escHtml(role)}</strong> [${idx}]: ${escHtml(truncate(preview, 120))}</summary>
         ${jsonBlock(msg)}
+      </details>`;
+    }).join('');
+  }
+
+  function renderTools(tools) {
+    return tools.map(tool => {
+      const name = tool.name || 'unnamed';
+      const desc = tool.description ? truncate(tool.description, 90) : '';
+      return `<details>
+        <summary><strong>${escHtml(name)}</strong>${desc ? ` <span style="color:var(--text-dim)">— ${escHtml(desc)}</span>` : ''}</summary>
+        ${jsonBlock(tool)}</pre>
       </details>`;
     }).join('');
   }
@@ -2480,6 +2528,7 @@
         _userPinnedSelection = false;
         extTabCounter = 0;
         activeExtTab = null;
+        knownInstances.clear();
         state.interactions = msg.interactions || [];
         // Stamp null-instanceId interactions as ext tabs, rebuild instance map
         for (const i of state.interactions) {
@@ -2495,7 +2544,11 @@
           const ext = knownInstances.get(`ext-${n}`);
           if (ext) ext.status = 'exited';
         }
+        // Suppress autoclear during init — all instances appear exited until
+        // claude:instances arrives with actual running statuses
+        _suppressAutoClear = true;
         renderInspectorTabStrip();
+        _suppressAutoClear = false;
         initTimelineToggle();
         renderTimelineActive();
         updateStats();

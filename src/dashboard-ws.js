@@ -38,7 +38,7 @@ class DashboardBroadcaster {
 
     this.wss.on('connection', (ws) => {
       // Send full history on connect
-      const interactions = this.store.getActiveInteractions().map(sanitizeForDashboard);
+      const interactions = this.store.getAll().map(sanitizeForDashboard);
       ws.send(JSON.stringify({ type: 'init', interactions }));
 
       // Send settings

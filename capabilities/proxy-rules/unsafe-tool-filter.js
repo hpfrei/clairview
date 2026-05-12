@@ -8,6 +8,8 @@ module.exports = function(ctx) {
     'PushNotification',
     'RemoteTrigger',
     'ScheduleWakeup',
+    'ShareOnboardingGuide',
+    'CronList'
   ]);
   const REMOVED_PREFIXES = ['mcp__claude_ai_'];
 
