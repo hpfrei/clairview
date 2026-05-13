@@ -37,8 +37,12 @@ class DashboardBroadcaster {
     this._pluginHandlers = [];
 
     this.wss.on('connection', (ws) => {
-      // Send full history on connect
-      const interactions = this.store.getAll().map(sanitizeForDashboard);
+      // Send history on connect — strip sseEvents for fast init; loaded on demand
+      const interactions = this.store.getAll().map(i => {
+        const s = sanitizeForDashboard(i);
+        if (s.response) s.response = { ...s.response, sseEvents: undefined };
+        return s;
+      });
       ws.send(JSON.stringify({ type: 'init', interactions }));
 
       // Send settings
@@ -94,7 +98,11 @@ class DashboardBroadcaster {
           } else if (msg.type === 'inspector:loadSession') {
             if (msg.sessId) {
               const loaded = this.store.loadSessionIntoMemory(msg.sessId);
-              const interactions = loaded.map(sanitizeForDashboard);
+              const interactions = loaded.map(i => {
+                const s = sanitizeForDashboard(i);
+                if (s.response) s.response = { ...s.response, sseEvents: undefined };
+                return s;
+              });
               ws.send(JSON.stringify({
                 type: 'inspector:sessionLoaded',
                 sessId: msg.sessId,
@@ -103,8 +111,21 @@ class DashboardBroadcaster {
               }));
             }
           } else if (msg.type === 'inspector:loadAll') {
-            const all = this.store.getAllFromDisk().map(sanitizeForDashboard);
+            const all = this.store.getAllFromDisk().map(i => {
+              const s = sanitizeForDashboard(i);
+              if (s.response) s.response = { ...s.response, sseEvents: undefined };
+              return s;
+            });
             ws.send(JSON.stringify({ type: 'inspector:allLoaded', interactions: all }));
+          } else if (msg.type === 'interaction:getSseEvents') {
+            const interaction = this.store.get(msg.id);
+            if (interaction) {
+              ws.send(JSON.stringify({
+                type: 'interaction:sseEvents',
+                id: msg.id,
+                sseEvents: interaction.response?.sseEvents || [],
+              }));
+            }
           } else if (msg.type === 'ask:answer') {
             // Resolve a pending AskUserQuestion
             const pending = pendingQuestions.get(msg.toolUseId);

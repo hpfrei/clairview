@@ -39,7 +39,13 @@ header {
   height: 3px;
   background: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb);
   background-attachment: fixed;
+  background-size: 100% 100%;
   flex-shrink: 0;
+}
+body.nav-loading .header-gradient-bar {
+  background-attachment: scroll;
+  background-size: 300% 100%;
+  animation: nav-travel 2s linear infinite;
 }
 
 h1.header-brand {
@@ -65,12 +71,20 @@ h1.header-brand.active { -webkit-text-fill-color: #fff; }
   align-items: flex-end;
   gap: 2px;
   padding: 6px 16px 0;
-  background: var(--bg);
+  background: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb);
+  background-size: 100% 100%;
   flex-shrink: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  background: linear-gradient(90deg, #cc3344, #c07020, #1a8a3a, #1088aa, #2255aa, #7744bb);
+}
+body.nav-loading .view-nav {
+  background-size: 300% 100%;
+  animation: nav-travel 2s linear infinite;
+}
+@keyframes nav-travel {
+  0%   { background-position: 0% 0; }
+  100% { background-position: 100% 0; }
 }
 .view-nav::-webkit-scrollbar { height: 3px; }
 .view-nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

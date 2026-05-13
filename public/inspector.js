@@ -1863,6 +1863,8 @@
     return false;
   }
 
+  const _pendingSseRequests = new Set();
+
   function select(sel) {
     state.selection = sel;
 
@@ -1878,6 +1880,12 @@
       const interaction = state.interactions.find(i => i.id === sel.id);
       if (!interaction) return;
 
+      // Lazy-load sseEvents for completed streaming interactions
+      if (interaction.isStreaming && !interaction.response?.sseEvents?.length && !_pendingSseRequests.has(interaction.id)) {
+        _pendingSseRequests.add(interaction.id);
+        sendWs({ type: 'interaction:getSseEvents', id: interaction.id });
+      }
+
       emptyState.classList.add('hidden');
       detailContent.classList.remove('hidden');
       renderTurnDetail(interaction);
@@ -1890,6 +1898,11 @@
 
       const interaction = state.interactions.find(i => i.id === sel.interactionId);
       if (!interaction) return;
+
+      if (interaction.isStreaming && !interaction.response?.sseEvents?.length && !_pendingSseRequests.has(interaction.id)) {
+        _pendingSseRequests.add(interaction.id);
+        sendWs({ type: 'interaction:getSseEvents', id: interaction.id });
+      }
 
       emptyState.classList.add('hidden');
       detailContent.classList.remove('hidden');
@@ -2608,6 +2621,19 @@
         markInteractionError(msg.interactionId, msg.error);
         updateInspectorBusy();
         break;
+
+      case 'interaction:sseEvents': {
+        _pendingSseRequests.delete(msg.id);
+        const sseIdx = state.interactions.findIndex(i => i.id === msg.id);
+        if (sseIdx >= 0) {
+          if (!state.interactions[sseIdx].response) state.interactions[sseIdx].response = {};
+          state.interactions[sseIdx].response.sseEvents = msg.sseEvents || [];
+          if (state.selection?.id === msg.id || state.selection?.interactionId === msg.id) {
+            select(state.selection);
+          }
+        }
+        break;
+      }
 
       case 'cleared':
         state.interactions = [];

@@ -957,15 +957,19 @@ function handleMessage(msg) {
     // Inspector
     case 'init':
       document.querySelector('.header-tab[data-view="dashboard"]')?.classList.remove('tab-loading');
+      window._navLoaded.inspector = true;
+      if (window._navLoaded.inspector && window._navLoaded.cli) document.body.classList.remove('nav-loading');
     case 'interaction:start':
     case 'interaction:update':
     case 'sse_event':
     case 'interaction:complete':
     case 'interaction:error':
     case 'interaction:enriched':
+    case 'interaction:sseEvents':
     case 'cleared':
     case 'inspector:instancesCleared':
     case 'inspector:sessionLoaded':
+    case 'inspector:allLoaded':
       window.inspectorModule?.handleMessage(msg);
       break;
 
@@ -984,9 +988,14 @@ function handleMessage(msg) {
     case 'cli:output':
     case 'cli:exit':
     case 'cli:spawned':
-    case 'cli:tabs':
-      document.querySelector('.header-tab[data-view="claude"]')?.classList.remove('tab-loading');
       document.querySelector('.header-tab[data-view="directories"]')?.classList.remove('tab-loading');
+    case 'cli:tabs':
+      if (msg.type === 'cli:tabs') {
+        document.querySelector('.header-tab[data-view="claude"]')?.classList.remove('tab-loading');
+        document.querySelector('.header-tab[data-view="directories"]')?.classList.remove('tab-loading');
+        window._navLoaded.cli = true;
+        if (window._navLoaded.inspector && window._navLoaded.cli) document.body.classList.remove('nav-loading');
+      }
     case 'cli:newTab':
     case 'cli:settingsData':
     case 'cli:savedSessions':
@@ -1152,4 +1161,6 @@ document.querySelectorAll('.header-tab[data-view]').forEach(tab => {
     tab.classList.add('tab-loading');
   }
 });
+document.body.classList.add('nav-loading');
+window._navLoaded = { inspector: false, cli: false };
 connect();
