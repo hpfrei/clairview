@@ -1,8 +1,8 @@
 {
   "name": "vistaclair",
-  "version": "1.2.0",
-  "description": "Dashboard and transparent proxy for Claude Code",
-  "author": "hpfreilabs.com",
+  "version": "1.2.1",
+  "description": "Remote-control your PC with Claude Code from any browser — dashboard, API inspector, multi-provider routing",
+  "author": "Hans-Peter Frei (https://hpfreilabs.com)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -15,11 +15,18 @@
   "keywords": [
     "claude",
     "claude-code",
-    "proxy",
-    "dashboard",
     "anthropic",
     "mcp",
-    "inspector"
+    "llm",
+    "ai",
+    "dashboard",
+    "inspector",
+    "proxy",
+    "remote",
+    "terminal",
+    "developer-tools",
+    "automation",
+    "sse"
   ],
   "engines": {
     "node": ">=18.0.0"
