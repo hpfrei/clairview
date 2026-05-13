@@ -218,7 +218,7 @@ const proxyServer = http.createServer(proxyApp);
 
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
-dashboardApp.set('trust proxy', true);
+dashboardApp.set('trust proxy', false);
 dashboardApp.use(express.json({ limit: '50mb' }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
