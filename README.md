@@ -4,14 +4,23 @@
 
 # vistaclair
 
-**automate · inspect · access**
+**Remote-control your PC with Claude Code — from any browser.**
 
+[![npm](https://img.shields.io/npm/v/vistaclair)](https://www.npmjs.com/package/vistaclair)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
-Turn your home PC into an AI-automated workstation you control from any browser.
-Wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with remote terminal sessions, real-time API inspection,
-file management, and multi-provider model routing — so Claude can build, configure, and maintain your machine while you watch and steer from a phone, tablet, or laptop anywhere on the network.
+</div>
+
+```bash
+npx vistaclair
+```
+
+vistaclair is a web dashboard and transparent proxy for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It lets you run Claude Code on your home PC and control it from a phone, tablet, or laptop — build apps, automate system tasks, manage files, all from a browser.
+
+It also shows you exactly what's happening under the hood: every API request Claude sends, every SSE token it receives, every tool call, every hook that fires, every MCP interaction — in real time. If you've ever wondered what Claude Code actually sends to the LLM, or how hooks and MCP tools work at the protocol level, this is the tool that shows you.
+
+<div align="center">
 
 [Getting started](#getting-started) ·
 [Features](#features) ·
@@ -19,6 +28,8 @@ file management, and multi-provider model routing — so Claude can build, confi
 [Architecture](#architecture) ·
 [Contributing](CONTRIBUTING.md) ·
 [Pro](https://hpfreilabs.com)
+
+![vistaclair inspector](https://raw.githubusercontent.com/hpfrei/vistaclair/main/docs/screenshot.png)
 
 https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
 
@@ -30,11 +41,11 @@ https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
 
 | | |
 |---|---|
-| **Automate your home PC** | Point Claude at your machine and let it install packages, write configs, start services, and fix issues — all unattended or with you steering from a browser |
-| **Remote access** | Run Claude Code on a powerful home machine and control it from a phone, tablet, or any browser — no SSH, no desktop environment needed |
-| **Study the wire protocol** | See exactly what Claude Code sends and receives: system prompts, tool schemas, SSE events, token counts, costs |
-| **Multi-provider routing** | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via provider translation |
-| **Tool development** | Create and test custom MCP tools from a form-driven editor without leaving the browser |
+| **Remote dev from anywhere** | Run Claude Code on your home PC and build apps from a phone, tablet, or laptop — no SSH needed |
+| **Home PC automation** | Let Claude install packages, write configs, start services, and fix issues — unattended or with you steering from a browser |
+| **Inspect the wire protocol** | See exactly what Claude Code sends to the LLM: system prompts, tool schemas, SSE events, thinking blocks, token counts, costs — understand how hooks and MCP tools really work |
+| **Multi-provider routing** | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via transparent API translation |
+| **MCP tool development** | Create, test, and debug custom MCP tools from a visual editor without leaving the browser |
 | **File management** | Browse, preview, and manage files on the remote machine with a full-featured file manager |
 
 ---
