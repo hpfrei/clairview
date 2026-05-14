@@ -1,14 +1,14 @@
 {
   "name": "vistaclair",
-  "version": "1.2.1",
-  "description": "Remote-control your PC with Claude Code from any browser — dashboard, API inspector, multi-provider routing",
+  "version": "1.2.2",
+  "description": "Control room and transparent proxy for Claude Code — API inspector, proxy rules, MCP tools, multi-provider routing, remote CLI",
   "author": "Hans-Peter Frei (https://hpfreilabs.com)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hpfrei/vistaclair.git"
   },
-  "homepage": "https://github.com/hpfrei/vistaclair",
+  "homepage": "https://hpfreilabs.com/vistaclair/",
   "bugs": {
     "url": "https://github.com/hpfrei/vistaclair/issues"
   },
@@ -21,12 +21,18 @@
     "ai",
     "dashboard",
     "inspector",
+    "api-inspector",
     "proxy",
+    "proxy-rules",
+    "control-room",
     "remote",
     "terminal",
     "developer-tools",
     "automation",
-    "sse"
+    "sse",
+    "openai",
+    "gemini",
+    "deepseek"
   ],
   "engines": {
     "node": ">=18.0.0"

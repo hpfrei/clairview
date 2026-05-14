@@ -4,7 +4,7 @@
 
 # vistaclair
 
-**Remote-control your PC with Claude Code — from any browser.**
+**A control room and transparent proxy for Claude Code.**
 
 [![npm](https://img.shields.io/npm/v/vistaclair)](https://www.npmjs.com/package/vistaclair)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -16,9 +16,9 @@
 npx vistaclair
 ```
 
-vistaclair is a web dashboard and transparent proxy for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It lets you run Claude Code on your home PC and control it from a phone, tablet, or laptop — build apps, automate system tasks, manage files, all from a browser.
+I built vistaclair because I wanted to understand what Claude Code is actually sending to the LLM. The Inspector shows you everything on the wire — requests and responses, tool calls, hooks firing, parallel subagent threads — all in real time. It started as a debugging tool for my own curiosity, and then the project grew: interactive remote CLI sessions so I could run Claude on my home PC and steer it from a phone, proxy rules to reshape requests before they hit the API, and an integrated MCP server to extend what Claude can do. I use it every day now.
 
-It also shows you exactly what's happening under the hood: every API request Claude sends, every SSE token it receives, every tool call, every hook that fires, every MCP interaction — in real time. If you've ever wondered what Claude Code actually sends to the LLM, or how hooks and MCP tools work at the protocol level, this is the tool that shows you.
+vistaclair is a web dashboard and transparent proxy for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It sits between Claude Code and the upstream LLM, captures everything, and gives you a browser UI to watch, control, and tune what's happening.
 
 <div align="center">
 
@@ -41,11 +41,11 @@ https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
 
 | | |
 |---|---|
-| **Remote dev from anywhere** | Run Claude Code on your home PC and build apps from a phone, tablet, or laptop — no SSH needed |
-| **Home PC automation** | Let Claude install packages, write configs, start services, and fix issues — unattended or with you steering from a browser |
-| **Inspect the wire protocol** | See exactly what Claude Code sends to the LLM: system prompts, tool schemas, SSE events, thinking blocks, token counts, costs — understand how hooks and MCP tools really work |
+| **Inspect the wire protocol** | See exactly what Claude Code sends to the LLM: requests and responses, tool calls, hooks, parallel subagent threads, token counts, costs — all in real time |
+| **Tune runtime behavior** | Proxy rules let you rewrite requests before they hit the API — swap models, strip tools, short-circuit responses, or inject custom logic with a few lines of JavaScript |
+| **Remote dev from anywhere** | Run Claude Code on your home PC and operate it from a phone, tablet, or laptop — no SSH needed |
+| **Extend with MCP tools** | Build custom tools with the integrated MCP server, or use the built-in ones — like rerouting AskUserQuestion through the dashboard UI |
 | **Multi-provider routing** | Route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local models via transparent API translation |
-| **MCP tool development** | Create, test, and debug custom MCP tools from a visual editor without leaving the browser |
 | **File management** | Browse, preview, and manage files on the remote machine with a full-featured file manager |
 
 ---
@@ -137,26 +137,12 @@ Open **http://localhost:3457** and log in with the token.
 > [!WARNING]
 > The dashboard binds to `0.0.0.0` for remote access. It is protected by the auth token, but do not expose it to untrusted networks without TLS/VPN.
 
-### Unlocking full system access
+### Full system access
 
-By default, Claude Code sessions run under your user account. If your user can `sudo`, Claude can install packages, configure services, and set up entire environments — just make sure vistaclair runs under an account with sudo privileges:
+Claude Code sessions run under your user account. If your user can `sudo`, Claude can install packages, configure services, and set up entire environments. For safety, consider running vistaclair on a VM rather than your primary machine — snapshot before you start, experiment freely.
 
-```bash
-npm start
-```
-
-With sudo access available, Claude can:
-
-- Install system packages (`apt install`, `brew install`, `snap install`)
-- Configure and start services (nginx, PostgreSQL, Docker, systemd units)
-- Manage users, permissions, and SSH keys
-- Set up development toolchains and language runtimes
-- Modify system configuration files (`/etc/`, crontabs, environment)
-- Build and deploy applications end-to-end
-
-#### Recommended: use a VM
-
-Running an AI agent with sudo is powerful but carries risk on your primary machine. A virtual machine gives you the best of both worlds -- full system access in an isolated sandbox:
+<details>
+<summary><b>VM setup guide</b></summary>
 
 ```bash
 # On a fresh Ubuntu VM:
@@ -173,26 +159,9 @@ cd vistaclair && npm install
 npm start
 ```
 
-Then open `http://<vm-ip>:3457` from your host browser. You now have a remote, browser-controlled Claude with sudo access in a disposable environment.
+Then open `http://<vm-ip>:3457` from your host browser. Headless servers and cloud VMs work great — vistaclair's dashboard is fully browser-based, no desktop environment needed.
 
-> [!TIP]
-> **Snapshot before, experiment freely.** Take a VM snapshot before starting. If Claude misconfigures something, roll back in seconds. This is the fastest way to iterate on complex system setups.
-
-> [!TIP]
-> **Headless servers and cloud VMs work great.** vistaclair's dashboard is fully browser-based -- no desktop environment needed. A $5/month VPS or a local QEMU/VirtualBox VM is all it takes.
-
-#### What you can ask Claude to do
-
-With sudo available, try things like:
-
-- *"Set up a complete LAMP stack with PHP 8.3, MariaDB, and a sample WordPress site"*
-- *"Install Docker, pull the postgres:16 image, create a database, and set up pgAdmin"*
-- *"Configure nginx as a reverse proxy for three Node.js apps with SSL via Let's Encrypt"*
-- *"Install and configure Tailscale so I can access this VM from anywhere"*
-- *"Set up a Python 3.12 virtualenv, install PyTorch with CUDA support, and verify GPU access"*
-- *"Create a systemd service that runs this Node.js app on boot with automatic restart"*
-
-Claude handles the full loop -- installing dependencies, writing configs, starting services, verifying everything works, and fixing issues along the way.
+</details>
 
 ---
 
@@ -200,7 +169,7 @@ Claude handles the full loop -- installing dependencies, writing configs, starti
 
 ### Inspector
 
-A transparent proxy that captures every API call between Claude Code and the upstream LLM -- across all sessions, all providers, in real time. The primary debugging tool for understanding what Claude is doing and why.
+This is the part that started it all. The proxy captures every API call between Claude Code and the upstream LLM — across all sessions, all providers, in real time. If you've ever wondered what Claude Code actually sends, how tool calls work at the protocol level, or why a particular turn used so many tokens, this is where you find out.
 
 - Full request/response capture with headers, payloads, and timing (TTFB + total duration)
 - **System prompt viewer** -- see the full system prompt Claude receives, with character-count gauge
@@ -250,7 +219,16 @@ Model definitions are configured in `capabilities/models.json`. API keys stored 
 
 ### Proxy Rules
 
-Programmable request/response manipulation at the proxy layer. Rules are JavaScript functions that run on every API request before it reaches the upstream LLM -- they can inspect and modify the request body, block requests, or short-circuit responses.
+Programmable request/response manipulation at the proxy layer. Every API request passes through your rules before it reaches the upstream LLM. A rule is just a JavaScript function — rewrite models, strip tools, short-circuit responses, or do anything else you can think of:
+
+```js
+// capabilities/proxy-rules/model-override.js
+module.exports = function(ctx) {
+  if (ctx.body.model === 'claude-opus-4-7') {
+    ctx.body.model = 'claude-opus-4-6';
+  }
+};
+```
 
 - Toggle rules on/off from the dashboard Rules tab
 - Rules are hot-reloaded on file change (no restart needed)
@@ -283,6 +261,8 @@ Extend Claude Code with custom tools through one integrated MCP server.
 | `chat` | disabled | Run a prompt through Claude Code, supports multi-turn via `session_id`, profile and cwd selection |
 
 The `chat` tool enables **delegation** -- a Claude session can spawn sub-conversations (e.g. an orchestrator using `chat` to delegate research tasks). Enable it from the MCP tool manager.
+
+A good example of how the layers work together: the built-in `vista-AskUserQuestion` MCP tool, combined with the AskUserQuestion proxy rule, reroutes Claude's interactive questions from the CLI to the dashboard UI. You answer from any browser, and Claude continues as if nothing happened — proxy, rules, and MCP cooperating transparently.
 
 ### Directories (File Manager)
 
