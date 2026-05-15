@@ -60,7 +60,7 @@ function renderMarkdown(text, targetEl) {
     // Render html and svg fenced blocks as live content
     if (lang === 'html' || lang === 'svg') {
       const clean = typeof DOMPurify !== 'undefined'
-        ? DOMPurify.sanitize(code, { ADD_TAGS: ['svg', 'circle', 'rect', 'line', 'polyline', 'polygon', 'path', 'text', 'g', 'defs', 'use', 'symbol', 'clipPath', 'mask', 'pattern', 'image', 'foreignObject', 'ellipse', 'tspan', 'textPath', 'linearGradient', 'radialGradient', 'stop', 'filter', 'feGaussianBlur', 'feOffset', 'feMerge', 'feMergeNode', 'feBlend', 'feColorMatrix', 'feComposite', 'animate', 'animateTransform', 'marker'], ADD_ATTR: ['viewBox', 'xmlns', 'fill', 'stroke', 'stroke-width', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'd', 'points', 'transform', 'opacity', 'font-size', 'text-anchor', 'dominant-baseline', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'clip-path', 'mask', 'filter', 'gradientUnits', 'offset', 'stop-color', 'stop-opacity', 'preserveAspectRatio', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient', 'stdDeviation', 'dx', 'dy', 'result', 'in', 'in2', 'mode', 'values', 'type', 'begin', 'dur', 'repeatCount', 'attributeName', 'from', 'to'] })
+        ? DOMPurify.sanitize(code, { ADD_TAGS: ['svg', 'circle', 'rect', 'line', 'polyline', 'polygon', 'path', 'text', 'g', 'defs', 'use', 'symbol', 'clipPath', 'mask', 'pattern', 'image', 'ellipse', 'tspan', 'textPath', 'linearGradient', 'radialGradient', 'stop', 'filter', 'feGaussianBlur', 'feOffset', 'feMerge', 'feMergeNode', 'feBlend', 'feColorMatrix', 'feComposite', 'animate', 'animateTransform', 'marker'], ADD_ATTR: ['viewBox', 'xmlns', 'fill', 'stroke', 'stroke-width', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'd', 'points', 'transform', 'opacity', 'font-size', 'text-anchor', 'dominant-baseline', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'clip-path', 'mask', 'filter', 'gradientUnits', 'offset', 'stop-color', 'stop-opacity', 'preserveAspectRatio', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient', 'stdDeviation', 'dx', 'dy', 'result', 'in', 'in2', 'mode', 'values', 'type', 'begin', 'dur', 'repeatCount', 'attributeName', 'from', 'to'] })
         : escHtml(code);
       return `<div class="rendered-block rendered-${lang}">${clean}</div>`;
     }
@@ -742,7 +742,9 @@ function askFormBind(container, formData, callbacks) {
     if (!previewEl) return;
     const opt = (q?.options || []).find(o => o.label === selectedLabel);
     if (opt?.preview) {
-      previewEl.innerHTML = `<div class="ask-preview-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(opt.preview) : escHtml(opt.preview)}</div>`;
+      const rendered = typeof marked !== 'undefined' ? marked.parse(opt.preview) : escHtml(opt.preview);
+      const safe = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rendered) : rendered;
+      previewEl.innerHTML = `<div class="ask-preview-content markdown-body">${safe}</div>`;
       previewEl.classList.add('visible');
     } else {
       previewEl.innerHTML = '';

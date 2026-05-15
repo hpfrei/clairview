@@ -23,7 +23,7 @@ export default function register(server) {
     let text = '', sessionId = null, questions = [];
 
     const req = http.request({ hostname: '127.0.0.1', port: dashPort, path: '/api/run', method: 'POST', headers: {
-      'Content-Type': 'application/json', 'X-Vistaclair-Internal': 'true', 'Content-Length': Buffer.byteLength(body),
+      'Content-Type': 'application/json', 'X-Vistaclair-Internal': process.env.VISTACLAIR_AUTH_TOKEN || '', 'Content-Length': Buffer.byteLength(body),
     }}, (res) => {
       let buf = '';
       res.on('data', (chunk) => {

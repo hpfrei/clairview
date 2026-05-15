@@ -1405,6 +1405,41 @@ jq -r '.tool_input.command' |
     </div>
   </div>
 
+  <div id="subInfoModal" class="pro-modal-backdrop" style="display:none">
+    <div class="pro-modal" style="max-width:440px">
+      <button class="pro-modal-close" id="subInfoClose">&times;</button>
+      <div class="sub-info">
+        <h2 class="sub-info-title">Your Subscription</h2>
+        <div class="sub-info-rows">
+          <div class="sub-info-row">
+            <span class="sub-info-label">Status</span>
+            <span class="sub-info-value sub-info-active" id="subInfoStatus">Active</span>
+          </div>
+          <div class="sub-info-row" id="subInfoProductRow">
+            <span class="sub-info-label">Product</span>
+            <span class="sub-info-value" id="subInfoProduct"></span>
+          </div>
+          <div class="sub-info-row" id="subInfoExpiryRow">
+            <span class="sub-info-label">Renews</span>
+            <span class="sub-info-value" id="subInfoExpiry"></span>
+          </div>
+          <div class="sub-info-row" id="subInfoEmailRow">
+            <span class="sub-info-label">Account</span>
+            <span class="sub-info-value" id="subInfoEmail"></span>
+          </div>
+        </div>
+        <div class="sub-info-actions">
+          <a id="subInfoPortalLink" class="sub-info-portal-btn" href="#" target="_blank" style="display:none">Open billing portal</a>
+          <p id="subInfoFallback" class="sub-info-fallback" style="display:none">
+            The billing portal is not available for this license. To manage your subscription, visit
+            <a href="https://app.lemonsqueezy.com/my-orders" target="_blank" rel="noopener">LemonSqueezy My Orders</a>
+            or contact <a href="mailto:support@hpfreilabs.com">support@hpfreilabs.com</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="footer-gradient-bar">
     <div class="footer-sep" style="left:200px"></div>
     <div class="footer-sep" style="left:400px"></div>
@@ -1519,19 +1554,67 @@ jq -r '.tool_input.command' |
     var proLoaded = false;
     var checkoutListenerAdded = false;
     var portalUrl = null;
+    var cachedLicenseInfo = null;
 
     var proHeaderBtn = document.getElementById('proHeaderBtn');
     var proUpdateBtn = document.getElementById('proUpdateBtn');
     var proModal = document.getElementById('proModal');
     var proModalClose = document.getElementById('proModalClose');
+    var subInfoModal = document.getElementById('subInfoModal');
+    var subInfoClose = document.getElementById('subInfoClose');
 
     function showProModal() { if (proModal) proModal.style.display = 'flex'; }
     function hideProModal() { if (proModal) proModal.style.display = 'none'; }
+    function showSubInfoModal() { if (subInfoModal) subInfoModal.style.display = 'flex'; }
+    function hideSubInfoModal() { if (subInfoModal) subInfoModal.style.display = 'none'; }
 
     if (proModalClose) proModalClose.addEventListener('click', hideProModal);
     if (proModal) {
       proModal.addEventListener('click', function(e) { if (e.target === proModal) hideProModal(); });
       proModal.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideProModal(); });
+    }
+    if (subInfoClose) subInfoClose.addEventListener('click', hideSubInfoModal);
+    if (subInfoModal) {
+      subInfoModal.addEventListener('click', function(e) { if (e.target === subInfoModal) hideSubInfoModal(); });
+      subInfoModal.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideSubInfoModal(); });
+    }
+
+    function populateSubInfo() {
+      var productRow = document.getElementById('subInfoProductRow');
+      var expiryRow = document.getElementById('subInfoExpiryRow');
+      var emailRow = document.getElementById('subInfoEmailRow');
+      var portalLink = document.getElementById('subInfoPortalLink');
+      var fallback = document.getElementById('subInfoFallback');
+
+      if (cachedLicenseInfo && cachedLicenseInfo.productName) {
+        document.getElementById('subInfoProduct').textContent = cachedLicenseInfo.productName;
+        if (productRow) productRow.style.display = '';
+      } else {
+        if (productRow) productRow.style.display = 'none';
+      }
+
+      if (cachedLicenseInfo && cachedLicenseInfo.expiresAt) {
+        var d = new Date(cachedLicenseInfo.expiresAt);
+        document.getElementById('subInfoExpiry').textContent = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        if (expiryRow) expiryRow.style.display = '';
+      } else {
+        if (expiryRow) expiryRow.style.display = 'none';
+      }
+
+      if (cachedLicenseInfo && cachedLicenseInfo.email) {
+        document.getElementById('subInfoEmail').textContent = cachedLicenseInfo.email;
+        if (emailRow) emailRow.style.display = '';
+      } else {
+        if (emailRow) emailRow.style.display = 'none';
+      }
+
+      if (portalUrl) {
+        if (portalLink) { portalLink.href = portalUrl; portalLink.style.display = ''; }
+        if (fallback) fallback.style.display = 'none';
+      } else {
+        if (portalLink) portalLink.style.display = 'none';
+        if (fallback) fallback.style.display = '';
+      }
     }
 
     if (proHeaderBtn) proHeaderBtn.addEventListener('click', function() {
@@ -1543,15 +1626,18 @@ jq -r '.tool_input.command' |
         fetch('/api/pro/status?check=1')
           .then(function(r) { return r.json(); })
           .then(function(s) {
-            if (s.customerPortalUrl) {
-              portalUrl = s.customerPortalUrl;
+            if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
+            if (s.licenseInfo) cachedLicenseInfo = s.licenseInfo;
+            if (portalUrl) {
               window.open(portalUrl, '_blank');
             } else {
-              alert('Unable to load subscription management page. Please try again or contact support.');
+              populateSubInfo();
+              showSubInfoModal();
             }
           })
           .catch(function() {
-            alert('Connection error. Please check your network and try again.');
+            populateSubInfo();
+            showSubInfoModal();
           })
           .finally(function() {
             proHeaderBtn.textContent = 'Manage subscription';
@@ -1590,6 +1676,7 @@ jq -r '.tool_input.command' |
       }
 
       if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
+      if (s.licenseInfo) cachedLicenseInfo = s.licenseInfo;
       if (proUpdateBtn) proUpdateBtn.style.display = s.updateAvailable ? '' : 'none';
 
       if (s.loaded && s.clientModules && !proLoaded) {

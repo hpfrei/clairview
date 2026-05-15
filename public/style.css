@@ -721,13 +721,17 @@ aside#timeline {
 }
 
 .tool-entry {
-  padding: 5px 12px 5px 20px;
+  padding: 2px 12px 2px 20px;
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 11px;
   color: var(--text-dim);
   border-top: none;
+  height: 20px;
+  max-height: 20px;
+  box-sizing: content-box;
+  overflow: hidden;
 }
 .tool-entry:hover { background: var(--bg-hover); }
 .tool-entry.selected { background: var(--bg-selected); color: var(--text); }
@@ -777,7 +781,10 @@ aside#timeline {
 .mcp-call-entry.selected { background: color-mix(in srgb, var(--green) 15%, transparent); }
 .mcp-label { color: var(--green); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; }
 .mcp-tool-name { color: var(--green); font-weight: 600; }
-.hook-call-group {/* border-left: 2px solid var(--magenta, #c084fc); */}
+.hook-call-group {
+  max-height: 28px;
+  overflow: hidden;
+}
 .hook-call-entry {
   display: flex;
   align-items: center;
@@ -787,6 +794,7 @@ aside#timeline {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-height: 28px;
 }
 .hook-call-entry:hover { background: color-mix(in srgb, var(--magenta, #c084fc) 10%, transparent); }
 .hook-call-entry.selected { background: color-mix(in srgb, var(--magenta, #c084fc) 15%, transparent); }
@@ -4785,6 +4793,21 @@ footer {
 }
 .pro-registry-notice svg { flex-shrink: 0; opacity: 0.6; }
 
+.sub-info { padding: 20px 0 0; max-width: 380px; margin: 0 auto; }
+.sub-info-title { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 24px; text-align: center; }
+.sub-info-rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
+.sub-info-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.sub-info-row:last-child { border-bottom: none; }
+.sub-info-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
+.sub-info-value { font-size: 13px; color: var(--text); }
+.sub-info-active { color: var(--green); font-weight: 600; }
+.sub-info-actions { text-align: center; }
+.sub-info-portal-btn { display: inline-block; padding: 10px 24px; background: var(--accent); color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500; transition: background 0.15s; }
+.sub-info-portal-btn:hover { background: color-mix(in srgb, var(--accent) 85%, #fff); }
+.sub-info-fallback { font-size: 12px; color: var(--text-dim); line-height: 1.7; max-width: 340px; margin: 0 auto; }
+.sub-info-fallback a { color: var(--accent); text-decoration: underline; }
+.sub-info-fallback a:hover { color: var(--text); }
+
 /* ============================================================
    PARALLEL TIMELINE (multi-column swimlane view)
    ============================================================ */
@@ -4912,9 +4935,19 @@ aside#timeline.parallel-mode {
   0%, 100% { box-shadow: 0 0 4px 0 color-mix(in srgb, var(--accent) 40%, transparent); }
   50%      { box-shadow: 0 0 var(--connector-glow-spread, 14px) 3px color-mix(in srgb, var(--accent) 50%, transparent); }
 }
-.tl-nodes-layer > .turn-group.status-streaming {
+.turn-group.status-streaming {
   animation: node-stream-glow 2s ease-in-out infinite;
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+/* Pending pulse */
+@keyframes node-pending-glow {
+  0%, 100% { box-shadow: 0 0 3px 0 color-mix(in srgb, var(--yellow) 30%, transparent); }
+  50%      { box-shadow: 0 0 10px 2px color-mix(in srgb, var(--yellow) 40%, transparent); }
+}
+.turn-group.status-pending {
+  animation: node-pending-glow 2.5s ease-in-out infinite;
+  border-color: color-mix(in srgb, var(--yellow) 25%, var(--border));
 }
 
 @keyframes accent-pulse {
@@ -4922,16 +4955,18 @@ aside#timeline.parallel-mode {
   50% { opacity: 1; }
 }
 
-/* Connector draw-in animation */
-@keyframes connector-draw {
-  to { stroke-dashoffset: 0; }
+/* Column background rects */
+.col-bg-rect {
+  pointer-events: none;
+  transition: opacity 0.3s ease;
 }
 
-/* Merge flash */
-@keyframes merge-flash {
-  0% { stroke-width: 1.5; filter: none; }
-  30% { stroke-width: 3; filter: drop-shadow(0 0 4px var(--connector-color, var(--accent))); }
-  100% { stroke-width: 1.5; filter: none; }
+@keyframes col-bg-pulse {
+  0%, 100% { opacity: 0.06; }
+  50% { opacity: 0.14; }
+}
+.col-bg-streaming {
+  animation: col-bg-pulse 2s ease-in-out infinite;
 }
 
 /* Time ruler styling */
@@ -4972,28 +5007,37 @@ aside#timeline.parallel-mode {
   pointer-events: none;
 }
 
-/* Connector hover */
+/* Fork/merge curve hover */
 .tl-connector-svg .connector-path {
   pointer-events: visibleStroke;
   cursor: default;
+  transition: stroke-opacity 0.15s ease;
 }
 .tl-connector-svg .connector-path:hover {
   stroke-opacity: 1 !important;
-  stroke-width: 3px;
 }
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .tl-nodes-layer > .turn-group.status-streaming {
+  .turn-group.status-streaming {
     animation: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .turn-group.status-pending {
+    animation: none;
+    border-color: var(--yellow);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--yellow) 20%, transparent);
   }
   .tl-nodes-layer > .turn-group::before {
     animation: none !important;
   }
   .tl-connector-svg * {
     animation: none !important;
+  }
+  .col-bg-streaming {
+    animation: none;
+    opacity: 0.1;
   }
 }
 

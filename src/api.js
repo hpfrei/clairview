@@ -126,11 +126,25 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     const contentPattern = req.query.contentPattern || '';
     const modifiedWithin = req.query.modifiedWithin || '';
 
+    const UNSAFE_RE = /([+*])\s*[?+*]|\(\?[^)]*\([^)]*[+*]|([+*])\)[\s]*[+*]/;
+    function safeRegex(pattern, label) {
+      if (UNSAFE_RE.test(pattern)) return { error: `${label} pattern rejected: nested quantifiers can cause excessive backtracking` };
+      if (pattern.length > 200) return { error: `${label} pattern too long (max 200 chars)` };
+      try { return { re: new RegExp(pattern, 'i') }; }
+      catch (e) { return { error: `Invalid ${label} pattern: ${e.message}` }; }
+    }
+
     let filenameRe, contentRe;
-    try { if (filenamePattern) filenameRe = new RegExp(filenamePattern, 'i'); }
-    catch (e) { return res.status(400).json({ error: 'Invalid filename pattern: ' + e.message }); }
-    try { if (contentPattern) contentRe = new RegExp(contentPattern, 'i'); }
-    catch (e) { return res.status(400).json({ error: 'Invalid content pattern: ' + e.message }); }
+    if (filenamePattern) {
+      const r = safeRegex(filenamePattern, 'filename');
+      if (r.error) return res.status(400).json({ error: r.error });
+      filenameRe = r.re;
+    }
+    if (contentPattern) {
+      const r = safeRegex(contentPattern, 'content');
+      if (r.error) return res.status(400).json({ error: r.error });
+      contentRe = r.re;
+    }
 
     let cutoffMs = 0;
     if (modifiedWithin) {

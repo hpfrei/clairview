@@ -1394,21 +1394,9 @@
       colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width });
     }
 
-    // Main thread spine
     const mainEntries = colEntries.get(0);
-    if (mainEntries && mainEntries.length > 1) {
-      const mainX = D3_CONST.RULER_WIDTH + computeColumnWidth(totalColumns) / 2;
-      connectors.push({
-        type: 'spine',
-        col: 0,
-        path: `M${mainX},${mainEntries[0].y + 6} L${mainX},${mainEntries[mainEntries.length - 1].yBottom - 6}`,
-        color: 'var(--connector-trunk)',
-        opacity: 'var(--connector-trunk-opacity)',
-        strokeWidth: 2,
-      });
-    }
 
-    // Subagent spines + forks + merges
+    // Subagent forks + merges (no spines)
     const colWidth = computeColumnWidth(totalColumns);
     for (let col = 1; col < totalColumns; col++) {
       const entries = colEntries.get(col);
@@ -1419,19 +1407,7 @@
       const agentX = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) + colWidth / 2;
       const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
 
-      // Subagent vertical spine
-      if (entries.length > 1) {
-        connectors.push({
-          type: 'spine',
-          col,
-          path: `M${agentX},${entries[0].y + 6} L${agentX},${entries[entries.length - 1].yBottom - 6}`,
-          color,
-          opacity: 0.5,
-          strokeWidth: 2,
-        });
-      }
-
-      // Fork: curve from main spine to agent column start
+      // Fork: curve from main thread to agent column start
       const forkY = entries[0].y;
       // Find the closest main-thread entry above this fork point
       let forkOriginY = forkY;
@@ -1483,11 +1459,10 @@
     return connectors;
   }
 
-  function renderConnectors(svg, connectors) {
+  function renderConnectors(svg, connectors, layout, columnAgents, totalColumns) {
     const g = svg.select('.tl-connectors');
     g.selectAll('*').remove();
 
-    // SVG defs for markers
     let defs = svg.select('defs');
     if (defs.empty()) defs = svg.append('defs');
     defs.selectAll('.connector-marker').remove();
@@ -1514,6 +1489,36 @@
       .attr('cx', 4).attr('cy', 4).attr('r', 3)
       .attr('fill', 'var(--accent)').attr('opacity', 0.8);
 
+    // Column background rects
+    const colWidth = computeColumnWidth(totalColumns);
+    const colEntries = new Map();
+    for (const item of layout) {
+      if (!colEntries.has(item.col)) colEntries.set(item.col, []);
+      colEntries.get(item.col).push(item);
+    }
+    for (let col = 1; col < totalColumns; col++) {
+      const entries = colEntries.get(col);
+      if (!entries || entries.length === 0) continue;
+      const agent = columnAgents.get(col);
+      const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
+      const x = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
+      const yTop = entries[0].y - 4;
+      const yBottom = entries[entries.length - 1].y + entries[entries.length - 1].height + 4;
+      const isStreaming = entries.some(e => e.interaction.status === 'streaming');
+      g.append('rect')
+        .attr('class', 'col-bg-rect' + (isStreaming ? ' col-bg-streaming' : ''))
+        .attr('data-agent-id', agent?.agentId || '')
+        .attr('x', x)
+        .attr('y', yTop)
+        .attr('width', colWidth + 8)
+        .attr('height', yBottom - yTop)
+        .attr('rx', 6)
+        .attr('ry', 6)
+        .attr('fill', color)
+        .attr('opacity', 0.08);
+    }
+
+    // Fork and merge curves
     for (const c of connectors) {
       const path = g.append('path')
         .attr('class', `connector-path connector-${c.type}`)
@@ -1527,7 +1532,6 @@
 
       if (c.type === 'fork') {
         path.attr('marker-start', 'url(#fork-diamond)');
-        // Draw-in animation
         const pathNode = path.node();
         const length = pathNode.getTotalLength();
         path.attr('stroke-dasharray', `${length} ${length}`)
@@ -1548,69 +1552,26 @@
     }
   }
 
-  // --- Flow animation for streaming subagents ---
+  // --- Streaming pulse for column backgrounds ---
 
-  function startFlowAnimation(svg, agentId, color) {
+  function startFlowAnimation(svg, agentId) {
     if (_flowAnimations.has(agentId)) return;
-
-    const spinePaths = svg.selectAll(`.connector-spine[data-agent-id="${agentId}"], .connector-fork[data-agent-id="${agentId}"]`);
-    if (spinePaths.empty()) return;
-
-    let defs = svg.select('defs');
-    if (defs.empty()) defs = svg.append('defs');
-
-    const gradId = `flow-grad-${agentId.replace(/[^a-zA-Z0-9]/g, '')}`;
-    defs.select(`#${gradId}`).remove();
-    const grad = defs.append('linearGradient')
-      .attr('id', gradId)
-      .attr('gradientUnits', 'userSpaceOnUse')
-      .attr('x1', 0).attr('y1', 0).attr('x2', 0);
-
-    grad.append('stop').attr('offset', '0%').attr('stop-color', 'transparent');
-    grad.append('stop').attr('offset', '35%').attr('stop-color', color).attr('stop-opacity', 0.8);
-    grad.append('stop').attr('offset', '65%').attr('stop-color', color).attr('stop-opacity', 0.8);
-    grad.append('stop').attr('offset', '100%').attr('stop-color', 'transparent');
-
-    let offset = 0;
-    const windowSize = 80;
-    let running = true;
-
-    function tick() {
-      if (!running) return;
-      spinePaths.each(function() {
-        const pathLen = this.getTotalLength();
-        offset = (offset + 1.2) % (pathLen + windowSize);
-        grad.attr('y1', offset - windowSize).attr('y2', offset);
-        d3.select(this).attr('stroke', `url(#${gradId})`).attr('opacity', 0.9);
-      });
-      _flowAnimations.set(agentId, requestAnimationFrame(tick));
-    }
-
-    _flowAnimations.set(agentId, requestAnimationFrame(tick));
-    _flowAnimations.set(agentId + '_stop', () => {
-      running = false;
-      const fid = _flowAnimations.get(agentId);
-      if (fid) cancelAnimationFrame(fid);
-      _flowAnimations.delete(agentId);
-      _flowAnimations.delete(agentId + '_stop');
-      spinePaths.each(function(_, i, nodes) {
-        const col = d3.select(this).attr('data-col');
-        d3.select(this).attr('stroke', color).attr('opacity', col === '0' ? 'var(--connector-trunk-opacity)' : 0.5);
-      });
-      defs.select(`#${gradId}`).remove();
-    });
+    const rect = svg.select(`.col-bg-rect[data-agent-id="${agentId}"]`);
+    if (rect.empty()) return;
+    rect.classed('col-bg-streaming', true);
+    _flowAnimations.set(agentId, true);
   }
 
   function stopFlowAnimation(agentId) {
-    const stopFn = _flowAnimations.get(agentId + '_stop');
-    if (stopFn) stopFn();
+    if (!_flowAnimations.has(agentId)) return;
+    _flowAnimations.delete(agentId);
+    if (!_d3State?.svg) return;
+    _d3State.svg.select(`.col-bg-rect[data-agent-id="${agentId}"]`).classed('col-bg-streaming', false);
   }
 
   function stopAllFlowAnimations() {
-    for (const [key, val] of _flowAnimations.entries()) {
-      if (key.endsWith('_stop') && typeof val === 'function') val();
-    }
     _flowAnimations.clear();
+    if (_d3State?.svg) _d3State.svg.selectAll('.col-bg-streaming').classed('col-bg-streaming', false);
   }
 
   // --- D3 Selection management ---
@@ -1744,9 +1705,9 @@
     timelineList.appendChild(headers);
     timelineList.appendChild(wrapper);
 
-    // Render connectors
+    // Render connectors and column backgrounds
     const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns);
-    renderConnectors(svg, connectors);
+    renderConnectors(svg, connectors, layout, columnAgents, totalColumns);
 
     // Render time ruler
     renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY);
@@ -1754,11 +1715,10 @@
     // Apply current selection
     d3UpdateSelection(nodesLayer);
 
-    // Start flow animations for any streaming subagents
+    // Start bg pulse for any streaming subagents
     for (const item of layout) {
       if (item.interaction.status === 'streaming' && item.interaction.subagent?.agentId) {
-        const color = getSubagentColor(item.interaction.subagent);
-        startFlowAnimation(svg, item.interaction.subagent.agentId, color);
+        startFlowAnimation(svg, item.interaction.subagent.agentId);
       }
     }
 
@@ -1906,9 +1866,9 @@
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    // Redraw connectors
+    // Redraw connectors and column backgrounds
     const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns);
-    renderConnectors(ds.svg, connectors);
+    renderConnectors(ds.svg, connectors, ds.layout, ds.columnAgents, ds.totalColumns);
 
     // Redraw time ruler
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
@@ -1928,10 +1888,9 @@
       }
     }
 
-    // Start flow animation if streaming subagent
+    // Start bg pulse if streaming subagent
     if (interaction.status === 'streaming' && interaction.subagent?.agentId) {
-      const color = getSubagentColor(interaction.subagent);
-      startFlowAnimation(ds.svg, interaction.subagent.agentId, color);
+      startFlowAnimation(ds.svg, interaction.subagent.agentId);
     }
 
     d3UpdateSelection(ds.nodesLayer);
@@ -1949,14 +1908,11 @@
       .replace(/\s+/g, ' ')
       .trim() + ` status-${status}`;
 
-    // Manage flow animation for subagents
+    // Manage bg pulse for subagents
     const agentId = node.dataset.agentId;
     if (agentId) {
       if (status === 'streaming') {
-        const interaction = state.interactions.find(i => i.id === id);
-        if (interaction?.subagent) {
-          startFlowAnimation(_d3State.svg, agentId, getSubagentColor(interaction.subagent));
-        }
+        startFlowAnimation(_d3State.svg, agentId);
       } else {
         stopFlowAnimation(agentId);
       }

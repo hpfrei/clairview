@@ -80,8 +80,8 @@ async function handleMessage(ws, msg, bc) {
       }
 
       case 'rule:restore': {
-        if (!msg.id) {
-          send({ type: 'rule:error', error: 'Rule ID is required' });
+        if (!msg.id || !caps.isValidRuleId(msg.id)) {
+          send({ type: 'rule:error', error: 'Invalid rule ID' });
           break;
         }
         const origPath = path.join(PROJECT_ROOT, 'capabilities', 'proxy-rules', `${msg.id}.original.js`);

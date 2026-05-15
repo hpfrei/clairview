@@ -727,7 +727,12 @@ function reorderProxyRules(baseDir, orderedIds) {
   return true;
 }
 
+function isValidRuleId(id) {
+  return typeof id === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(id);
+}
+
 function readProxyRuleSource(baseDir, id) {
+  if (!isValidRuleId(id)) return null;
   try {
     return fs.readFileSync(path.join(proxyRulesDir(baseDir), `${id}.js`), 'utf-8');
   } catch { return null; }
@@ -1054,4 +1059,5 @@ module.exports = {
   updateProxyRule,
   reorderProxyRules,
   readProxyRuleSource,
+  isValidRuleId,
 };

@@ -31,13 +31,13 @@ const createApiRouter = require('./src/api');
 
 // Check and auto-install native dependencies, then restart so they load
 (function checkDependencies() {
-  const { execSync } = require('child_process');
+  const { execFileSync } = require('child_process');
   const missing = [];
   try { require.resolve('node-pty'); } catch { missing.push('node-pty'); }
   if (missing.length === 0) return;
   console.log(`Installing missing dependencies: ${missing.join(', ')}...`);
   try {
-    execSync(`npm install --no-save ${missing.join(' ')}`, { cwd: __dirname, stdio: 'inherit' });
+    execFileSync('npm', ['install', '--no-save', ...missing], { cwd: __dirname, stdio: 'inherit' });
   } catch (err) {
     console.error(`Failed to install dependencies: ${err.message}`);
     console.error('CLI terminal feature will be unavailable. Run manually: npm install ' + missing.join(' '));
@@ -141,7 +141,16 @@ async function validateLicense() {
       }
     }
 
-    return { valid: !!response.valid, reason: response.valid ? 'ok' : (response.error || 'invalid'), customerPortalUrl: response.customerPortalUrl || null };
+    return {
+      valid: !!response.valid,
+      reason: response.valid ? 'ok' : (response.error || 'invalid'),
+      customerPortalUrl: response.customerPortalUrl || null,
+      licenseInfo: response.valid ? {
+        email: response.license?.email || null,
+        expiresAt: response.license?.expiresAt || null,
+        productName: response.product?.name || null,
+      } : null,
+    };
   } catch {
     if (stored.lastValidation && stored.lastSignature && stored.signingKey) {
       if (verifySignature(stored.lastValidation, stored.lastSignature, stored.signingKey)) {
@@ -158,6 +167,7 @@ async function validateLicense() {
 
 let productInfo = null;
 let customerPortalUrl = null;
+let licenseInfo = null;
 
 async function fetchProductInfo() {
   try {
@@ -188,6 +198,7 @@ if (fs.existsSync(proDir)) {
   const result = await validateLicense();
   proLicenseValid = result.valid;
   customerPortalUrl = result.customerPortalUrl || null;
+  licenseInfo = result.licenseInfo || null;
   if (proLicenseValid) {
     try { pro = require('./vistaclair-pro'); } catch (e) {
       console.error('  Pro: failed to load:', e.message);
@@ -345,7 +356,7 @@ dashboardApp.get('/api/ping', (req, res) => res.json({ ok: true }));
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
   // Allow internal requests from MCP tools (localhost + internal header)
-  if (req.headers['x-vistaclair-internal'] === 'true' && isLoopback(req)) return next();
+  if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
   const token = getTokenFromCookies(req.headers.cookie);
   if (safeEqual(token, AUTH_TOKEN)) return next();
   const authHeader = req.headers.authorization;
@@ -531,6 +542,7 @@ dashboardApp.get('/api/pro/status', async (req, res) => {
     const result = await validateLicense();
     proLicenseValid = result.valid;
     customerPortalUrl = result.customerPortalUrl || customerPortalUrl;
+    licenseInfo = result.licenseInfo || licenseInfo;
   }
   const installed = fs.existsSync(proDir);
   res.json({
@@ -541,6 +553,7 @@ dashboardApp.get('/api/pro/status', async (req, res) => {
     needsRestart: installed && proLicenseValid && !pro,
     updateAvailable: proUpdateAvailable,
     customerPortalUrl: proLicenseValid ? customerPortalUrl : undefined,
+    licenseInfo: proLicenseValid ? licenseInfo : undefined,
     productInfo: (!pro && !proLicenseValid) ? productInfo : undefined,
   });
 });
@@ -562,7 +575,7 @@ setProcessBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
-  const internal = req.headers['x-vistaclair-internal'] === 'true' && isLoopbackSocket(socket);
+  const internal = isLoopbackSocket(socket) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN);
   const token = getTokenFromCookies(req.headers.cookie);
   if (!internal && !safeEqual(token, AUTH_TOKEN)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -679,9 +692,9 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
     // Auto-open dashboard in the default browser (skip with NO_OPEN=1)
     if (!process.env.NO_OPEN) {
       const url = `http://localhost:${DASHBOARD_PORT}/login/auto?token=${AUTH_TOKEN}`;
-      const { exec } = require('child_process');
+      const { execFile } = require('child_process');
       const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-      exec(`${cmd} "${url}"`);
+      execFile(cmd, [url]);
     }
 
     // Re-validate license every 4 hours

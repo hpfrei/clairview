@@ -58,7 +58,7 @@ function generateId() {
  * Returns the base args array (caller adds --resume, --mcp-config, etc.).
  */
 function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = {}) {
-  const args = ['-p', '--bare'];
+  const args = ['-p'];
   if (outputFormat === 'stream-json') {
     args.push('--verbose', '--output-format', 'stream-json');
   } else if (outputFormat === 'json') {
@@ -84,6 +84,7 @@ function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = 
   if (profile.model) args.push('--model', profile.model);
   if (profile.effort) args.push('--effort', profile.effort);
   if (profile.disableSlashCommands) args.push('--disable-slash-commands');
+  if (profile.bare) args.push('--bare');
   if (profile.maxTurns) args.push('--max-turns', String(profile.maxTurns));
   if (profile.maxBudgetUsd) args.push('--max-budget-usd', String(profile.maxBudgetUsd));
   if (profile.appendSystemPrompt) args.push('--append-system-prompt', profile.appendSystemPrompt);
@@ -391,6 +392,14 @@ function sanitizeForDashboard(interaction) {
           }),
         };
       });
+    }
+  }
+  if (interaction.requestHeaders) {
+    clone.requestHeaders = { ...interaction.requestHeaders };
+    for (const key of ['x-api-key', 'authorization']) {
+      if (clone.requestHeaders[key]) {
+        clone.requestHeaders[key] = '[redacted]';
+      }
     }
   }
   return clone;

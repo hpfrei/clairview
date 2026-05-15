@@ -1,7 +1,8 @@
 const path = require('path');
 const WebSocket = require('ws');
 const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME } = require('./utils');
-const { pendingQuestions, clearPendingQuestionsForTab } = require('./proxy');
+const createProxyRouter = require('./proxy');
+const { pendingQuestions, clearPendingQuestionsForTab } = createProxyRouter;
 const caps = require('./capabilities');
 
 const PROJECT_ROOT = DATA_HOME;
@@ -117,6 +118,9 @@ class DashboardBroadcaster {
               return s;
             });
             ws.send(JSON.stringify({ type: 'inspector:allLoaded', interactions: all }));
+          } else if (msg.type === 'inspector:setSensitiveHeaders') {
+            createProxyRouter._showSensitiveHeaders = !!msg.value;
+            this.broadcast({ type: 'inspector:sensitiveHeaders', value: !!msg.value });
           } else if (msg.type === 'interaction:getSseEvents') {
             const interaction = this.store.get(msg.id);
             if (interaction) {

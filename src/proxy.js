@@ -352,6 +352,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
         const result = await rule.fn(ctx);
         if (result === true) {
           interaction.request = { ...body };
+          interaction.requestHeaders = filterRequestHeaders(req.headers);
+          interaction._showSensitive = createProxyRouter._showSensitiveHeaders || false;
           interaction.timing.duration = Date.now() - interaction.timing.startedAt;
           if (interaction.status === 'pending') interaction.status = 'complete';
           interaction.ruleApplied = rule.id;
@@ -374,6 +376,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
 
     // Snapshot request after all filtering, then broadcast to dashboard
     interaction.request = { ...body };
+    interaction.requestHeaders = filterRequestHeaders(req.headers);
+    interaction._showSensitive = createProxyRouter._showSensitiveHeaders || false;
     store.add(interaction);
     broadcaster.broadcast({
       type: 'interaction:start',
@@ -817,6 +821,7 @@ function clearPendingQuestionsForTab(tabId) {
 }
 
 createProxyRouter._cliSettingsGetter = null;
+createProxyRouter._showSensitiveHeaders = false;
 
 module.exports = createProxyRouter;
 module.exports.pendingQuestions = pendingQuestions;
