@@ -5,7 +5,7 @@
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
 
   // --- Auto-select suppression: don't jump away from user-selected turns ---
-  let _userPinnedSelection = false;
+  let _liveMode = localStorage.getItem('timelineLive') !== 'false';
   let _autoClearInactive = localStorage.getItem('inspectorAutoClear') === '1';
   let _suppressAutoClear = false;
 
@@ -269,7 +269,6 @@
       : state.interactions.filter(i => i.instanceId === activeInstanceTab);
     const last = filtered[filtered.length - 1];
     if (last) {
-      _userPinnedSelection = false;
       select({ type: last.isMcp ? 'mcp' : last.isHook ? 'hook' : 'turn', id: last.id });
     } else {
       state.selection = null;
@@ -829,11 +828,25 @@
     const wideSvg = `<svg width="12" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1" y="1" width="12" height="10" rx="1.5"/><line x1="5" y1="1" x2="5" y2="11"/><line x1="9" y1="1" x2="9" y2="11"/></svg>`;
     const allSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 2h8v8H2z"/><line x1="2" y1="5" x2="10" y2="5"/><line x1="2" y1="8" x2="10" y2="8"/></svg>`;
 
+    const liveOnSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,6.5 5,9.5 10,3"/></svg>`;
+    const liveOffSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="3" y1="3" x2="9" y2="9"/><line x1="9" y1="3" x2="3" y2="9"/></svg>`;
+    function liveButtonContent(on) { return (on ? liveOnSvg : liveOffSvg) + `<span class="tl-toggle-label">live</span>`; }
+
     const isWide = _timelineMode === 'parallel';
     toggle.innerHTML = `
+      <button class="tl-toggle-btn tl-live-btn${_liveMode ? ' active' : ''}" title="${_liveMode ? 'Live mode on' : 'Live mode off'}">${liveButtonContent(_liveMode)}</button>
       <button class="tl-toggle-btn tl-view-toggle${isWide ? ' active' : ''}" title="${isWide ? 'Switch to narrow view' : 'Switch to wide view'}">${isWide ? wideSvg : narrowSvg}<span class="tl-toggle-label">${isWide ? 'wide' : 'narrow'}</span></button>
       <button class="tl-toggle-btn tl-load-all-btn${_allHistoryLoaded ? ' active' : ''}" title="Load full history from disk">${allSvg}</button>
     `;
+    const liveBtn = toggle.querySelector('.tl-live-btn');
+    liveBtn.addEventListener('click', () => {
+      _liveMode = !_liveMode;
+      localStorage.setItem('timelineLive', _liveMode);
+      liveBtn.classList.toggle('active', _liveMode);
+      liveBtn.innerHTML = liveButtonContent(_liveMode);
+      liveBtn.title = _liveMode ? 'Live mode on' : 'Live mode off';
+      if (_liveMode) selectLastAndFollow();
+    });
     const viewBtn = toggle.querySelector('.tl-view-toggle');
     viewBtn.addEventListener('click', () => {
       _timelineMode = _timelineMode === 'single' ? 'parallel' : 'single';
@@ -862,6 +875,7 @@
   }
 
   function renderTimeline() {
+    const savedScroll = _liveMode ? null : timelineList.scrollTop;
     timelineList.innerHTML = '';
     resetSubagentRegistry();
     _lastRenderedAgentId = null;
@@ -892,11 +906,27 @@
       }
     });
     updateUserTurnTotals();
+    if (_liveMode) scrollTimelineToBottom();
+    else if (savedScroll != null) timelineList.scrollTop = savedScroll;
   }
 
-  // === PARALLEL TIMELINE (multi-column swimlane view) ===
+  // === D3 PARALLEL TIMELINE (multi-column swimlane with SVG connectors) ===
 
-  let _parallelState = null; // persisted between incremental appends; reset on full re-render
+  let _d3State = null; // persisted between incremental appends; reset on full re-render
+  let _flowAnimations = new Map(); // agentId -> animFrameId
+
+  const D3_CONST = {
+    RULER_WIDTH: 52,
+    COLUMN_WIDTH: 240,
+    COLUMN_GAP: 16,
+    MIN_ENTRY_HEIGHT: 52,
+    TOOL_HEIGHT: 24,
+    MIN_GAP: 6,
+    MAX_GAP: 60,
+    TIME_SCALE: 0.04,
+    HEADER_HEIGHT: 30,
+    NODE_BORDER_RADIUS: 6,
+  };
 
   function resolveHookAgentId(hookInteraction, interactions) {
     if (!hookInteraction.toolUseId) return null;
@@ -914,21 +944,18 @@
 
   function buildColumnAssignment(interactions) {
     const columnFor = new Map();
-    const rowFor = new Map();
-    const activeColumns = new Map();     // agentId -> colIndex (currently running)
-    const historicalColumns = new Map();  // agentId -> colIndex (persists after free)
-    const columnAgents = new Map();      // colIndex -> subagent object
+    const activeColumns = new Map();
+    const historicalColumns = new Map();
+    const columnAgents = new Map();
     const freeColumns = [];
     let nextColumn = 1;
 
-    // Pass 1: assign columns
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
       let agentId = null;
-
       if (interaction.isHook) {
-        agentId = resolveHookAgentId(interaction, interactions.slice(0, idx));
-      } else if (!interaction.isMcp) {
+        agentId = interaction.subagent?.agentId || resolveHookAgentId(interaction, interactions.slice(0, idx));
+      } else {
         agentId = interaction.subagent?.agentId || null;
       }
 
@@ -945,7 +972,6 @@
       const resolvedCol = agentId
         ? (activeColumns.get(agentId) || historicalColumns.get(agentId) || 0)
         : 0;
-      // Backfill column header info when the first LLM turn with subagent data arrives
       if (resolvedCol > 0 && interaction.subagent && !columnAgents.has(resolvedCol)) {
         registerSubagent(interaction.subagent);
         columnAgents.set(resolvedCol, interaction.subagent);
@@ -967,49 +993,137 @@
       }
     }
 
-    const totalColumns = nextColumn;
+    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn };
+  }
 
-    // Pass 2: assign rows — parallel-aware
-    // Main thread items act as barriers (must come after all prior activity).
-    // Subagent items stack within their column, starting where the main thread left off.
-    // Items in different non-main columns can share the same row.
-    const colNextRow = new Map(); // col -> next available row
-    let nextRow = 1;
+  // --- Layout computation ---
+
+  function computeNodeHeight(interaction) {
+    const tools = extractToolCalls(interaction);
+    if (interaction.isHook) return 28;
+    if (interaction.isMcp) return 42;
+    return D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
+  }
+
+  // Threshold for collapsing idle gaps (ms). Gaps larger than this get compressed.
+  const GAP_COLLAPSE_THRESHOLD = 30000;
+  const GAP_COLLAPSE_HEIGHT = 28; // px reserved for the break indicator
+
+  function computeD3Layout(interactions, columnFor, totalColumns) {
+    const C = D3_CONST;
+    const layout = [];
+    const breaks = []; // { y, elapsedBefore, elapsedAfter } — collapsed time regions
+    const colBottoms = new Map();
+    const sessionStart = interactions.length > 0 ? interactions[0].timestamp : 0;
+    let globalBottom = C.HEADER_HEIGHT + 8;
+
+    // Build a compressed elapsed→Y mapping by collapsing large time gaps
+    const timestamps = interactions.map(i => i.timestamp - sessionStart);
+    const sorted = [...new Set(timestamps)].sort((a, b) => a - b);
+    let cumulativeShift = 0;
+    const shifts = new Map(); // elapsed → shift to subtract
+    const breakElapsed = []; // { before, after } — gap boundaries in elapsed ms
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i] - sorted[i - 1];
+      if (gap > GAP_COLLAPSE_THRESHOLD) {
+        const collapse = gap - GAP_COLLAPSE_THRESHOLD * 0.1;
+        cumulativeShift += collapse;
+        breakElapsed.push({ before: sorted[i - 1], after: sorted[i] });
+      }
+      shifts.set(sorted[i], cumulativeShift);
+    }
+
+    function compressedY(elapsed) {
+      const shift = shifts.get(elapsed) || 0;
+      // For timestamps between known points, interpolate the shift
+      let s = 0;
+      if (!shifts.has(elapsed)) {
+        for (const [ts, sh] of shifts) {
+          if (ts <= elapsed) s = sh; else break;
+        }
+      } else {
+        s = shift;
+      }
+      return C.HEADER_HEIGHT + 8 + (elapsed - s) * C.TIME_SCALE;
+    }
 
     for (const interaction of interactions) {
       const col = columnFor.get(interaction.id) || 0;
-      let row;
+      const height = computeNodeHeight(interaction);
+      const elapsed = interaction.timestamp - sessionStart;
+      const timeY = compressedY(elapsed);
 
+      let y;
       if (col === 0) {
-        // Main thread: barrier — must be after everything
-        row = nextRow;
-        for (const r of colNextRow.values()) {
-          if (r > row) row = r;
+        let maxBottom = globalBottom;
+        for (const b of colBottoms.values()) {
+          if (b > maxBottom) maxBottom = b;
         }
+        y = Math.max(timeY, maxBottom + C.MIN_GAP);
       } else {
-        // Subagent column: start from where main thread left off, or continue stacking
-        row = colNextRow.get(col) || colNextRow.get(0) || nextRow;
+        const colBottom = colBottoms.get(col) || globalBottom;
+        y = Math.max(timeY, colBottom + C.MIN_GAP);
       }
 
-      colNextRow.set(col, row + 1);
-      if (row + 1 > nextRow) nextRow = row + 1;
-      rowFor.set(interaction.id, row);
+      if (colBottoms.has(col)) {
+        const prevBottom = colBottoms.get(col);
+        if (y - prevBottom > C.MAX_GAP + height) {
+          y = (col === 0)
+            ? Math.max(prevBottom + C.MAX_GAP, globalBottom + C.MIN_GAP)
+            : prevBottom + C.MAX_GAP;
+        }
+      }
+
+      const availWidth = computeColumnWidth(totalColumns);
+      const x = C.RULER_WIDTH + col * (availWidth + C.COLUMN_GAP);
+
+      layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed });
+
+      colBottoms.set(col, y + height);
+      if (y + height > globalBottom) globalBottom = y + height;
     }
 
-    const totalRows = nextRow - 1;
-    return { columnFor, rowFor, totalColumns, totalRows, columnAgents };
+    // Compute break Y positions from the final layout
+    for (const br of breakElapsed) {
+      // Find the last layout item at or before br.before, and first at or after br.after
+      let yEnd = null, yStart = null;
+      for (const item of layout) {
+        if (item.elapsed <= br.before) yEnd = item.y + item.height;
+        if (item.elapsed >= br.after && yStart == null) yStart = item.y;
+      }
+      if (yEnd != null && yStart != null && yStart > yEnd) {
+        const midY = (yEnd + yStart) / 2;
+        breaks.push({ y: midY, elapsedBefore: br.before, elapsedAfter: br.after });
+      }
+    }
+
+    return { layout, totalHeight: globalBottom + 40, sessionStart, breaks, compressedY };
   }
 
-  function buildParallelTurnEl(interaction, turnNum, isSubagentTurn) {
+  function computeColumnWidth(totalColumns) {
+    const container = document.getElementById('timeline-list');
+    if (!container) return D3_CONST.COLUMN_WIDTH;
+    const available = container.clientWidth - D3_CONST.RULER_WIDTH - 12;
+    const perCol = Math.floor((available - (totalColumns - 1) * D3_CONST.COLUMN_GAP) / totalColumns);
+    return Math.max(160, Math.min(D3_CONST.COLUMN_WIDTH, perCol));
+  }
+
+  // --- Build node HTML elements (reusing existing patterns) ---
+
+  function buildD3TurnEl(interaction, turnNum, isSubagentTurn) {
     const group = document.createElement('div');
-    group.className = 'turn-group' + (isNewUserTurn(interaction) ? ' new-user-turn' : '');
+    let cls = 'turn-group';
+    if (isNewUserTurn(interaction)) cls += ' new-user-turn';
+    if (interaction.subagent?.isSidechain) cls += ' sidechain-group';
+    else if (interaction.subagent?.agentType) cls += ' subagent-group';
+    cls += ` status-${interaction.status || 'pending'}`;
+    group.className = cls;
     group.dataset.turnId = interaction.id;
 
     if (interaction.subagent?.agentId) {
       registerSubagent(interaction.subagent);
       group.dataset.agentId = interaction.subagent.agentId;
-      const color = getSubagentColor(interaction.subagent);
-      group.style.setProperty('--subagent-color', color);
+      group.style.setProperty('--subagent-color', getSubagentColor(interaction.subagent));
     }
 
     const el = document.createElement('div');
@@ -1036,6 +1150,11 @@
       const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
       turnLabel = stepId ? `${turnPrefix}${turnNum} <span class="entry-step">${escHtml(stepId)}</span>` : `${turnPrefix}${turnNum}`;
     }
+    const subagentLabel = interaction.subagent ? getSubagentLabel(interaction.subagent) : '';
+    const subagentColor = interaction.subagent?.agentId ? getSubagentColor(interaction.subagent) : '';
+    const subagentTag = (interaction.subagent && (interaction.subagent.agentType || interaction.subagent.agentId || interaction.subagent.description))
+      ? `<span class="entry-subagent" title="${escHtml(interaction.subagent.description || '')}"${subagentColor ? ` style="color:${subagentColor};background:color-mix(in srgb, ${subagentColor} 12%, transparent)"` : ''}>${escHtml(subagentLabel)}</span>`
+      : '';
     const tokenSummary = compactTokens(interaction.usage);
     const cost = computeCost(interaction.usage, interaction.pricing);
     const costHtml = turnCostGauge(cost);
@@ -1044,6 +1163,7 @@
       <div class="entry-header">
         <span class="entry-num">${turnLabel}</span>
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+        ${subagentTag}
       </div>
       <div class="entry-model" data-model="${interaction.id}">
         <span class="entry-model-label">${modelLabel}</span>
@@ -1057,10 +1177,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
@@ -1083,13 +1200,13 @@
     return group;
   }
 
-  function buildParallelHookEl(interaction) {
+  function buildD3HookEl(interaction) {
     const hookEvent = interaction.hookEvent || 'Hook';
     const toolName = interaction.toolName || '';
     const arrow = /post/i.test(hookEvent) ? '←' : '→';
 
     const group = document.createElement('div');
-    group.className = 'turn-group hook-call-group';
+    group.className = `turn-group hook-call-group status-${interaction.status || 'complete'}`;
     group.dataset.turnId = interaction.id;
 
     const el = document.createElement('div');
@@ -1104,19 +1221,16 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
     return group;
   }
 
-  function buildParallelMcpEl(interaction) {
+  function buildD3McpEl(interaction) {
     const group = document.createElement('div');
-    group.className = 'turn-group mcp-call-group';
+    group.className = `turn-group mcp-call-group status-${interaction.status || 'complete'}`;
     group.dataset.turnId = interaction.id;
 
     const el = document.createElement('div');
@@ -1142,64 +1256,465 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
     return group;
   }
 
+  // --- Time ruler ---
+
+  function formatWallTime(epochMs) {
+    const d = new Date(epochMs);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY) {
+    if (layout.length === 0) return;
+    breaks = breaks || [];
+
+    const rulerG = svg.select('.tl-time-ruler');
+    rulerG.selectAll('*').remove();
+
+    const svgNode = svg.node();
+    const svgWidth = (svgNode?.parentElement?.clientWidth || svgNode?.clientWidth || 800);
+    const lineX1 = D3_CONST.RULER_WIDTH + 2;
+    const axisX = D3_CONST.RULER_WIDTH;
+    const minTickGap = 36;
+    const breakHalf = 7;
+
+    // Collect candidate tick positions from layout elements
+    const hasParallel = layout.some(item => item.col > 0);
+    const candidates = [];
+
+    if (!hasParallel) {
+      for (const item of layout) {
+        candidates.push({ y: item.y, elapsed: item.elapsed });
+      }
+    } else {
+      for (const item of layout) {
+        if (item.col === 0) candidates.push({ y: item.y, elapsed: item.elapsed });
+      }
+      const maxElapsed = layout[layout.length - 1].elapsed;
+      const intervals = [1000, 2000, 5000, 10000, 30000, 60000];
+      const targetCount = Math.max(8, Math.floor(totalHeight / 80));
+      const interval = intervals.find(i => maxElapsed / i <= targetCount) || 60000;
+      const startRem = sessionStart % interval;
+      const firstOffset = startRem === 0 ? interval : (interval - startRem);
+      for (let t = firstOffset; t <= maxElapsed; t += interval) {
+        const inGap = breaks.some(br => t > br.elapsedBefore && t < br.elapsedAfter);
+        if (inGap) continue;
+        const y = compressedY ? compressedY(t) : (D3_CONST.HEADER_HEIGHT + 8 + t * D3_CONST.TIME_SCALE);
+        candidates.push({ y, elapsed: t });
+      }
+      candidates.sort((a, b) => a.y - b.y);
+    }
+
+    // Filter out ticks too close together or near break indicators
+    const ticks = [];
+    let lastY = -Infinity;
+    for (const c of candidates) {
+      if (c.y - lastY < minTickGap) continue;
+      const nearBreak = breaks.some(br => Math.abs(c.y - br.y) < breakHalf + 8);
+      if (nearBreak) continue;
+      ticks.push(c);
+      lastY = c.y;
+    }
+
+    // Draw tick labels and horizontal grid lines
+    for (const { y, elapsed } of ticks) {
+      const wallMs = sessionStart + elapsed;
+      const isMajor = new Date(wallMs).getSeconds() === 0;
+      const tickG = rulerG.append('g').attr('class', 'tick' + (isMajor ? ' tick-major' : '')).attr('transform', `translate(0,${y})`);
+      tickG.append('line')
+        .attr('x1', lineX1)
+        .attr('x2', svgWidth);
+      tickG.append('text')
+        .attr('x', D3_CONST.RULER_WIDTH - 4)
+        .attr('y', 0)
+        .attr('dy', '0.32em')
+        .attr('text-anchor', 'end')
+        .text(formatWallTime(wallMs));
+    }
+
+    // Draw vertical axis line with break interruptions
+    const axisTop = D3_CONST.HEADER_HEIGHT;
+    const axisBottom = totalHeight - 20;
+    const sortedBreaks = [...breaks].sort((a, b) => a.y - b.y);
+
+    let segStart = axisTop;
+    for (const br of sortedBreaks) {
+      const brTop = br.y - breakHalf;
+      const brBottom = br.y + breakHalf;
+      if (brTop > segStart) {
+        rulerG.append('line')
+          .attr('class', 'axis-line')
+          .attr('x1', axisX).attr('x2', axisX)
+          .attr('y1', segStart).attr('y2', brTop);
+      }
+      // Zigzag break indicator
+      const zw = 4;
+      rulerG.append('path')
+        .attr('class', 'axis-break')
+        .attr('d', `M${axisX},${brTop} l${zw},${breakHalf * 0.5} l${-zw * 2},${breakHalf} l${zw},${breakHalf * 0.5}`)
+        .attr('fill', 'none');
+      // Cut duration label
+      const cutMs = br.elapsedAfter - br.elapsedBefore;
+      const cutSec = Math.round(cutMs / 1000);
+      const cutLabel = cutSec >= 60 ? `${Math.floor(cutSec / 60)}m${cutSec % 60 ? ` ${cutSec % 60}s` : ''}` : `${cutSec}s`;
+      rulerG.append('text')
+        .attr('class', 'axis-break-label')
+        .attr('x', axisX - 6)
+        .attr('y', br.y)
+        .attr('dy', '0.32em')
+        .attr('text-anchor', 'end')
+        .text(`-${cutLabel}`);
+      segStart = brBottom;
+    }
+    if (segStart < axisBottom) {
+      rulerG.append('line')
+        .attr('class', 'axis-line')
+        .attr('x1', axisX).attr('x2', axisX)
+        .attr('y1', segStart).attr('y2', axisBottom);
+    }
+  }
+
+  // --- SVG connectors ---
+
+  function computeConnectorData(layout, columnFor, columnAgents, totalColumns) {
+    const connectors = [];
+    const colEntries = new Map(); // col -> [{y, yBottom, id}]
+
+    for (const item of layout) {
+      if (!colEntries.has(item.col)) colEntries.set(item.col, []);
+      colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width });
+    }
+
+    // Main thread spine
+    const mainEntries = colEntries.get(0);
+    if (mainEntries && mainEntries.length > 1) {
+      const mainX = D3_CONST.RULER_WIDTH + computeColumnWidth(totalColumns) / 2;
+      connectors.push({
+        type: 'spine',
+        col: 0,
+        path: `M${mainX},${mainEntries[0].y + 6} L${mainX},${mainEntries[mainEntries.length - 1].yBottom - 6}`,
+        color: 'var(--connector-trunk)',
+        opacity: 'var(--connector-trunk-opacity)',
+        strokeWidth: 2,
+      });
+    }
+
+    // Subagent spines + forks + merges
+    const colWidth = computeColumnWidth(totalColumns);
+    for (let col = 1; col < totalColumns; col++) {
+      const entries = colEntries.get(col);
+      if (!entries || entries.length === 0) continue;
+
+      const agent = columnAgents.get(col);
+      const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
+      const agentX = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) + colWidth / 2;
+      const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
+
+      // Subagent vertical spine
+      if (entries.length > 1) {
+        connectors.push({
+          type: 'spine',
+          col,
+          path: `M${agentX},${entries[0].y + 6} L${agentX},${entries[entries.length - 1].yBottom - 6}`,
+          color,
+          opacity: 0.5,
+          strokeWidth: 2,
+        });
+      }
+
+      // Fork: curve from main spine to agent column start
+      const forkY = entries[0].y;
+      // Find the closest main-thread entry above this fork point
+      let forkOriginY = forkY;
+      if (mainEntries) {
+        for (let i = mainEntries.length - 1; i >= 0; i--) {
+          if (mainEntries[i].y <= forkY) {
+            forkOriginY = mainEntries[i].yBottom - 6;
+            break;
+          }
+        }
+      }
+
+      const cpX = (agentX - mainX) * 0.6;
+      connectors.push({
+        type: 'fork',
+        col,
+        path: `M${mainX},${forkOriginY} C${mainX + cpX},${forkOriginY} ${agentX - cpX},${forkY + 6} ${agentX},${forkY + 6}`,
+        color,
+        opacity: 0.6,
+        strokeWidth: 1.5,
+        agentId: agent?.agentId,
+      });
+
+      // Merge: curve from agent column end back to main spine (if agent has completed)
+      const lastEntry = entries[entries.length - 1];
+      let mergeTargetY = null;
+      if (mainEntries) {
+        for (const me of mainEntries) {
+          if (me.y > lastEntry.yBottom) {
+            mergeTargetY = me.y + 6;
+            break;
+          }
+        }
+      }
+      if (mergeTargetY != null) {
+        const mCpX = (agentX - mainX) * 0.6;
+        connectors.push({
+          type: 'merge',
+          col,
+          path: `M${agentX},${lastEntry.yBottom - 6} C${agentX - mCpX},${lastEntry.yBottom - 6} ${mainX + mCpX},${mergeTargetY} ${mainX},${mergeTargetY}`,
+          color,
+          opacity: 0.5,
+          strokeWidth: 1.5,
+          agentId: agent?.agentId,
+        });
+      }
+    }
+
+    return connectors;
+  }
+
+  function renderConnectors(svg, connectors) {
+    const g = svg.select('.tl-connectors');
+    g.selectAll('*').remove();
+
+    // SVG defs for markers
+    let defs = svg.select('defs');
+    if (defs.empty()) defs = svg.append('defs');
+    defs.selectAll('.connector-marker').remove();
+
+    // Fork diamond marker
+    defs.append('marker')
+      .attr('class', 'connector-marker')
+      .attr('id', 'fork-diamond')
+      .attr('viewBox', '0 0 8 8')
+      .attr('refX', 4).attr('refY', 4)
+      .attr('markerWidth', 5).attr('markerHeight', 5)
+      .append('path')
+      .attr('d', 'M4,0.5 L7.5,4 L4,7.5 L0.5,4 Z')
+      .attr('fill', 'var(--accent)');
+
+    // Merge circle marker
+    defs.append('marker')
+      .attr('class', 'connector-marker')
+      .attr('id', 'merge-dot')
+      .attr('viewBox', '0 0 8 8')
+      .attr('refX', 4).attr('refY', 4)
+      .attr('markerWidth', 5).attr('markerHeight', 5)
+      .append('circle')
+      .attr('cx', 4).attr('cy', 4).attr('r', 3)
+      .attr('fill', 'var(--accent)').attr('opacity', 0.8);
+
+    for (const c of connectors) {
+      const path = g.append('path')
+        .attr('class', `connector-path connector-${c.type}`)
+        .attr('d', c.path)
+        .attr('stroke', c.color)
+        .attr('stroke-width', c.strokeWidth)
+        .attr('stroke-linecap', 'round')
+        .attr('stroke-linejoin', 'round')
+        .attr('fill', 'none')
+        .attr('opacity', c.opacity);
+
+      if (c.type === 'fork') {
+        path.attr('marker-start', 'url(#fork-diamond)');
+        // Draw-in animation
+        const pathNode = path.node();
+        const length = pathNode.getTotalLength();
+        path.attr('stroke-dasharray', `${length} ${length}`)
+          .attr('stroke-dashoffset', length)
+          .transition()
+          .duration(400)
+          .ease(d3.easeLinear)
+          .attr('stroke-dashoffset', 0);
+      }
+
+      if (c.type === 'merge') {
+        path.attr('marker-end', 'url(#merge-dot)');
+      }
+
+      if (c.agentId) {
+        path.attr('data-agent-id', c.agentId);
+      }
+    }
+  }
+
+  // --- Flow animation for streaming subagents ---
+
+  function startFlowAnimation(svg, agentId, color) {
+    if (_flowAnimations.has(agentId)) return;
+
+    const spinePaths = svg.selectAll(`.connector-spine[data-agent-id="${agentId}"], .connector-fork[data-agent-id="${agentId}"]`);
+    if (spinePaths.empty()) return;
+
+    let defs = svg.select('defs');
+    if (defs.empty()) defs = svg.append('defs');
+
+    const gradId = `flow-grad-${agentId.replace(/[^a-zA-Z0-9]/g, '')}`;
+    defs.select(`#${gradId}`).remove();
+    const grad = defs.append('linearGradient')
+      .attr('id', gradId)
+      .attr('gradientUnits', 'userSpaceOnUse')
+      .attr('x1', 0).attr('y1', 0).attr('x2', 0);
+
+    grad.append('stop').attr('offset', '0%').attr('stop-color', 'transparent');
+    grad.append('stop').attr('offset', '35%').attr('stop-color', color).attr('stop-opacity', 0.8);
+    grad.append('stop').attr('offset', '65%').attr('stop-color', color).attr('stop-opacity', 0.8);
+    grad.append('stop').attr('offset', '100%').attr('stop-color', 'transparent');
+
+    let offset = 0;
+    const windowSize = 80;
+    let running = true;
+
+    function tick() {
+      if (!running) return;
+      spinePaths.each(function() {
+        const pathLen = this.getTotalLength();
+        offset = (offset + 1.2) % (pathLen + windowSize);
+        grad.attr('y1', offset - windowSize).attr('y2', offset);
+        d3.select(this).attr('stroke', `url(#${gradId})`).attr('opacity', 0.9);
+      });
+      _flowAnimations.set(agentId, requestAnimationFrame(tick));
+    }
+
+    _flowAnimations.set(agentId, requestAnimationFrame(tick));
+    _flowAnimations.set(agentId + '_stop', () => {
+      running = false;
+      const fid = _flowAnimations.get(agentId);
+      if (fid) cancelAnimationFrame(fid);
+      _flowAnimations.delete(agentId);
+      _flowAnimations.delete(agentId + '_stop');
+      spinePaths.each(function(_, i, nodes) {
+        const col = d3.select(this).attr('data-col');
+        d3.select(this).attr('stroke', color).attr('opacity', col === '0' ? 'var(--connector-trunk-opacity)' : 0.5);
+      });
+      defs.select(`#${gradId}`).remove();
+    });
+  }
+
+  function stopFlowAnimation(agentId) {
+    const stopFn = _flowAnimations.get(agentId + '_stop');
+    if (stopFn) stopFn();
+  }
+
+  function stopAllFlowAnimations() {
+    for (const [key, val] of _flowAnimations.entries()) {
+      if (key.endsWith('_stop') && typeof val === 'function') val();
+    }
+    _flowAnimations.clear();
+  }
+
+  // --- D3 Selection management ---
+
+  function d3UpdateSelection(nodesLayer) {
+    const sel = state.selection;
+    if (!nodesLayer) return;
+    const layer = typeof nodesLayer === 'string' ? document.querySelector(nodesLayer) : nodesLayer;
+    if (!layer) return;
+
+    layer.querySelectorAll('.turn-group.selected').forEach(el => el.classList.remove('selected'));
+    layer.classList.toggle('has-selection', !!sel);
+
+    if (sel) {
+      const target = sel.type === 'turn'
+        ? layer.querySelector(`.turn-group[data-turn-id="${sel.id}"]`)
+        : layer.querySelector(`[data-tool-id="${sel.interactionId}-${sel.toolIndex}"]`);
+      if (target) {
+        const group = target.closest('.turn-group') || target;
+        group.classList.add('selected');
+      }
+    }
+  }
+
+  // --- Main render ---
+
   function renderTimelineParallel() {
+    const savedScroll = _liveMode ? null : timelineList.scrollTop;
     timelineList.innerHTML = '';
     resetSubagentRegistry();
+    stopAllFlowAnimations();
 
     const filtered = state.interactions.filter(i => isVisibleInTimeline(i));
-    const { columnFor, rowFor, totalColumns, totalRows, columnAgents } = buildColumnAssignment(filtered);
+    if (filtered.length === 0) return;
 
-    // Sticky column headers
-    const headerRow = document.createElement('div');
-    headerRow.className = 'parallel-timeline-headers';
+    const assignment = buildColumnAssignment(filtered);
+    const { columnFor, totalColumns, columnAgents } = assignment;
+    const colWidth = computeColumnWidth(totalColumns);
+
+    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns);
+
+    // Create wrapper
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tl-d3-wrapper';
+    wrapper.style.height = totalHeight + 'px';
+
+    // Lane headers
+    const headers = document.createElement('div');
+    headers.className = 'tl-lane-headers';
+
+    // Ruler header
+    const rulerHeader = document.createElement('div');
+    rulerHeader.className = 'tl-lane-header';
+    rulerHeader.style.width = D3_CONST.RULER_WIDTH + 'px';
+    rulerHeader.textContent = '⏱';
+    headers.appendChild(rulerHeader);
+
     for (let col = 0; col < totalColumns; col++) {
-      const header = document.createElement('div');
-      header.className = 'parallel-column-header';
-      const agentInfo = columnAgents.get(col);
+      const h = document.createElement('div');
+      h.className = 'tl-lane-header';
+      h.style.width = (colWidth + (col < totalColumns - 1 ? D3_CONST.COLUMN_GAP : 0)) + 'px';
+      const agent = columnAgents.get(col);
       if (col === 0) {
-        header.textContent = 'Main Thread';
-      } else if (agentInfo) {
-        const label = getSubagentLabel(agentInfo);
-        const color = getSubagentColor(agentInfo);
-        header.textContent = label;
-        if (color) {
-          header.style.color = color;
-          header.style.borderBottomColor = color;
-        }
+        h.textContent = 'Main Thread';
+      } else if (agent) {
+        const label = getSubagentLabel(agent);
+        const color = getSubagentColor(agent);
+        h.textContent = label;
+        if (color) { h.style.color = color; h.style.borderBottomColor = color; }
       } else {
-        header.textContent = `Agent ${col}`;
+        h.textContent = `Agent ${col}`;
       }
-      headerRow.appendChild(header);
+      headers.appendChild(h);
     }
-    timelineList.appendChild(headerRow);
 
-    // CSS Grid: rows assigned by parallel-aware algorithm
-    const grid = document.createElement('div');
-    grid.className = 'parallel-timeline-grid';
-    grid.style.gridTemplateColumns = `repeat(${totalColumns}, 260px)`;
+    // SVG connector overlay
+    const svgColumnsWidth = D3_CONST.RULER_WIDTH + totalColumns * (colWidth + D3_CONST.COLUMN_GAP);
+    const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svgEl.setAttribute('class', 'tl-connector-svg');
+    svgEl.setAttribute('width', '100%');
+    svgEl.setAttribute('height', totalHeight);
 
+    const svg = d3.select(svgEl);
+    svg.append('defs');
+    svg.append('g').attr('class', 'tl-time-ruler');
+    svg.append('g').attr('class', 'tl-connectors');
+
+    // Nodes layer
+    const nodesLayer = document.createElement('div');
+    nodesLayer.className = 'tl-nodes-layer';
+    nodesLayer.style.height = totalHeight + 'px';
+
+    // Render nodes
     let turnNum = 0;
     const subagentTurnCounts = new Map();
 
-    for (const interaction of filtered) {
-      const col = columnFor.get(interaction.id) || 0;
-      const row = rowFor.get(interaction.id) || 1;
+    for (const item of layout) {
+      const interaction = item.interaction;
       let el;
 
       if (interaction.isMcp) {
-        el = buildParallelMcpEl(interaction);
+        el = buildD3McpEl(interaction);
       } else if (interaction.isHook) {
-        el = buildParallelHookEl(interaction);
+        el = buildD3HookEl(interaction);
       } else {
         let num, isSub = false;
         if (!isStandardLlm(interaction)) {
@@ -1216,166 +1731,239 @@
             num = turnNum;
           }
         }
-        el = buildParallelTurnEl(interaction, num, isSub);
+        el = buildD3TurnEl(interaction, num, isSub);
       }
 
-      el.style.gridRow = row;
-      el.style.gridColumn = col + 1;
-      grid.appendChild(el);
+      el.style.transform = `translate(${item.x}px, ${item.y}px)`;
+      el.style.width = item.width + 'px';
+      nodesLayer.appendChild(el);
     }
 
-    // Column separators spanning all rows
-    for (let col = 0; col < totalColumns - 1; col++) {
-      const sep = document.createElement('div');
-      sep.className = 'parallel-grid-separator';
-      sep.style.gridColumn = col + 1;
-      sep.style.gridRow = `1 / ${(totalRows || 1) + 1}`;
-      grid.appendChild(sep);
+    wrapper.appendChild(svgEl);
+    wrapper.appendChild(nodesLayer);
+    timelineList.appendChild(headers);
+    timelineList.appendChild(wrapper);
+
+    // Render connectors
+    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns);
+    renderConnectors(svg, connectors);
+
+    // Render time ruler
+    renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY);
+
+    // Apply current selection
+    d3UpdateSelection(nodesLayer);
+
+    // Start flow animations for any streaming subagents
+    for (const item of layout) {
+      if (item.interaction.status === 'streaming' && item.interaction.subagent?.agentId) {
+        const color = getSubagentColor(item.interaction.subagent);
+        startFlowAnimation(svg, item.interaction.subagent.agentId, color);
+      }
     }
 
-    timelineList.appendChild(grid);
+    if (_liveMode) scrollTimelineToBottom();
+    else if (savedScroll != null) timelineList.scrollTop = savedScroll;
 
     // Save state for incremental appends
-    _parallelState = { columnFor, rowFor, columnAgents, grid, headerRow, turnNum, subagentTurnCounts,
-      totalColumns, totalRows,
-      activeColumns: new Map(), historicalColumns: new Map(),
-      freeColumns: [], nextColumn: totalColumns,
-      colNextRow: new Map(), nextRowCounter: (totalRows || 0) + 1 };
-    // Rebuild active/historical columns from the assignment
-    for (const interaction of filtered) {
-      const agentId = interaction.subagent?.agentId;
-      if (agentId) {
-        const col = columnFor.get(interaction.id);
-        if (col > 0) {
-          _parallelState.activeColumns.set(agentId, col);
-          _parallelState.historicalColumns.set(agentId, col);
-        }
-      }
-      if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
-        for (let j = filtered.indexOf(interaction) - 1; j >= 0; j--) {
-          const prev = filtered[j];
-          if (prev.isHook || prev.isMcp) continue;
-          const aid = prev.subagent?.agentId;
-          if (aid && _parallelState.activeColumns.has(aid)) {
-            _parallelState.freeColumns.push(_parallelState.activeColumns.get(aid));
-            _parallelState.activeColumns.delete(aid);
-            break;
-          }
-        }
-      }
+    _d3State = {
+      wrapper, svg, nodesLayer, headers,
+      columnFor, columnAgents, totalColumns,
+      layout, totalHeight, sessionStart, breaks, compressedY,
+      turnNum, subagentTurnCounts,
+      activeColumns: assignment.activeColumns,
+      historicalColumns: assignment.historicalColumns,
+      freeColumns: assignment.freeColumns,
+      nextColumn: assignment.nextColumn,
+    };
+
+    // Set up resize observer
+    if (!_d3ResizeObserver) {
+      _d3ResizeObserver = new ResizeObserver(() => {
+        if (_timelineMode !== 'parallel' || !_d3State) return;
+        _d3ResizeDebounce = _d3ResizeDebounce || requestAnimationFrame(() => {
+          _d3ResizeDebounce = null;
+          renderTimelineParallel();
+        });
+      });
     }
-    // Seed colNextRow from rowFor
-    for (const interaction of filtered) {
-      const col = columnFor.get(interaction.id) || 0;
-      const row = rowFor.get(interaction.id) || 1;
-      _parallelState.colNextRow.set(col, Math.max(_parallelState.colNextRow.get(col) || 0, row + 1));
-    }
+    _d3ResizeObserver.observe(document.getElementById('timeline'));
   }
 
+  let _d3ResizeObserver = null;
+  let _d3ResizeDebounce = null;
+
+  // --- Incremental append ---
+
   function appendToParallelTimeline(interaction) {
-    if (!_parallelState) {
+    if (!_d3State) {
       renderTimelineParallel();
       return;
     }
-    const ps = _parallelState;
+    const ds = _d3State;
 
-    // Determine column for this interaction
+    // Determine column
     let agentId = null;
     if (interaction.isHook) {
-      agentId = resolveHookAgentId(interaction, state.interactions);
-    } else if (!interaction.isMcp) {
+      agentId = interaction.subagent?.agentId || resolveHookAgentId(interaction, state.interactions);
+    } else {
       agentId = interaction.subagent?.agentId || null;
     }
 
     let col = 0;
     if (agentId) {
-      if (!ps.activeColumns.has(agentId) && !ps.historicalColumns.has(agentId)) {
-        col = ps.freeColumns.length > 0 ? ps.freeColumns.pop() : ps.nextColumn++;
-        ps.activeColumns.set(agentId, col);
-        ps.historicalColumns.set(agentId, col);
-        // Expand grid and add header if this is a new column
-        if (col >= ps.totalColumns) {
-          ps.totalColumns = col + 1;
-          ps.grid.style.gridTemplateColumns = `repeat(${ps.totalColumns}, 260px)`;
-          const header = document.createElement('div');
-          header.className = 'parallel-column-header';
-          if (interaction.subagent) {
-            registerSubagent(interaction.subagent);
-            const label = getSubagentLabel(interaction.subagent);
-            const color = getSubagentColor(interaction.subagent);
-            header.textContent = label;
-            if (color) { header.style.color = color; header.style.borderBottomColor = color; }
-            ps.columnAgents.set(col, interaction.subagent);
-          } else {
-            header.textContent = `Agent ${col}`;
-          }
-          ps.headerRow.appendChild(header);
+      if (!ds.activeColumns.has(agentId) && !ds.historicalColumns.has(agentId)) {
+        col = ds.freeColumns.length > 0 ? ds.freeColumns.pop() : ds.nextColumn++;
+        ds.activeColumns.set(agentId, col);
+        ds.historicalColumns.set(agentId, col);
+        if (interaction.subagent) {
+          registerSubagent(interaction.subagent);
+          ds.columnAgents.set(col, interaction.subagent);
         }
       }
-      col = ps.activeColumns.get(agentId) || ps.historicalColumns.get(agentId) || 0;
+      col = ds.activeColumns.get(agentId) || ds.historicalColumns.get(agentId) || 0;
     }
 
-    // Build element
+    // Check if column count increased — full re-render needed for layout
+    if (col >= ds.totalColumns) {
+      renderTimelineParallel();
+      return;
+    }
+
+    // Compute position for new node
+    const colWidth = computeColumnWidth(ds.totalColumns);
+    const height = computeNodeHeight(interaction);
+    const elapsed = interaction.timestamp - ds.sessionStart;
+    const x = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP);
+
+    // Find bottom of last node in this column
+    let colBottom = D3_CONST.HEADER_HEIGHT + 8;
+    let hasColEntry = false;
+    let globalBottom = D3_CONST.HEADER_HEIGHT + 8;
+    for (const item of ds.layout) {
+      const b = item.y + item.height;
+      if (item.col === col) { if (b > colBottom) colBottom = b; hasColEntry = true; }
+      if (b > globalBottom) globalBottom = b;
+    }
+
+    let y;
+    const timeY = D3_CONST.HEADER_HEIGHT + 8 + elapsed * D3_CONST.TIME_SCALE;
+    if (col === 0) {
+      y = Math.max(timeY, globalBottom + D3_CONST.MIN_GAP);
+    } else {
+      y = Math.max(timeY, colBottom + D3_CONST.MIN_GAP);
+    }
+    if (hasColEntry && y - colBottom > D3_CONST.MAX_GAP + height) {
+      y = (col === 0)
+        ? Math.max(colBottom + D3_CONST.MAX_GAP, globalBottom + D3_CONST.MIN_GAP)
+        : colBottom + D3_CONST.MAX_GAP;
+    }
+
+    const item = { id: interaction.id, x, y, width: colWidth, height, col, interaction, elapsed };
+    ds.layout.push(item);
+    ds.columnFor.set(interaction.id, col);
+
+    // Update total height
+    const newTotalHeight = Math.max(ds.totalHeight, y + height + 40);
+    if (newTotalHeight > ds.totalHeight) {
+      ds.totalHeight = newTotalHeight;
+      ds.wrapper.style.height = newTotalHeight + 'px';
+      ds.nodesLayer.style.height = newTotalHeight + 'px';
+      ds.svg.attr('height', newTotalHeight);
+    }
+
+    // Build and append element
     let el;
     if (interaction.isMcp) {
-      el = buildParallelMcpEl(interaction);
+      el = buildD3McpEl(interaction);
     } else if (interaction.isHook) {
-      el = buildParallelHookEl(interaction);
+      el = buildD3HookEl(interaction);
     } else {
+      let num, isSub = false;
       if (!isStandardLlm(interaction)) {
-        el = buildParallelTurnEl(interaction, undefined, false);
+        num = undefined;
       } else if (agentId) {
-        const n = (ps.subagentTurnCounts.get(agentId) || 0) + 1;
-        ps.subagentTurnCounts.set(agentId, n);
-        el = buildParallelTurnEl(interaction, n, true);
+        const n = (ds.subagentTurnCounts.get(agentId) || 0) + 1;
+        ds.subagentTurnCounts.set(agentId, n);
+        num = n;
+        isSub = true;
       } else {
-        ps.turnNum++;
-        el = buildParallelTurnEl(interaction, ps.turnNum, false);
+        ds.turnNum++;
+        num = ds.turnNum;
       }
+      el = buildD3TurnEl(interaction, num, isSub);
     }
 
-    // Parallel-aware row assignment
-    let row;
-    if (col === 0) {
-      row = ps.nextRowCounter;
-      for (const r of ps.colNextRow.values()) {
-        if (r > row) row = r;
-      }
-    } else {
-      row = ps.colNextRow.get(col) || ps.colNextRow.get(0) || ps.nextRowCounter;
-    }
-    ps.colNextRow.set(col, row + 1);
-    if (row + 1 > ps.nextRowCounter) ps.nextRowCounter = row + 1;
-    ps.totalRows = Math.max(ps.totalRows, row);
+    el.style.width = colWidth + 'px';
+    el.style.opacity = '0';
+    el.style.transform = `translate(${x}px, ${y - 8}px)`;
+    ds.nodesLayer.appendChild(el);
 
-    el.style.gridRow = row;
-    el.style.gridColumn = col + 1;
-    ps.grid.appendChild(el);
-
-    // Extend column separators
-    ps.grid.querySelectorAll('.parallel-grid-separator').forEach(sep => {
-      sep.style.gridRow = `1 / ${ps.totalRows + 1}`;
+    // Entry animation
+    requestAnimationFrame(() => {
+      el.style.transition = 'opacity 0.25s cubic-bezier(0.33,1,0.68,1), transform 0.25s cubic-bezier(0.33,1,0.68,1)';
+      el.style.opacity = '1';
+      el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    ps.columnFor.set(interaction.id, col);
-    ps.rowFor.set(interaction.id, row);
+    // Redraw connectors
+    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns);
+    renderConnectors(ds.svg, connectors);
 
-    // Check if this hook closes a subagent column
+    // Redraw time ruler
+    renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
+
+    // Handle agent close
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
       for (let j = state.interactions.length - 2; j >= 0; j--) {
         const prev = state.interactions[j];
         if (prev.isHook || prev.isMcp) continue;
         const aid = prev.subagent?.agentId;
-        if (aid && ps.activeColumns.has(aid)) {
-          ps.freeColumns.push(ps.activeColumns.get(aid));
-          ps.activeColumns.delete(aid);
+        if (aid && ds.activeColumns.has(aid)) {
+          stopFlowAnimation(aid);
+          ds.freeColumns.push(ds.activeColumns.get(aid));
+          ds.activeColumns.delete(aid);
           break;
         }
       }
     }
+
+    // Start flow animation if streaming subagent
+    if (interaction.status === 'streaming' && interaction.subagent?.agentId) {
+      const color = getSubagentColor(interaction.subagent);
+      startFlowAnimation(ds.svg, interaction.subagent.agentId, color);
+    }
+
+    d3UpdateSelection(ds.nodesLayer);
   }
 
-  // === END PARALLEL TIMELINE ===
+  // --- D3 status update hook (called from updateTurnBadge) ---
+
+  function d3UpdateNodeStatus(id, status) {
+    if (!_d3State) return;
+    const node = _d3State.nodesLayer.querySelector(`.turn-group[data-turn-id="${id}"]`);
+    if (!node) return;
+
+    node.className = node.className
+      .replace(/\bstatus-\w+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim() + ` status-${status}`;
+
+    // Manage flow animation for subagents
+    const agentId = node.dataset.agentId;
+    if (agentId) {
+      if (status === 'streaming') {
+        const interaction = state.interactions.find(i => i.id === id);
+        if (interaction?.subagent) {
+          startFlowAnimation(_d3State.svg, agentId, getSubagentColor(interaction.subagent));
+        }
+      } else {
+        stopFlowAnimation(agentId);
+      }
+    }
+  }
+
+  // === END D3 PARALLEL TIMELINE ===
 
   function appendTurnToTimeline(interaction, turnNum, isSubagentTurn) {
     if (turnNum === undefined) turnNum = llmTurnNumber(interaction);
@@ -1462,10 +2050,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
@@ -1516,10 +2101,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
@@ -1565,10 +2147,7 @@
       `;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const sel = { type: 'turn', id: interaction.id };
-        if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-        _userPinnedSelection = true;
-        select(sel);
+        select({ type: 'turn', id: interaction.id }, { userClick: true });
       });
       parentContainer.appendChild(el);
       return;
@@ -1591,10 +2170,7 @@
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'turn', id: interaction.id };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
     group.appendChild(el);
@@ -1634,7 +2210,7 @@
     const interaction = state.interactions.find(i => i.id === interactionId);
     const toolEl = createToolEntryEl(interactionId, toolIdx, name, summary, null, interaction?.subagent);
     container.appendChild(toolEl);
-    if (!_userPinnedSelection) scrollTimelineToBottom();
+    if (_liveMode) scrollTimelineToBottom();
   }
 
   function createToolEntryEl(interactionId, toolIdx, name, summary, input, subagent) {
@@ -1656,10 +2232,7 @@
     `;
     toolEl.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sel = { type: 'tool', interactionId, toolIndex: toolIdx };
-      if (isAlreadySelected(sel)) { selectLastAndFollow(); return; }
-      _userPinnedSelection = true;
-      select(sel);
+      select({ type: 'tool', interactionId, toolIndex: toolIdx }, { userClick: true });
     });
     return toolEl;
   }
@@ -1706,6 +2279,7 @@
     } else {
       stopDurationTimer(id);
     }
+    if (_timelineMode === 'parallel') d3UpdateNodeStatus(id, status);
   }
 
   function updateTurnSubagentBadge(interaction) {
@@ -1839,7 +2413,6 @@
   // ============================================================
 
   function selectLastAndFollow() {
-    _userPinnedSelection = false;
     const filtered = activeInstanceTab === 'all'
       ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId) )
       : state.interactions.filter(i => i.instanceId === activeInstanceTab);
@@ -1855,26 +2428,22 @@
     scrollTimelineToBottom();
   }
 
-  function isAlreadySelected(sel) {
-    const cur = state.selection;
-    if (!cur) return false;
-    if (sel.type === 'turn' && cur.type === 'turn') return cur.id === sel.id;
-    if (sel.type === 'tool' && cur.type === 'tool') return cur.interactionId === sel.interactionId && cur.toolIndex === sel.toolIndex;
-    return false;
-  }
-
   const _pendingSseRequests = new Set();
 
-  function select(sel) {
+  function select(sel, { userClick = false } = {}) {
     state.selection = sel;
 
     document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
+
+    if (_timelineMode === 'parallel' && _d3State) {
+      d3UpdateSelection(_d3State.nodesLayer);
+    }
 
     if (sel.type === 'turn') {
       const el = document.querySelector(`.turn-entry[data-id="${sel.id}"]`);
       if (el) {
         el.classList.add('selected');
-        if (_userPinnedSelection) el.scrollIntoView({ block: 'nearest' });
+        if (userClick) el.scrollIntoView({ block: 'nearest' });
       }
 
       const interaction = state.interactions.find(i => i.id === sel.id);
@@ -1893,7 +2462,7 @@
       const el = document.querySelector(`[data-tool-id="${sel.interactionId}-${sel.toolIndex}"]`);
       if (el) {
         el.classList.add('selected');
-        if (_userPinnedSelection) el.scrollIntoView({ block: 'nearest' });
+        if (userClick) el.scrollIntoView({ block: 'nearest' });
       }
 
       const interaction = state.interactions.find(i => i.id === sel.interactionId);
@@ -2204,8 +2773,7 @@
     if (link) {
       link.addEventListener('click', (e) => {
         e.preventDefault();
-        _userPinnedSelection = true;
-        select({ type: 'turn', id: link.dataset.turnId });
+        select({ type: 'turn', id: link.dataset.turnId }, { userClick: true });
       });
     }
   }
@@ -2354,7 +2922,7 @@
   function durationGauge(ms) {
     if (ms == null) return '--';
     const secs = ms / 1000;
-    const pct = Math.min(secs / 500, 1);
+    const pct = Math.max(0, Math.min(secs / 500, 1));
     const w = 32, h = 8, fill = pct * w;
     const hue = Math.round((1 - pct) * 120);
     const sat = pct > 0.9 ? '80%' : '70%';
@@ -2534,11 +3102,27 @@
     });
   }
 
+  function handleCliSpawned(msg) {
+    if (!msg.instanceId) return;
+    const existing = knownInstances.get(msg.instanceId);
+    if (existing) {
+      existing.tabId = msg.tabId;
+      existing.cwd = msg.cwd || existing.cwd;
+      existing.status = 'running';
+    } else {
+      knownInstances.set(msg.instanceId, {
+        instanceId: msg.instanceId, profileName: null,
+        status: 'running', spawnedAt: Date.now(),
+        cwd: msg.cwd || null, tabId: msg.tabId || null,
+      });
+    }
+    renderInspectorTabStrip();
+  }
+
   // --- Message handler ---
   function handleMessage(msg) {
     switch (msg.type) {
       case 'init':
-        _userPinnedSelection = false;
         extTabCounter = 0;
         activeExtTab = null;
         knownInstances.clear();
@@ -2591,7 +3175,7 @@
         if (matchesFilter) {
           if (_timelineMode === 'parallel') appendToParallelTimeline(msg.interaction);
           else appendTurnToTimeline(msg.interaction);
-          if (!_userPinnedSelection) {
+          if (_liveMode) {
             select({ type: 'turn', id: msg.interaction.id });
             scrollTimelineToBottom();
           }
@@ -2642,6 +3226,8 @@
         activeInstanceTab = 'all';
         extTabCounter = 0;
         activeExtTab = null;
+        stopAllFlowAnimations();
+        _d3State = null;
         renderInspectorTabStrip();
         timelineList.innerHTML = '';
         detailContent.innerHTML = '';
@@ -2654,6 +3240,7 @@
 
       case 'claude:instances':
         if (msg.instances) {
+          const activeIds = new Set(msg.instances.map(i => i.instanceId));
           for (const inst of msg.instances) {
             const existing = knownInstances.get(inst.instanceId);
             knownInstances.set(inst.instanceId, {
@@ -2662,6 +3249,16 @@
               cwd: inst.cwd || existing?.cwd || null,
               tabId: inst.tabId || existing?.tabId || null,
             });
+          }
+          for (const [id, info] of knownInstances) {
+            if (id.startsWith('cli-') && info.status === 'exited' && !activeIds.has(id)) {
+              knownInstances.delete(id);
+            }
+          }
+          if (!knownInstances.has(activeInstanceTab)) {
+            const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
+            switchInstanceTab(fallback);
+            break;
           }
         }
         renderInspectorTabStrip();
@@ -2786,5 +3383,5 @@
     });
   }
 
-  window.inspectorModule = { handleMessage, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
+  window.inspectorModule = { handleMessage, handleCliSpawned, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
 })();

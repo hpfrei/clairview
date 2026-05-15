@@ -288,6 +288,7 @@ dashboardApp.post('/api/hook-report', (req, res) => {
       status: 'complete', isStreaming: false,
     };
     store.add(interaction);
+    store.save(interaction.id);
     broadcaster.broadcast({ type: 'interaction:start', interaction });
     broadcaster.broadcast({ type: 'interaction:complete', interaction });
 

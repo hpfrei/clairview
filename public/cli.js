@@ -220,6 +220,10 @@
     _scrollbackLoaded.delete(tabId);
     const tab = tabs.get(tabId);
     if (tab) {
+      // Clear corresponding inspector instance (interactions + tab)
+      if (tab.instanceId) {
+        sendWs({ type: 'inspector:clearInstances', instanceIds: [tab.instanceId] });
+      }
       tab.terminal.dispose();
       tab._resizeObserver?.disconnect();
       tab.wrap.remove();

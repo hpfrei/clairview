@@ -4821,61 +4821,183 @@ footer {
   border-color: var(--accent);
   color: var(--accent);
 }
+.tl-toggle-btn.tl-live-btn.active {
+  background: color-mix(in srgb, var(--green) 15%, transparent) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
 
 aside#timeline.parallel-mode {
   width: 840px;
   max-width: 85%;
 }
 
-.parallel-timeline-headers {
+/* --- D3 Parallel Timeline --- */
+.tl-d3-wrapper {
+  position: relative;
+  min-height: 100%;
+}
+
+.tl-connector-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+
+.tl-lane-headers {
   display: flex;
   flex-direction: row;
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
 }
 
-.parallel-column-header {
-  flex: 0 0 260px;
-  min-width: 180px;
+.tl-lane-header {
   padding: 6px 10px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-dim);
-  border-bottom: 2px solid var(--border);
   border-right: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
-.parallel-column-header:last-child {
+.tl-lane-header:first-child {
+  padding-left: 4px;
+  font-size: 9px;
+}
+.tl-lane-header:last-child {
   border-right: none;
 }
 
-.parallel-timeline-grid {
-  display: grid;
-  grid-auto-rows: min-content;
-  align-items: start;
+.tl-nodes-layer {
+  position: relative;
+  z-index: 1;
 }
 
-.parallel-timeline-grid > .turn-group {
-  margin-left: 0;
+.tl-nodes-layer > .turn-group {
+  position: absolute;
+  left: 0;
+  box-sizing: border-box;
+  margin: 0;
   border-left: none;
-  min-width: 0;
+  transition: opacity 0.15s ease;
 }
-.parallel-timeline-grid > .turn-group.subagent-group,
-.parallel-timeline-grid > .turn-group.sidechain-group {
+.tl-nodes-layer > .turn-group.subagent-group,
+.tl-nodes-layer > .turn-group.sidechain-group {
   margin-left: 0;
   padding-left: 0;
   border-left: none;
 }
 
-.parallel-grid-separator {
-  border-right: 1px solid var(--border);
-  pointer-events: none;
-  min-height: 0;
+
+/* Selection highlight */
+.tl-nodes-layer.has-selection > .turn-group.selected {
+  background: var(--bg-selected);
+  border-radius: 6px;
 }
+
+/* Streaming glow */
+@keyframes node-stream-glow {
+  0%, 100% { box-shadow: 0 0 4px 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+  50%      { box-shadow: 0 0 var(--connector-glow-spread, 14px) 3px color-mix(in srgb, var(--accent) 50%, transparent); }
+}
+.tl-nodes-layer > .turn-group.status-streaming {
+  animation: node-stream-glow 2s ease-in-out infinite;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+@keyframes accent-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* Connector draw-in animation */
+@keyframes connector-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* Merge flash */
+@keyframes merge-flash {
+  0% { stroke-width: 1.5; filter: none; }
+  30% { stroke-width: 3; filter: drop-shadow(0 0 4px var(--connector-color, var(--accent))); }
+  100% { stroke-width: 1.5; filter: none; }
+}
+
+/* Time ruler styling */
+.tl-time-ruler .tick text {
+  font-size: 9px;
+  font-family: inherit;
+  fill: var(--ruler-text);
+}
+.tl-time-ruler .tick line {
+  stroke: var(--ruler-line);
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+.tl-time-ruler .tick-major text {
+  fill: var(--ruler-text-major);
+}
+.tl-time-ruler .tick-major line {
+  stroke: var(--ruler-line-major);
+  stroke-dasharray: none;
+}
+.tl-time-ruler .domain {
+  stroke: none;
+}
+.tl-time-ruler .axis-line {
+  stroke: var(--ruler-line-major);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.tl-time-ruler .axis-break {
+  stroke: var(--ruler-text-major);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.tl-time-ruler .axis-break-label {
+  font-size: 8px;
+  font-family: inherit;
+  fill: var(--ruler-text);
+  pointer-events: none;
+}
+
+/* Connector hover */
+.tl-connector-svg .connector-path {
+  pointer-events: visibleStroke;
+  cursor: default;
+}
+.tl-connector-svg .connector-path:hover {
+  stroke-opacity: 1 !important;
+  stroke-width: 3px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .tl-nodes-layer > .turn-group.status-streaming {
+    animation: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .tl-nodes-layer > .turn-group::before {
+    animation: none !important;
+  }
+  .tl-connector-svg * {
+    animation: none !important;
+  }
+}
+
+/* Legacy fallback classes kept for compat */
+.parallel-timeline-headers { display: none; }
+.parallel-timeline-grid { display: none; }
+.parallel-grid-separator { display: none; }

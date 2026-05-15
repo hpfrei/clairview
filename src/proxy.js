@@ -8,6 +8,7 @@ const { getProvider } = require('./providers/registry');
 const caps = require('./capabilities');
 const { getModelPricing } = caps;
 const enhancedAskTool = require('./ask-schema');
+const InteractionStore = require('./store');
 
 const PROJECT_ROOT = DATA_HOME;
 
@@ -503,6 +504,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
             if (interaction.status === 'pending' || interaction.status === 'intercepted') {
               interaction.status = 'complete';
             }
+            if (!interaction.response.body && interaction.response.sseEvents?.length) {
+              interaction.response.body = InteractionStore._reconstructBodyFromSSE(interaction.response.sseEvents);
+            }
             store.save(interaction.id);
             broadcaster.broadcast({
               type: 'interaction:complete',
@@ -628,6 +632,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           }
           if (interaction.status === 'pending' || interaction.status === 'intercepted') {
             interaction.status = 'complete';
+          }
+          if (!interaction.response.body && interaction.response.sseEvents?.length) {
+            interaction.response.body = InteractionStore._reconstructBodyFromSSE(interaction.response.sseEvents);
           }
           store.save(interaction.id);
           broadcaster.broadcast({

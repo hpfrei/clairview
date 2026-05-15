@@ -34,4 +34,13 @@
   --tab-inactive-bg: transparent;
   --tab-inactive-text: #565f89;
   --tab-active-shadow: 0 -1px 6px rgba(0, 0, 0, 0.15);
+
+  --connector-trunk: #565f89;
+  --connector-trunk-opacity: 0.35;
+  --connector-glow-spread: 14px;
+
+  --ruler-text: #a07840;
+  --ruler-text-major: #c09050;
+  --ruler-line: #5a4428;
+  --ruler-line-major: #7a5a30;
 }

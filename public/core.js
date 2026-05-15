@@ -989,6 +989,7 @@ function handleMessage(msg) {
     case 'cli:exit':
     case 'cli:spawned':
       document.querySelector('.header-tab[data-view="directories"]')?.classList.remove('tab-loading');
+      if (msg.type === 'cli:spawned') window.inspectorModule?.handleCliSpawned?.(msg);
     case 'cli:tabs':
       if (msg.type === 'cli:tabs') {
         document.querySelector('.header-tab[data-view="claude"]')?.classList.remove('tab-loading');

@@ -144,6 +144,12 @@ class InteractionStore {
       this.pendingEnrichments.delete(reqId);
     }
 
+    // When saving a hook, inherit subagent from the parent turn if available
+    if (interaction.isHook && interaction.toolUseId && !interaction.subagent && interaction.instanceId) {
+      const parent = this._findTurnByToolUseId(interaction.toolUseId, interaction.instanceId);
+      if (parent?.subagent) interaction.subagent = parent.subagent;
+    }
+
     this._prunePendingEnrichments();
 
     const fileContent = this._buildFileContent(interaction);
@@ -176,7 +182,77 @@ class InteractionStore {
         if (err) console.error(`Failed to resave interaction:`, err.message);
       });
     }
-    return interaction;
+
+    // Also enrich hooks whose toolUseId matches a tool call in this turn
+    const enrichedHooks = this._enrichRelatedHooks(interaction, subagent);
+
+    return { interaction, enrichedHooks };
+  }
+
+  /** Find hooks in the same instance whose toolUseId matches a tool call in the
+   *  given turn's response, stamp them with the same subagent, and persist. */
+  _enrichRelatedHooks(turn, subagent) {
+    if (!turn.instanceId || turn.isHook || turn.isMcp) return [];
+
+    // Extract tool_use IDs from the turn's response
+    const toolIds = new Set();
+    const body = turn.response?.body;
+    if (body?.content) {
+      for (const block of body.content) {
+        if (block.type === 'tool_use' && block.id) toolIds.add(block.id);
+      }
+    }
+    // Also check SSE events if body wasn't available
+    if (toolIds.size === 0 && turn.response?.sseEvents?.length) {
+      for (const evt of turn.response.sseEvents) {
+        if (evt.eventType === 'content_block_start' && evt.data?.content_block?.type === 'tool_use') {
+          const cbId = evt.data.content_block.id;
+          if (cbId) toolIds.add(cbId);
+        }
+      }
+    }
+    if (toolIds.size === 0) return [];
+
+    const enriched = [];
+    for (const hookId of this.order) {
+      const hook = this.interactions.get(hookId);
+      if (!hook?.isHook || hook.subagent) continue;
+      if (hook.instanceId !== turn.instanceId) continue;
+      if (!hook.toolUseId || !toolIds.has(hook.toolUseId)) continue;
+
+      hook.subagent = subagent;
+      enriched.push(hook);
+
+      const fp = this.filePaths.get(hookId);
+      if (fp) {
+        const content = this._buildFileContent(hook);
+        fs.writeFile(fp, JSON.stringify(content, null, 2), (err) => {
+          if (err) console.error(`Failed to resave hook:`, err.message);
+        });
+      }
+    }
+    return enriched;
+  }
+
+  /** Find the LLM turn that contains a tool_use block with the given ID. */
+  _findTurnByToolUseId(toolUseId, instanceId) {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const turn = this.interactions.get(this.order[i]);
+      if (!turn || turn.isHook || turn.isMcp) continue;
+      if (turn.instanceId !== instanceId) continue;
+      const content = turn.response?.body?.content;
+      if (content) {
+        for (const block of content) {
+          if (block.type === 'tool_use' && block.id === toolUseId) return turn;
+        }
+      }
+      if (turn.response?.sseEvents?.length) {
+        for (const evt of turn.response.sseEvents) {
+          if (evt.eventType === 'content_block_start' && evt.data?.content_block?.type === 'tool_use' && evt.data.content_block.id === toolUseId) return turn;
+        }
+      }
+    }
+    return null;
   }
 
   _parseInteractionFile(sessId, seqNum, filePath) {
@@ -191,7 +267,12 @@ class InteractionStore {
       subagent = null;
     }
 
-    return {
+    let body = resp.body ?? null;
+    if (!body && resp.sseEvents?.length) {
+      body = InteractionStore._reconstructBodyFromSSE(resp.sseEvents);
+    }
+
+    const interaction = {
       id: `${sessId}-${seqNum}`,
       timestamp: req.timestamp || 0,
       endpoint: req.endpoint || '/v1/messages',
@@ -203,7 +284,7 @@ class InteractionStore {
       response: {
         status: resp.status ?? null,
         headers: resp.headers || {},
-        body: resp.body ?? null,
+        body,
         sseEvents: resp.sseEvents || [],
         error: resp.error || undefined,
       },
@@ -215,6 +296,17 @@ class InteractionStore {
       disableAutoMemory: req.disableAutoMemory !== false,
       subagent: subagent || undefined,
     };
+    if (data.isHook) {
+      interaction.isHook = true;
+      interaction.hookEvent = data.hookEvent || 'unknown';
+      interaction.toolName = data.toolName || null;
+      interaction.toolUseId = data.toolUseId || null;
+    }
+    if (data.isMcp) {
+      interaction.isMcp = true;
+      interaction.mcpSource = data.mcpSource || undefined;
+    }
+    return interaction;
   }
 
   getActiveInteractions() {
@@ -303,7 +395,7 @@ class InteractionStore {
   }
 
   _buildFileContent(interaction) {
-    return {
+    const out = {
       request: {
         ...interaction.request,
         endpoint: interaction.endpoint,
@@ -324,6 +416,17 @@ class InteractionStore {
       },
       subagent: interaction.subagent || undefined,
     };
+    if (interaction.isHook) {
+      out.isHook = true;
+      out.hookEvent = interaction.hookEvent;
+      out.toolName = interaction.toolName || undefined;
+      out.toolUseId = interaction.toolUseId || undefined;
+    }
+    if (interaction.isMcp) {
+      out.isMcp = true;
+      out.mcpSource = interaction.mcpSource || undefined;
+    }
+    return out;
   }
 
   _prunePendingEnrichments() {
@@ -352,6 +455,31 @@ class InteractionStore {
     }
     this.order = this.order.filter(id => !toRemove.includes(id));
     return toRemove.length;
+  }
+
+  static _reconstructBodyFromSSE(sseEvents) {
+    const content = [];
+    const jsonParts = new Map();
+    for (const e of sseEvents) {
+      if (e.eventType === 'content_block_start' && e.data?.content_block) {
+        content[e.data.index] = { ...e.data.content_block };
+        if (e.data.content_block.type === 'tool_use') jsonParts.set(e.data.index, '');
+      } else if (e.eventType === 'content_block_delta') {
+        const idx = e.data?.index;
+        const delta = e.data?.delta;
+        if (delta?.type === 'text_delta' && content[idx]) {
+          content[idx].text = (content[idx].text || '') + (delta.text || '');
+        } else if (delta?.type === 'input_json_delta' && jsonParts.has(idx)) {
+          jsonParts.set(idx, jsonParts.get(idx) + (delta.partial_json || ''));
+        }
+      } else if (e.eventType === 'content_block_stop') {
+        const idx = e.data?.index;
+        if (jsonParts.has(idx) && content[idx]) {
+          try { content[idx].input = JSON.parse(jsonParts.get(idx)); } catch {}
+        }
+      }
+    }
+    return content.length > 0 ? { content: content.filter(Boolean) } : null;
   }
 }
 

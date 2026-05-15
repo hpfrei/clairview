@@ -34,6 +34,15 @@
   --tab-inactive-bg: transparent;
   --tab-inactive-text: #888880;
   --tab-active-shadow: 0 -1px 4px rgba(0, 0, 0, 0.04);
+
+  --connector-trunk: #999990;
+  --connector-trunk-opacity: 0.3;
+  --connector-glow-spread: 10px;
+
+  --ruler-text: #c09050;
+  --ruler-text-major: #b07830;
+  --ruler-line: #e0c090;
+  --ruler-line-major: #d0a060;
 }
 
 /* Checker-paper grid background */

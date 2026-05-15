@@ -221,12 +221,19 @@ class CliSession {
     this._jsonlWatcher = new JsonlWatcher(transcriptPath, (requestId, enrichment) => {
       const interaction = this.store.findByRequestId(requestId);
       if (interaction) {
-        this.store.enrichInteraction(interaction.id, enrichment);
+        const { enrichedHooks } = this.store.enrichInteraction(interaction.id, enrichment);
         this.broadcaster.broadcast({
           type: 'interaction:enriched',
           interactionId: interaction.id,
           subagent: enrichment,
         });
+        for (const hook of enrichedHooks) {
+          this.broadcaster.broadcast({
+            type: 'interaction:enriched',
+            interactionId: hook.id,
+            subagent: enrichment,
+          });
+        }
       } else {
         this.store.pendingEnrichments.set(requestId, { data: enrichment, ts: Date.now() });
       }
