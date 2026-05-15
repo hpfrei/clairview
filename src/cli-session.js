@@ -85,6 +85,9 @@ class CliSession {
       args.push('--session-id', this.sessId);
     }
 
+    // Safety: tell Claude never to restart this server
+    args.push('--append-system-prompt', `IMPORTANT: A Vistaclair control-room server is running from ${PROJECT_ROOT}. Never restart, stop, kill, or interfere with this server process or its ports. Do not run commands like "npm restart", "kill", "pkill", or "lsof ... | kill" targeting it.`);
+
     // MCP config injection
     this._cleanupMcpConfig();
     const mcpConfigFile = this._buildMcpConfig();

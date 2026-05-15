@@ -709,6 +709,7 @@ function gracefulShutdown() {
 }
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
+process.on('SIGHUP', gracefulShutdown);
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);

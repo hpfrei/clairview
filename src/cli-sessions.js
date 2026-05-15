@@ -164,6 +164,8 @@ class CliSessionManager {
       this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
     }
     session.spawn(cwd, cols, rows, { resumeSessionId, isolated });
+    // Persist immediately so session survives ungraceful server death
+    this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
     this.broadcastTabs();
   }
 
