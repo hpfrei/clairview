@@ -1186,6 +1186,10 @@
       select({ type: 'turn', id: interaction.id }, { userClick: true });
     });
 
+    group.addEventListener('click', () => {
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
+    });
+
     group.appendChild(el);
 
     const toolsContainer = document.createElement('div');

@@ -4914,6 +4914,7 @@ aside#timeline.parallel-mode {
   box-sizing: border-box;
   margin: 0;
   border-left: none;
+  cursor: pointer;
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
