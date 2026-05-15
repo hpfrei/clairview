@@ -1002,7 +1002,13 @@
     const tools = extractToolCalls(interaction);
     if (interaction.isHook) return 28;
     if (interaction.isMcp) return 42;
-    return D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
+    const minH = D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
+    const dur = interaction.timing?.duration
+      || (interaction.status === 'streaming' && interaction.timing?.startedAt
+        ? Date.now() - interaction.timing.startedAt : 0);
+    if (!dur) return minH;
+    const timeH = Math.min(dur * D3_CONST.TIME_SCALE, 400);
+    return Math.max(minH, timeH);
   }
 
   // Threshold for collapsing idle gaps (ms). Gaps larger than this get compressed.
@@ -1604,7 +1610,20 @@
     resetSubagentRegistry();
     stopAllFlowAnimations();
 
-    const filtered = state.interactions.filter(i => isVisibleInTimeline(i));
+    const visible = state.interactions.filter(i => isVisibleInTimeline(i) && i.timestamp > 0);
+    if (visible.length === 0) return;
+
+    // Only render the most recent session cluster — drop interactions separated
+    // by a gap longer than 5 minutes (stale data from previous server runs).
+    const SESSION_GAP = 5 * 60 * 1000;
+    let sessionCutoff = 0;
+    for (let i = visible.length - 1; i > 0; i--) {
+      if (visible[i].timestamp - visible[i - 1].timestamp > SESSION_GAP) {
+        sessionCutoff = i;
+        break;
+      }
+    }
+    const filtered = sessionCutoff > 0 ? visible.slice(sessionCutoff) : visible;
     if (filtered.length === 0) return;
 
     const assignment = buildColumnAssignment(filtered);
@@ -1697,6 +1716,7 @@
 
       el.style.transform = `translate(${item.x}px, ${item.y}px)`;
       el.style.width = item.width + 'px';
+      if (item.height > D3_CONST.MIN_ENTRY_HEIGHT) el.style.minHeight = item.height + 'px';
       nodesLayer.appendChild(el);
     }
 
@@ -1855,6 +1875,7 @@
     }
 
     el.style.width = colWidth + 'px';
+    if (height > D3_CONST.MIN_ENTRY_HEIGHT) el.style.minHeight = height + 'px';
     el.style.opacity = '0';
     el.style.transform = `translate(${x}px, ${y - 8}px)`;
     ds.nodesLayer.appendChild(el);

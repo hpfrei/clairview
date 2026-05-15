@@ -4914,7 +4914,15 @@ aside#timeline.parallel-mode {
   box-sizing: border-box;
   margin: 0;
   border-left: none;
-  transition: opacity 0.15s ease;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  transition: opacity 0.15s ease, min-height 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+.tl-nodes-layer > .turn-group > .tool-entries {
+  margin-top: auto;
 }
 .tl-nodes-layer > .turn-group.subagent-group,
 .tl-nodes-layer > .turn-group.sidechain-group {
