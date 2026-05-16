@@ -1061,13 +1061,13 @@
         }
         shifts.push({ elapsed: sorted[i], shift: cumShift });
       }
-      function compressElapsed(elapsed) {
+      const compressElapsed = (elapsed) => {
         let s = 0;
         for (const { elapsed: e, shift } of shifts) {
           if (e <= elapsed) s = shift; else break;
         }
         return elapsed - s;
-      }
+      };
 
       // Compute scale: for each column, consecutive pairs determine minimum scale
       const byCols = new Map();
@@ -1188,23 +1188,6 @@
       }
     }
 
-    // Breaks from parallel-region internal gaps
-    for (const region of (parallelRegions || [])) {
-      const rs = regionCache.get(region);
-      for (const br of rs.regionBreaks) {
-        if (br.after - br.before <= C.ZIGZAG_MIN_CUT) continue;
-        let yEnd = null, yStart = null;
-        for (let i = region.startIdx; i <= region.endIdx; i++) {
-          const item = layout[i];
-          if (item.elapsed <= br.before) yEnd = item.y + item.height;
-          if (item.elapsed >= br.after && yStart == null) yStart = item.y;
-        }
-        if (yEnd != null && yStart != null && yStart > yEnd) {
-          breaks.push({ y: (yEnd + yStart) / 2, elapsedBefore: br.before, elapsedAfter: br.after });
-        }
-      }
-    }
-
     // Build monotonic elapsed→Y interpolation from layout
     const yPoints = layout.map(item => ({ elapsed: item.elapsed, y: item.y }));
     for (let i = 1; i < yPoints.length; i++) {
@@ -1223,6 +1206,17 @@
         }
       }
       return yPoints[yPoints.length - 1].y;
+    }
+
+    // Breaks from parallel-region internal gaps (uses elapsedToY for Y positioning)
+    for (const region of (parallelRegions || [])) {
+      const rs = regionCache.get(region);
+      for (const br of rs.regionBreaks) {
+        if (br.after - br.before <= C.ZIGZAG_MIN_CUT) continue;
+        const yBefore = elapsedToY(br.before);
+        const yAfter = elapsedToY(br.after);
+        breaks.push({ y: (yBefore + yAfter) / 2, elapsedBefore: br.before, elapsedAfter: br.after });
+      }
     }
 
     let finalBottom = C.HEADER_HEIGHT + 8;
