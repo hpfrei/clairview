@@ -127,12 +127,8 @@
         <button class="modal-close cli-settings-cancel">&times;</button>
       </div>
       <div class="modal-body">
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:60px;font-weight:600">Title</span><input id="cliSettingsTitle" type="text" placeholder="(auto from directory)" style="flex:1;padding:4px 6px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font:inherit"></label>
-        <h4 style="margin:0 0 10px">General Model Override</h4>
-        <p style="margin:0 0 12px;font-size:12px;opacity:0.7">Override the model used for all requests in this tab. Takes precedence over per-family mapping below.</p>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:60px;font-weight:600">Model</span><select id="cliSettingsGeneralModel" style="flex:1;padding:4px 6px"></select></label>
         <h4 style="margin:0 0 10px">Model Mapping</h4>
-        <p style="margin:0 0 12px;font-size:12px;opacity:0.7">Map incoming Claude model families to any model from the Models tab. Leave as "Default" to pass through unchanged.</p>
+        <p style="margin:0 0 12px;font-size:12px;opacity:0.7">Map incoming Claude model families to any configured model. Applied per-request before global proxy rules (e.g. the Model Override rule). Leave as "Default" to pass through unchanged. Only models with an API key configured are selectable.</p>
         <div style="display:flex;flex-direction:column;gap:8px">
           <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Opus</span><select data-map="opus" style="flex:1;padding:4px 6px"></select></label>
           <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Sonnet</span><select data-map="sonnet" style="flex:1;padding:4px 6px"></select></label>

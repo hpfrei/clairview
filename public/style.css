@@ -1412,13 +1412,24 @@ footer {
   min-width: 40px;
   max-width: 160px;
 }
-.cli-settings-btn {
+.cli-model-override-btn {
   margin-left: 6px;
-  opacity: 0.5;
   cursor: pointer;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  color: #f59e0b;
+  opacity: 0.7;
 }
-.cli-settings-btn:hover { opacity: 1; }
+.cli-model-override-btn:hover { opacity: 1; }
+.cli-model-override-btn.active {
+  color: #4ade80;
+  opacity: 0.9;
+}
+.cli-model-override-btn.active:hover { opacity: 1; }
+.cli-model-override-btn.inspector-only {
+  cursor: default;
+  pointer-events: none;
+}
 
 .tab-close {
   margin-left: 6px;

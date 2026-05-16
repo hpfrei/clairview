@@ -186,6 +186,21 @@
         });
       }
       btn.appendChild(label);
+
+      // Model override indicator (non-clickable)
+      if (id.startsWith('cli-') && info.tabId && window.cliModule?.tabs) {
+        const cliTab = window.cliModule.tabs.get(info.tabId);
+        const hasOverride = cliTab?.settings &&
+          cliTab.settings.modelMap && Object.values(cliTab.settings.modelMap).some(v => v);
+        const overrideIcon = document.createElement('span');
+        overrideIcon.className = 'cli-model-override-btn' + (hasOverride ? ' active' : '') + ' inspector-only';
+        overrideIcon.innerHTML = hasOverride
+          ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 2l12 10M1 7h12M1 12l12-10"/></svg>'
+          : '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 3h10m-2-2l2 2-2 2"/><path d="M1 7h10m-2-2l2 2-2 2"/><path d="M1 11h10m-2-2l2 2-2 2"/></svg>';
+        overrideIcon.title = hasOverride ? 'Model override active' : 'No model override';
+        btn.appendChild(overrideIcon);
+      }
+
       const close = document.createElement('span');
       close.className = 'view-tab-close';
       close.textContent = '\u00d7';
@@ -952,6 +967,7 @@
     const columnAgents = new Map();
     const freeColumns = [];
     const parallelRegions = [];
+    const postHookClosedCol = new Map();
     let nextColumn = 1;
     let currentRegion = null;
 
@@ -995,7 +1011,9 @@
           if (aid && activeColumns.has(aid)) { closedAgentId = aid; break; }
         }
         if (closedAgentId) {
-          freeColumns.push(activeColumns.get(closedAgentId));
+          const closedCol = activeColumns.get(closedAgentId);
+          postHookClosedCol.set(interaction.id, closedCol);
+          freeColumns.push(closedCol);
           activeColumns.delete(closedAgentId);
         }
       }
@@ -1015,7 +1033,7 @@
     }
     if (currentRegion) parallelRegions.push(currentRegion);
 
-    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions };
+    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol };
   }
 
   // --- Layout computation ---
@@ -1031,7 +1049,7 @@
   const GAP_COLLAPSE_THRESHOLD = 30000;
   const GAP_COLLAPSE_HEIGHT = 28;
 
-  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions) {
+  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol) {
     const C = D3_CONST;
     const layout = [];
     const breaks = [];
@@ -1130,9 +1148,13 @@
         }
 
         if (col === 0) {
-          // Main thread: compact stacking even inside parallel regions
           const colBottom = colBottoms.get(0) || globalBottom;
           y = colBottom + C.MIN_GAP;
+          // PostToolUse/Agent hooks must sit at or below the closed subagent column bottom
+          const closedCol = postHookClosedCol && postHookClosedCol.get(interaction.id);
+          if (closedCol != null && colBottoms.has(closedCol)) {
+            y = Math.max(y, colBottoms.get(closedCol) + C.MIN_GAP);
+          }
         } else {
           // Subagent columns: time-proportional positioning
           const rs = regionCache.get(region);
@@ -1182,7 +1204,8 @@
         colItems.get(item.col).push(item);
       }
       let tallestBottom = 0;
-      for (const items of colItems.values()) {
+      for (const [c, items] of colItems) {
+        if (c === 0) continue;
         const last = items[items.length - 1];
         if (last.y + last.height > tallestBottom) tallestBottom = last.y + last.height;
       }
@@ -1559,13 +1582,24 @@
 
   // --- SVG connectors ---
 
-  function computeConnectorData(layout, columnFor, columnAgents, totalColumns, elapsedToY, sessionStart) {
+  function computeConnectorData(layout, columnFor, columnAgents, totalColumns, elapsedToY, sessionStart, postHookClosedCol) {
     const connectors = [];
     const colEntries = new Map();
 
     for (const item of layout) {
       if (!colEntries.has(item.col)) colEntries.set(item.col, []);
       colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width, interaction: item.interaction });
+    }
+
+    // Reverse map: subagent column → PostToolUse/Agent hook entry in main thread
+    const colToPostHook = new Map();
+    if (postHookClosedCol) {
+      const mainEntryById = new Map();
+      for (const me of (colEntries.get(0) || [])) mainEntryById.set(me.id, me);
+      for (const [hookId, closedCol] of postHookClosedCol) {
+        const me = mainEntryById.get(hookId);
+        if (me) colToPostHook.set(closedCol, me);
+      }
     }
 
     const mainEntries = colEntries.get(0);
@@ -1592,13 +1626,13 @@
 
       const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
 
-      // Fork: starts from top edge of preToolUse node at its horizontal center
+      // Fork: starts from center of preToolUse hook node
       let forkOriginY = bgTop;
       let forkOriginX = mainX;
       if (mainEntries) {
         for (let i = mainEntries.length - 1; i >= 0; i--) {
           if (mainEntries[i].y <= entries[0].y) {
-            forkOriginY = mainEntries[i].y;
+            forkOriginY = (mainEntries[i].y + mainEntries[i].yBottom) / 2;
             forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
             break;
           }
@@ -1616,32 +1650,29 @@
         agentId: agent?.agentId,
       });
 
-      // Merge: from bg rect bottom-left to bottom edge of corresponding PostToolUse/Agent in col 0
+      // Merge: from bg rect bottom-center to center of corresponding PostToolUse/Agent hook
       let mergeTargetY = null;
       let mergeTargetX = mainX;
-      if (mainEntries) {
+      const directHook = colToPostHook.get(col);
+      if (directHook) {
+        mergeTargetY = directHook.y + directHook.height / 2;
+        mergeTargetX = directHook.x + directHook.width / 2;
+      } else if (mainEntries) {
         for (const me of mainEntries) {
           if (me.y >= lastEntry.yBottom) {
-            const inter = me.interaction;
-            if (inter && inter.isHook && /PostToolUse/i.test(inter.hookEvent) && inter.toolName === 'Agent') {
-              mergeTargetY = me.yBottom;
-              mergeTargetX = me.x + me.width / 2;
-              break;
-            }
-            if (mergeTargetY == null) {
-              mergeTargetY = me.yBottom;
-              mergeTargetX = me.x + me.width / 2;
-              break;
-            }
+            mergeTargetY = me.yBottom;
+            mergeTargetX = me.x + me.width / 2;
+            break;
           }
         }
       }
       if (mergeTargetY != null) {
-        const mCpX = (bgLeft - mergeTargetX) * 0.6;
+        const bgCenterX = bgLeft + (colWidth + 8) / 2;
+        const mCpX = (bgCenterX - mergeTargetX) * 0.6;
         connectors.push({
           type: 'merge',
           col,
-          path: `M${bgLeft},${bgBottom} C${bgLeft - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
+          path: `M${bgCenterX},${bgBottom} C${bgCenterX - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
           color,
           opacity: 0.5,
           strokeWidth: 1.5,
@@ -1820,10 +1851,10 @@
     const filtered = visible;
 
     const assignment = buildColumnAssignment(filtered);
-    const { columnFor, totalColumns, columnAgents, parallelRegions } = assignment;
+    const { columnFor, totalColumns, columnAgents, parallelRegions, postHookClosedCol } = assignment;
     const colWidth = computeColumnWidth(totalColumns);
 
-    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions);
+    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol);
 
     // Create wrapper
     const wrapper = document.createElement('div');
@@ -1929,7 +1960,7 @@
     timelineList.appendChild(wrapper);
 
     // Render connectors: backgrounds in svg (behind nodes), curves in svgFg (above nodes)
-    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart);
+    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart, postHookClosedCol);
     renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns, compressedY, sessionStart);
 
     // Render time ruler
@@ -1977,6 +2008,7 @@
       freeColumns: assignment.freeColumns,
       nextColumn: assignment.nextColumn,
       parallelRegions,
+      postHookClosedCol,
     };
 
     // Set up resize observer
@@ -2098,7 +2130,7 @@
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart);
+    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.postHookClosedCol);
     renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart);
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
 

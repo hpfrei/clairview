@@ -151,15 +151,20 @@
       });
       btn.appendChild(label);
 
-      const gear = document.createElement('span');
-      gear.className = 'cli-settings-btn';
-      gear.textContent = '⚙';
-      gear.title = 'Settings';
-      gear.addEventListener('click', (e) => {
+      // Model override / settings button
+      const hasOverride = tab.settings &&
+        tab.settings.modelMap && Object.values(tab.settings.modelMap).some(v => v);
+      const settingsBtn = document.createElement('span');
+      settingsBtn.className = 'cli-model-override-btn' + (hasOverride ? ' active' : '');
+      settingsBtn.innerHTML = hasOverride
+        ? '<svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 2l12 10M1 7h12M1 12l12-10"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 3h10m-2-2l2 2-2 2"/><path d="M1 7h10m-2-2l2 2-2 2"/><path d="M1 11h10m-2-2l2 2-2 2"/></svg>';
+      settingsBtn.title = hasOverride ? 'Model override active — click to edit' : 'Model settings';
+      settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         openSettings(tabId);
       });
-      btn.appendChild(gear);
+      btn.appendChild(settingsBtn);
 
       const close = document.createElement('span');
       close.className = 'tab-close';
@@ -543,37 +548,26 @@
     settingsModal.classList.remove('hidden');
   }
 
-  function populateSettings(tabId, settings, models) {
+  function populateSettings(tabId, settings, models, hasSubscription) {
     if (!settingsModal || settingsModal._tabId !== tabId) return;
-    const tab = tabs.get(tabId);
-    const titleInput = document.getElementById('cliSettingsTitle');
-    if (titleInput) titleInput.value = tab?.title || '';
     const modelMap = settings.modelMap || { opus: null, sonnet: null, haiku: null };
-    const generalModel = settings.generalModel || null;
-    const modelOptions = (models || []).map(m => m.name);
-    const anthropicModels = (models || []).filter(m => m.providerKey === 'anthropic');
-
-    const generalSel = document.getElementById('cliSettingsGeneralModel');
-    if (generalSel) {
-      generalSel.innerHTML = '<option value="">Default (no override)</option>';
-      anthropicModels.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m.name;
-        opt.textContent = m.label || m.name;
-        if (generalModel === m.name) opt.selected = true;
-        generalSel.appendChild(opt);
-      });
-    }
+    const hasAuth = (m) => !!m.apiKey || (hasSubscription && m.providerKey === 'anthropic');
+    const allModels = (models || []).sort((a, b) => {
+      const aKey = hasAuth(a), bKey = hasAuth(b);
+      if (aKey !== bKey) return aKey ? -1 : 1;
+      return (a.label || a.name).localeCompare(b.label || b.name);
+    });
 
     ['opus', 'sonnet', 'haiku'].forEach(family => {
       const sel = settingsModal.querySelector(`[data-map="${family}"]`);
       if (!sel) return;
       sel.innerHTML = '<option value="">Default (passthrough)</option>';
-      modelOptions.forEach(name => {
+      allModels.forEach(m => {
         const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        if (modelMap[family] === name) opt.selected = true;
+        opt.value = m.name;
+        opt.textContent = m.label || m.name;
+        if (!hasAuth(m)) { opt.disabled = true; opt.textContent += ' (no key)'; }
+        if (modelMap[family] === m.name) opt.selected = true;
         sel.appendChild(opt);
       });
     });
@@ -582,19 +576,15 @@
   function saveSettings() {
     if (!settingsModal) return;
     const tabId = settingsModal._tabId;
-    const titleInput = document.getElementById('cliSettingsTitle');
-    const newTitle = titleInput?.value.trim() || null;
     const tab = tabs.get(tabId);
-    if (tab) tab.title = newTitle;
-    sendWs({ type: 'cli:rename', tabId, title: newTitle });
-    const generalSel = document.getElementById('cliSettingsGeneralModel');
-    const generalModel = generalSel?.value || null;
     const modelMap = {};
     ['opus', 'sonnet', 'haiku'].forEach(family => {
       const sel = settingsModal.querySelector(`[data-map="${family}"]`);
       modelMap[family] = sel?.value || null;
     });
-    sendWs({ type: 'cli:settings', tabId, settings: { modelMap, generalModel } });
+    const settings = { modelMap };
+    if (tab) tab.settings = { ...tab.settings, ...settings };
+    sendWs({ type: 'cli:settings', tabId, settings });
     settingsModal.classList.add('hidden');
     renderTabStrip();
     window.inspectorModule?.renderInspectorTabStrip?.();
@@ -703,7 +693,7 @@
         break;
       }
       case 'cli:settingsData': {
-        populateSettings(msg.tabId, msg.settings || {}, msg.models || []);
+        populateSettings(msg.tabId, msg.settings || {}, msg.models || [], msg.hasSubscription);
         break;
       }
       case 'cli:savedSessions': {

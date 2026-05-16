@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { ensureDir } = require('./utils');
 
 const KNOWN_TOOLS = [
@@ -520,6 +521,14 @@ function resolveModel(model, providers, secrets) {
     cacheReadCostPerMTok: typeof model.cacheReadCostPerMTok === 'number' ? model.cacheReadCostPerMTok : null,
     cacheCreateCostPerMTok: typeof model.cacheCreateCostPerMTok === 'number' ? model.cacheCreateCostPerMTok : null,
   };
+}
+
+function hasClaudeSubscription() {
+  try {
+    const credsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+    return !!(creds?.claudeAiOauth?.accessToken);
+  } catch { return false; }
 }
 
 function listModels(baseDir) {
@@ -1060,4 +1069,5 @@ module.exports = {
   reorderProxyRules,
   readProxyRuleSource,
   isValidRuleId,
+  hasClaudeSubscription,
 };

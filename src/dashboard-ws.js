@@ -340,6 +340,7 @@ class DashboardBroadcaster {
                 tabId: msg.tabId,
                 settings: session ? session.getSettings() : {},
                 models,
+                hasSubscription: caps.hasClaudeSubscription(),
               }));
             }
           } else if (msg.type === 'cli:requestScrollback') {

@@ -16,7 +16,7 @@
   {
     "id": "model-override",
     "name": "Model Override",
-    "slug": "Rewrites claude-opus-4-7 to claude-opus-4-6 on all requests",
+    "slug": "Global model override — rewrites claude-opus-4-7 → claude-opus-4-6. Runs after per-tab overrides (tab settings take priority).",
     "enabled": true,
     "builtin": true
   },

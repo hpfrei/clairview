@@ -307,6 +307,29 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       cliSettings = createProxyRouter._cliSettingsGetter(req.instanceId);
     }
 
+    // --- Tab-level model override (applies before global proxy rules) ---
+    let tabModelDef = null;
+    if (cliSettings && body.model) {
+      const modelMap = cliSettings.modelMap;
+      if (modelMap) {
+        const lower = body.model.toLowerCase();
+        const family = lower.includes('opus') ? 'opus'
+          : lower.includes('sonnet') ? 'sonnet'
+          : lower.includes('haiku') ? 'haiku'
+          : null;
+        if (family && modelMap[family]) {
+          const mapped = caps.loadModel(PROJECT_ROOT, modelMap[family]);
+          if (mapped) {
+            if (mapped.providerKey === 'anthropic') {
+              body.model = mapped.modelId;
+            } else {
+              tabModelDef = mapped;
+            }
+          }
+        }
+      }
+    }
+
     const instCtx = getInstanceContext(req.instanceId);
     const interaction = {
       id: generateId(),
@@ -384,8 +407,8 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       interaction: sanitizeForDashboard(interaction),
     });
 
-    // --- Check for model translation ---
-    const modelDef = null;
+    // --- Check for model translation (tab-level non-Anthropic override) ---
+    const modelDef = tabModelDef;
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider && modelDef.provider !== 'anthropic') {
