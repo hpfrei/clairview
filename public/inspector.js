@@ -1051,8 +1051,9 @@
     const freeColumns = [];
     const parallelRegions = [];
     const postHookClosedCol = new Map();
-    const columnSegments = []; // { col, agentId, subagent, startIdx, endHookId }
+    const columnSegments = []; // { col, agentId, subagent, startIdx, endHookId, startHookId }
     const activeSegments = new Map(); // agentId → segment (currently open)
+    const pendingPreHooks = []; // PreToolUse/Agent hooks awaiting segment match
     const depthAt = new Array(interactions.length);
     let nextColumn = 1;
     let currentRegion = null;
@@ -1066,6 +1067,10 @@
         agentId = interaction.subagent?.agentId || null;
       }
 
+      if (interaction.isHook && interaction.hookEvent && /PreToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
+        pendingPreHooks.push({ id: interaction.id, toolUseId: interaction.toolUseId, description: interaction.request?.tool_input?.description });
+      }
+
       if (agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
         const alloc = allocateColumn(freeColumns, activeColumns, nextColumn);
         const col = alloc.col;
@@ -1076,7 +1081,20 @@
           registerSubagent(interaction.subagent);
           columnAgents.set(col, interaction.subagent);
         }
-        const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null };
+        let startHookId = null;
+        const subDesc = interaction.subagent?.description;
+        if (subDesc && pendingPreHooks.length > 0) {
+          const matchIdx = pendingPreHooks.findIndex(ph => ph.description === subDesc);
+          if (matchIdx >= 0) {
+            startHookId = pendingPreHooks[matchIdx].id;
+            pendingPreHooks.splice(matchIdx, 1);
+          }
+        }
+        if (!startHookId && pendingPreHooks.length === 1) {
+          startHookId = pendingPreHooks[0].id;
+          pendingPreHooks.splice(0, 1);
+        }
+        const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null, startHookId };
         columnSegments.push(seg);
         activeSegments.set(agentId, seg);
       }
@@ -1358,12 +1376,8 @@
     return { layout, totalHeight: finalBottom + 40, sessionStart, breaks, compressedY: elapsedToY };
   }
 
-  function computeColumnWidth(totalColumns) {
-    const container = document.getElementById('timeline-list');
-    if (!container) return D3_CONST.COLUMN_WIDTH;
-    const available = container.clientWidth - D3_CONST.RULER_WIDTH - 12;
-    const perCol = Math.floor((available - (totalColumns - 1) * D3_CONST.COLUMN_GAP) / totalColumns);
-    return Math.max(160, Math.min(D3_CONST.COLUMN_WIDTH, perCol));
+  function computeColumnWidth(_totalColumns) {
+    return D3_CONST.COLUMN_WIDTH;
   }
 
   // --- Build node HTML elements (reusing existing patterns) ---
@@ -1724,14 +1738,20 @@
           bgBottom = Math.max(timeBottom, naturalBottom) + 4;
         }
 
-        // Fork arrow: from last main-thread node at or before this segment's first entry
+        // Fork arrow: prefer PreToolUse/Agent hook as explicit origin
         let forkOriginY = bgTop;
         let forkOriginX = D3_CONST.RULER_WIDTH + colWidth / 2;
-        for (let i = mainEntries.length - 1; i >= 0; i--) {
-          if (mainEntries[i].y <= entries[0].y) {
-            forkOriginY = mainEntries[i].y + mainEntries[i].height / 2;
-            forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
-            break;
+        const startHookEntry = seg.startHookId ? hookEntryById.get(seg.startHookId) : null;
+        if (startHookEntry) {
+          forkOriginY = startHookEntry.y + startHookEntry.height / 2;
+          forkOriginX = startHookEntry.x + startHookEntry.width / 2;
+        } else {
+          for (let i = mainEntries.length - 1; i >= 0; i--) {
+            if (mainEntries[i].y <= entries[0].y) {
+              forkOriginY = mainEntries[i].y + mainEntries[i].height / 2;
+              forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
+              break;
+            }
           }
         }
 
@@ -1959,6 +1979,12 @@
     const { columnFor, totalColumns, columnAgents, columnSegments, parallelRegions, postHookClosedCol, depthAt } = assignment;
     const colWidth = computeColumnWidth(totalColumns);
 
+    const aside = document.getElementById('timeline');
+    if (aside) {
+      const neededWidth = D3_CONST.RULER_WIDTH + totalColumns * colWidth + (totalColumns - 1) * D3_CONST.COLUMN_GAP + 24;
+      aside.style.width = neededWidth + 'px';
+    }
+
     const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt);
 
     // Create wrapper
@@ -2008,7 +2034,7 @@
     }
 
     // SVG background layer (behind nodes): ruler + column backgrounds
-    const svgColumnsWidth = D3_CONST.RULER_WIDTH + totalColumns * (colWidth + D3_CONST.COLUMN_GAP);
+    const svgColumnsWidth = D3_CONST.RULER_WIDTH + totalColumns * colWidth + (totalColumns - 1) * D3_CONST.COLUMN_GAP;
     const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svgEl.setAttribute('class', 'tl-connector-svg');
     svgEl.setAttribute('width', '100%');
@@ -2086,7 +2112,7 @@
     // Render session boundary separators
     if (sessionBoundaries.size > 0) {
       const gSep = svg.select('.tl-connectors');
-      const totalW = D3_CONST.RULER_WIDTH + totalColumns * (colWidth + D3_CONST.COLUMN_GAP);
+      const totalW = D3_CONST.RULER_WIDTH + totalColumns * colWidth + (totalColumns - 1) * D3_CONST.COLUMN_GAP;
       for (const idx of sessionBoundaries) {
         const itemAbove = layout[idx - 1];
         const itemBelow = layout[idx];
