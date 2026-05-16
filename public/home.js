@@ -22,7 +22,7 @@
   const overviewMd = `
 # vistaclair
 
-A browser dashboard that **wraps Claude Code CLI**. It proxies every API call, giving you real-time inspection, multi-provider routing, programmable rules, custom MCP tools, and interactive prompts — all from any browser. Set up a tunnel and you can control your dev machine from anywhere: phone, tablet, another PC.
+Transparent proxy + browser dashboard for Claude Code. Intercepts all API traffic, gives you inspection, model routing, programmable rules, and custom MCP tools. Tunnel it and you have full remote access from any device.
 
 \`\`\`svg
 <svg viewBox="0 0 780 270" xmlns="http://www.w3.org/2000/svg" style="max-width:780px;font-family:system-ui,sans-serif">
@@ -95,17 +95,6 @@ A browser dashboard that **wraps Claude Code CLI**. It proxies every API call, g
 
 ---
 
-## What you can do
-
-- **Inspect everything** — see every API call, tool invocation, token count, and cost in real time across all sessions.
-- **Run multiple sessions** — open several CLI tabs, each with its own working directory and model routing. Let one refactor auth while another writes tests.
-- **Switch models** — route Claude Code through OpenAI, Gemini, DeepSeek, Kimi, or local Ollama with a dropdown. Automatic protocol translation.
-- **Write rules** — describe middleware in plain English; vistaclair generates JavaScript that intercepts every request flowing through the proxy.
-- **Add MCP tools** — define parameters and write a handler in the browser. Claude gets the new capability instantly — no restart, no config files.
-- **Work remotely** — set up a tunnel and control your dev machine from any browser. Your code stays on your machine.
-- **AskUserQuestion** — when Claude needs input mid-task, the question appears in your browser. Answer it and Claude continues.
-- **Connect external CLI** — point any Claude Code instance at the proxy and its traffic appears in the Inspector.
-
 ## Quick start
 
 \`\`\`bash
@@ -115,24 +104,19 @@ git clone https://github.com/hpfrei/vistaclair.git && cd vistaclair
 npm install && npm start  # open localhost:3457
 \`\`\`
 
-### Remote access
-
-Expose vistaclair through a tunnel and access it from any device. The auth token protects access; the proxy (:3456) stays localhost-only.
+Remote access — tunnel the dashboard port and use from any device:
 
 \`\`\`bash
-# Pick one:
 cloudflared tunnel --url http://localhost:3457
-npx bore local 3457 --to bore.pub
-ssh -R 80:localhost:3457 serveo.net
 \`\`\`
 `;
 
   const inspectorMd = `
 # Inspector & CLI
 
-## Inspector — see everything Claude does
+## Inspector
 
-The Inspector records **every API call** between Claude Code and the LLM. Each interaction is a row on a live timeline showing the model, token counts, cost, and timing. Click any row to drill into the full request/response payload.
+Records every API call between Claude Code and the LLM. Click any row to drill into the full payload.
 
 \`\`\`svg
 <svg viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -178,9 +162,7 @@ The Inspector records **every API call** between Claude Code and the LLM. Each i
 </svg>
 \`\`\`
 
-### What you see when you click a row
-
-Every interaction expands into a detail panel with multiple sections:
+### Detail panel
 
 \`\`\`svg
 <svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -239,7 +221,7 @@ Every interaction expands into a detail panel with multiple sections:
 
 ### Per-instance isolation
 
-Each Claude Code process gets its own tab in the Inspector. Concurrent sessions are tracked independently — API traffic from one session never mixes with another.
+Each Claude Code process gets its own tab. Concurrent sessions never mix.
 
 \`\`\`svg
 <svg viewBox="0 0 700 100" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
@@ -268,17 +250,17 @@ Each Claude Code process gets its own tab in the Inspector. Concurrent sessions 
 
   <!-- Explanation -->
   <text x="15" y="65" fill="var(--text-dim)" font-size="10">Each tab tracks one Claude Code process. CLI tabs are sessions you spawned; chat tabs are browser chats.</text>
-  <text x="15" y="82" fill="var(--text-dim)" font-size="10">External tabs (ext-N) appear automatically when an outside Claude CLI connects to the proxy.</text>
+  <text x="15" y="82" fill="var(--text-dim)" font-size="10">External tabs (ext-N) appear when an outside Claude CLI connects to the proxy.</text>
 </svg>
 \`\`\`
 
-All interactions are saved to disk as structured JSON in \`interactions/{sessionId}/\`. You can review past sessions even after restarting vistaclair — and **resume** any old session into a new CLI tab to continue where you left off.
+Interactions are saved to \`interactions/{sessionId}/\` as JSON. You can resume any past session into a new CLI tab.
 
 ---
 
-## CLI — multi-tab Claude Code terminal
+## CLI
 
-The **CLI** tab gives you full Claude Code terminal sessions running in the browser. Each tab is an independent \`claude -p\` process with its own working directory, model routing, and session state.
+Multi-tab Claude Code terminal in the browser. Each tab is an independent \`claude -p\` process with its own working directory and model routing.
 
 \`\`\`svg
 <svg viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -324,21 +306,9 @@ The **CLI** tab gives you full Claude Code terminal sessions running in the brow
 </svg>
 \`\`\`
 
-### CLI features
-
-| Feature | How |
-|---------|-----|
-| **New tab** | Click \`+\`, pick a working directory, optionally set model routing |
-| **Model routing** | Click ⚙ to map opus/sonnet/haiku tiers to any provider's model |
-| **Resume session** | Tabs save their session ID. Close and reopen later — Claude keeps full context. Old sessions from previous runs can also be restored into a new CLI tab. |
-| **Directory spawn** | Start a CLI tab directly from the Directories file browser |
-| **Rename** | Double-click the tab title |
-| **Stop** | Click ✕ to kill the running \`claude -p\` process |
-| **AskUserQuestion** | Questions appear inline in the terminal — answer and Claude continues |
-
 ### Per-session model routing
 
-Each tab has a **modelMap** that translates Claude tiers to specific models from any provider:
+Each tab has a **modelMap** that maps Claude tiers (opus/sonnet/haiku) to any provider's model:
 
 \`\`\`svg
 <svg viewBox="0 0 600 130" xmlns="http://www.w3.org/2000/svg" style="max-width:600px;font-family:system-ui,sans-serif">
@@ -382,7 +352,7 @@ Each tab has a **modelMap** that translates Claude tiers to specific models from
   const rulesMd = `
 # Proxy Rules
 
-Rules are **programmable middleware** that intercept every API request flowing through the proxy. Describe what you want in the **Rules** tab — vistaclair generates JavaScript that runs before model routing. Rules are hot-reloaded on file change and toggleable from the dashboard.
+JavaScript middleware that intercepts every API request. Describe what you want in the **Rules** tab — vistaclair generates the JS. Hot-reloaded, toggleable, reorderable.
 
 \`\`\`svg
 <svg viewBox="0 0 720 100" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -419,25 +389,22 @@ Rules are **programmable middleware** that intercept every API request flowing t
 </svg>
 \`\`\`
 
-## How rules work
-
-Each rule is a JavaScript module that receives a context object and can mutate the request:
+## Writing a rule
 
 \`\`\`javascript
-// ctx.body — the full API request body (mutable)
-// ctx.isStreaming — whether this is an SSE request
-// ctx.instanceId — which Claude session sent it
+// ctx.body — full API request body (mutable)
+// ctx.isStreaming — SSE request?
+// ctx.instanceId — which session sent it
 module.exports = function(ctx) {
-  // Example: downgrade opus to sonnet for cost savings
   if (ctx.body.model?.includes('opus')) {
     ctx.body.model = 'claude-sonnet-4-6-20250514';
   }
 };
 \`\`\`
 
-Rules also support **response transforms** — modify SSE chunks as they stream back from the provider.
+Rules also support **response transforms** on SSE chunks streaming back from the provider.
 
-## Creating rules
+## Creating rules from the UI
 
 \`\`\`svg
 <svg viewBox="0 0 700 100" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
@@ -474,36 +441,22 @@ Rules also support **response transforms** — modify SSE chunks as they stream 
 </svg>
 \`\`\`
 
-1. Go to the **Rules** tab and type a description (e.g. "Block the Bash tool from running rm or sudo")
-2. vistaclair generates a JavaScript rule and saves it to \`capabilities/proxy-rules/\`
-3. Toggle the rule on/off. Drag to reorder. Click to view/edit the source.
-4. Rules are hot-reloaded — edit the file on disk and changes apply immediately.
+Type a description in the **Rules** tab. vistaclair generates JS and saves it to \`capabilities/proxy-rules/\`. Toggle on/off, drag to reorder, click to edit source.
 
 ## Built-in rules
 
 | Rule | What it does | Default |
 |------|-------------|---------|
-| **Model Override** | Rewrites \`claude-opus-4-7\` → \`claude-opus-4-6\` (pin model version) | enabled |
-| **Tool Filter** | Strips unsafe tools: CronCreate, PushNotification, RemoteTrigger, etc. | enabled |
-| **AUQ MCP Rewrite** | Routes AskUserQuestion through the dashboard MCP tool | enabled |
-| **Title Schema Shortcut** | Short-circuits title-generation requests to save tokens | disabled |
-
-You can edit any built-in rule's source. Use **Restore** to reset it to the original version.
-
-## Rule capabilities
-
-- **Request transforms** — modify the request body before it reaches the provider: swap models, filter tools, inject system prompts, add/remove messages, change parameters
-- **Response transforms** — process SSE chunks as they stream back: rewrite content, filter events, add metadata
-- **Hot reload** — rules are re-read from disk on every request, no restart needed
-- **Toggle** — enable/disable any rule from the dashboard without deleting it
-- **Reorder** — drag rules to change execution order
-- **Context** — rules have access to \`ctx.body\`, \`ctx.isStreaming\`, \`ctx.instanceId\`, and the full request object
+| **Model Override** | Pin model version (\`opus-4-7\` → \`opus-4-6\`) | enabled |
+| **Tool Filter** | Strip unsafe tools (CronCreate, RemoteTrigger, etc.) | enabled |
+| **AUQ MCP Rewrite** | Route AskUserQuestion through dashboard | enabled |
+| **Title Schema Shortcut** | Short-circuit title-generation requests | disabled |
 `;
 
   const mcpMd = `
 # MCP Tools
 
-Custom tools extend what Claude can do during any session. Define parameters and write a JavaScript handler in the **MCP** tab — Claude gets the new capability instantly. No server restart, no config files, no redeployment.
+Define custom tools in the **MCP** tab — name, parameters, JS handler. Claude gets the capability instantly, no restart needed. All calls logged in the Inspector.
 
 \`\`\`svg
 <svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -546,7 +499,7 @@ Custom tools extend what Claude can do during any session. Define parameters and
 </svg>
 \`\`\`
 
-## How it works
+## Workflow
 
 \`\`\`svg
 <svg viewBox="0 0 700 80" xmlns="http://www.w3.org/2000/svg" style="max-width:700px;font-family:system-ui,sans-serif">
@@ -578,18 +531,9 @@ Custom tools extend what Claude can do during any session. Define parameters and
 </svg>
 \`\`\`
 
-1. **Define** a tool in the MCP tab — set its name, description, and typed parameters (string, number, boolean, object, array)
-2. **Write** the handler body — an async JavaScript function that returns MCP content
-3. **Enable** with a checkbox — the MCP server regenerates and restarts automatically
-4. **Test** inline — fill in parameter values and run the handler directly from the browser
-5. **Use** — Claude calls the tool during any session; the result is validated and logged
-
-## Writing a handler
-
-The handler is an async function that receives validated parameters. Return MCP content:
+## Handler example
 
 \`\`\`javascript
-// Example: fetch a URL and return the text
 const response = await fetch(url);
 const text = await response.text();
 return {
@@ -597,27 +541,22 @@ return {
 };
 \`\`\`
 
-Handlers have access to:
-- All Node.js built-in modules (via dynamic \`import()\`)
-- The dashboard WebSocket for live UI integration
-- Environment variables from the server process
+Handlers have access to Node.js built-ins (via \`import()\`), the dashboard WebSocket, and env vars.
 
 ## Built-in tools
 
 | Tool | Purpose |
 |------|---------|
-| **vista-AskUserQuestion** | Routes Claude's interactive questions through the dashboard UI instead of the CLI. Always enabled. |
-| **chat** | Spawn a sub-session: run a prompt through Claude Code via the dashboard API. Supports multi-turn via \`session_id\` and custom \`cwd\`. Useful for delegation — an orchestrator can hand off subtasks. |
+| **vista-AskUserQuestion** | Routes Claude's questions through the dashboard UI. Always enabled. |
+| **chat** | Spawn a sub-session via the API. Multi-turn via \`session_id\`, custom \`cwd\`. |
 `;
 
   const connectMd = `
 # Connect External Claude CLI
 
-You can point **any Claude Code instance** at vistaclair and its traffic appears in the Inspector — no changes to the Claude process itself. This works for external CLI sessions, scripts, CI/CD pipelines, or remote machines.
+Point any Claude Code instance at vistaclair and its traffic appears in the Inspector.
 
-## Method 1 — Transparent Proxy (simplest)
-
-Set one environment variable and run Claude Code normally:
+## Method 1 — Transparent Proxy
 
 \`\`\`bash
 ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
@@ -651,31 +590,22 @@ ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
   <text x="575" y="57" text-anchor="middle" fill="var(--text)" font-size="11">Anthropic API</text>
 
   <!-- Note -->
-  <text x="360" y="115" text-anchor="middle" fill="var(--text-dim)" font-size="9">Claude Code sees no difference — it thinks it's talking to Anthropic. Traffic appears in a new ext-N tab in the Inspector.</text>
+  <text x="360" y="115" text-anchor="middle" fill="var(--text-dim)" font-size="9">Claude Code sees no difference. Traffic appears in a new ext-N tab in the Inspector.</text>
 </svg>
 \`\`\`
 
-The external Claude process thinks it's talking directly to Anthropic. vistaclair intercepts, records, applies rules and routing, and forwards the request. The traffic appears in the Inspector under an auto-created **ext-N** tab.
-
-This works with **any** Claude Code session type — interactive, programmatic (\`claude -p\`), or Claude Code in an IDE.
-
-### Remote connection
-
-If vistaclair runs on a remote machine, expose the proxy port through a tunnel or VPN:
+Works with interactive, programmatic (\`claude -p\`), and IDE sessions. For remote machines, tunnel the proxy port:
 
 \`\`\`bash
-# On the remote machine (where vistaclair is running):
 cloudflared tunnel --url http://localhost:3456 --name proxy-tunnel
-
-# On your local machine:
-ANTHROPIC_BASE_URL=https://proxy-tunnel.your-domain.com claude -p "prompt"
+# Then: ANTHROPIC_BASE_URL=https://proxy-tunnel.your-domain.com claude -p "prompt"
 \`\`\`
 
 ---
 
-## Method 2 — MCP Bridge (share tools)
+## Method 2 — MCP Bridge
 
-Connect external Claude CLI to vistaclair's MCP tools. The bridge process provides stdio transport — Claude Code spawns it as an MCP server and gains access to all your custom tools.
+Give external Claude access to vistaclair's MCP tools via stdio bridge.
 
 \`\`\`svg
 <svg viewBox="0 0 720 130" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -711,13 +641,11 @@ Connect external Claude CLI to vistaclair's MCP tools. The bridge process provid
   <text x="650" y="68" text-anchor="middle" fill="var(--text-dim)" font-size="8">logs all calls</text>
   <line x1="580" y1="58" x2="600" y2="55" stroke="var(--text-dim)" stroke-width="1" marker-end="url(#cn2)"/>
 
-  <text x="360" y="120" text-anchor="middle" fill="var(--text-dim)" font-size="9">External Claude gains access to all MCP tools. Tool calls are logged in the Inspector with timing and results.</text>
+  <text x="360" y="120" text-anchor="middle" fill="var(--text-dim)" font-size="9">External Claude gains access to all MCP tools. Calls logged in Inspector.</text>
 </svg>
 \`\`\`
 
-### Setup
-
-Add the bridge to your Claude Code MCP config (\`.mcp.json\` or \`~/.claude.json\`):
+Add to \`.mcp.json\` or \`~/.claude.json\`:
 
 \`\`\`json
 {
@@ -734,20 +662,11 @@ Add the bridge to your Claude Code MCP config (\`.mcp.json\` or \`~/.claude.json
 }
 \`\`\`
 
-Or spawn the bridge manually:
-
-\`\`\`bash
-VISTACLAIR_AUTH_TOKEN="<token>" VISTACLAIR_DASHBOARD_PORT=3457 \\
-  node /path/to/vistaclair/lib/mcp-bridge.js integrated
-\`\`\`
-
-The auth token is printed to the console when vistaclair starts, or set via \`AUTH_TOKEN\` env var.
-
 ---
 
-## Method 3 — REST API (automation)
+## Method 3 — REST API
 
-For scripts, CI/CD, or custom integrations, use the REST API to run chats programmatically:
+Run chats programmatically from scripts, CI/CD, or custom integrations.
 
 \`\`\`svg
 <svg viewBox="0 0 720 110" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
@@ -784,75 +703,25 @@ For scripts, CI/CD, or custom integrations, use the REST API to run chats progra
 </svg>
 \`\`\`
 
-### Quick example
-
 \`\`\`bash
-# One-shot chat
 curl -N -X POST http://localhost:3457/api/run \\
   -H "Authorization: Bearer <token>" \\
   -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"List all TODO comments in this project"}'
-
-# Multi-turn: capture sessionId from the done event, then continue
-curl -N -X POST http://localhost:3457/api/run \\
-  -H "Authorization: Bearer <token>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"chat","prompt":"Now fix them","sessionId":"<sessionId>"}'
+  -d '{"type":"chat","prompt":"List all TODO comments"}'
 \`\`\`
 
-### SSE events
-
-| Event | Payload | When |
-|-------|---------|------|
-| \`text\` | \`{ text }\` | Streamed text delta |
-| \`ask\` | \`{ toolUseId, questions }\` | Claude needs user input — answer via \`POST /api/run/answer\` |
-| \`error\` | \`{ error }\` | Error message |
-| \`done\` | \`{ result, sessionId }\` | Run complete. \`sessionId\` enables multi-turn. |
-
-Set \`"stream": false\` in the request body to get a single JSON response instead of SSE.
-
-### WebSocket
-
-For real-time bidirectional communication, connect via WebSocket on the same port:
-
-\`\`\`javascript
-const ws = new WebSocket('ws://localhost:3457', {
-  headers: { Cookie: 'token=<your-token>' }
-});
-
-// Send a chat message
-ws.send(JSON.stringify({
-  type: 'chat:send', tabId: 'tab-1', prompt: 'Hello'
-}));
-
-// Answer an AskUserQuestion
-ws.send(JSON.stringify({
-  type: 'ask:answer', toolUseId: 'toolu_abc', answer: 'yes'
-}));
-\`\`\`
+SSE events: \`text\` (delta), \`ask\` (needs input), \`error\`, \`done\` (includes \`sessionId\` for multi-turn). Set \`"stream": false\` for JSON response.
 
 ---
 
-## Authentication
-
-All methods require the auth token. It's available in three forms:
-
-| Method | Where | Use case |
-|--------|-------|----------|
-| \`Authorization: Bearer <token>\` | HTTP header | API clients, scripts |
-| \`token=<token>\` | Cookie | Browser sessions |
-| \`X-Vistaclair-Internal: true\` | HTTP header | Localhost-only (MCP bridge) |
-
-The token is printed to the console on startup, or set via \`AUTH_TOKEN\` env var before starting vistaclair.
-
-## Ports
+## Auth & Ports
 
 | Port | Binds to | Purpose |
 |------|----------|---------|
-| **:3456** | localhost only | Proxy — intercepts Claude API calls |
-| **:3457** | all interfaces | Dashboard — web UI, REST API, WebSocket |
+| **:3456** | localhost | Proxy — intercepts Claude API calls |
+| **:3457** | 0.0.0.0 | Dashboard — web UI, REST API, WebSocket |
 
-The proxy is localhost-only for security. The dashboard binds to all interfaces (protected by auth token) so you can access it remotely through a tunnel.
+Auth: \`Authorization: Bearer <token>\` header, or \`token=<token>\` cookie. Token printed on startup or set via \`AUTH_TOKEN\` env var.
 `;
 
 

@@ -1,7 +1,7 @@
 {
   "name": "vistaclair",
   "version": "1.2.2",
-  "description": "Control room and transparent proxy for Claude Code — API inspector, proxy rules, MCP tools, multi-provider routing, remote CLI",
+  "description": "Control room and transparent proxy for Claude Code",
   "author": "Hans-Peter Frei (https://hpfreilabs.com)",
   "license": "Apache-2.0",
   "repository": {

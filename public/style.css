@@ -805,6 +805,28 @@ aside#timeline {
 .hook-tool-entry .hook-entry-name { color: var(--magenta, #c084fc); }
 .hook-tool-entry.selected .hook-entry-name { color: var(--magenta, #c084fc); }
 .tag-hook { color: var(--magenta, #c084fc); background: color-mix(in srgb, var(--magenta, #c084fc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--magenta, #c084fc) 20%, transparent); }
+/* Endpoint call entries (count_tokens etc.) */
+.endpoint-call-group {
+  max-height: 28px;
+  overflow: hidden;
+}
+.endpoint-call-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--yellow) 5%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 28px;
+  font-size: 11px;
+}
+.endpoint-call-entry:hover { background: color-mix(in srgb, var(--yellow) 10%, transparent); }
+.endpoint-call-entry.selected { background: color-mix(in srgb, var(--yellow) 15%, transparent); }
+.endpoint-label { color: var(--yellow); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; flex-shrink: 0; }
+.endpoint-call-entry .entry-tokens { color: var(--text-dim); font-size: 10px; }
+
 .mcp-source-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
 .mcp-src-test { color: var(--purple); background: color-mix(in srgb, var(--purple) 12%, transparent); }
 .mcp-src-claude { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); }

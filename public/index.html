@@ -157,17 +157,8 @@
       <!-- ===================== TOOLS ===================== -->
       <div class="ref-panel active" id="ref-tools">
         <div class="ref-intro">
-          <strong>Tools</strong> are Claude's built-in capabilities &mdash; the actions the model can request during the agentic loop.
-          Claude emits a structured tool call (name + JSON input), the harness executes it synchronously, and the result is returned into Claude's context.
-          For example, a <code>Bash</code> call sends <code>{"command": "npm test"}</code> and receives stdout/stderr back; a <code>Read</code> call sends a file path and gets the contents.
-          <br><br>
-          <strong>Permission model:</strong> read-only tools (<code>Read</code>, <code>Grep</code>, <code>Glob</code>) need no approval.
-          File-modifying tools (<code>Edit</code>, <code>Write</code>) and <code>Bash</code> require user approval, governed by
-          <em>allow / ask / deny</em> rules evaluated in that priority order. Rules live in <code>settings.json</code> at user, project, or managed scope.
-          The <code>--disallowedTools</code> CLI flag (used by profiles here) adds session-scoped deny rules on top of settings.
-          <br><br>
-          Toggle the checkbox on each tool to enable or disable it for the current profile.
-          Unchecked tools are passed as <code>--disallowedTools</code> flags when spawning <code>claude&nbsp;-p</code>.
+          <strong>Tools</strong> are actions Claude can request during the agentic loop. Read-only tools need no approval; write tools and <code>Bash</code> are governed by <em>allow / ask / deny</em> rules in <code>settings.json</code>.
+          Toggle checkboxes to enable/disable tools for the current profile (passed as <code>--disallowedTools</code>).
         </div>
 
         <div class="ref-filter" id="refFilter">
@@ -695,25 +686,10 @@
       <!-- ===================== SKILLS ===================== -->
       <div class="ref-panel" id="ref-skills">
         <div class="ref-intro">
-          <strong>Skills</strong> are Markdown playbooks that Claude can invoke via the <code>Skill</code> tool.
-          Each skill is a directory containing a <code>SKILL.md</code> file with optional YAML frontmatter and a Markdown body of instructions.
-          Stored in <code>.claude/skills/&lt;name&gt;/SKILL.md</code> (project scope) or <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code> (user scope).
-          <br><br>
-          <strong>Two invocation paths:</strong>
-          (1)&nbsp;<em>User-invoked</em> &mdash; type <code>/skill-name [args]</code> in the prompt.
-          (2)&nbsp;<em>Auto-invoked</em> &mdash; Claude reads all skill descriptions loaded into context and calls the <code>Skill</code> tool when the conversation matches.
-          Control this with frontmatter: <code>disable-model-invocation: true</code> hides a skill from Claude's auto-invoke context;
-          <code>user-invocable: false</code> hides it from the <code>/</code> menu.
-          <br><br>
-          <strong>Execution:</strong> skills run synchronously in the main conversation context by default.
-          Set <code>context: fork</code> in frontmatter to run in an isolated sub-agent with no access to conversation history.
-          The <code>$ARGUMENTS</code> placeholder (and positional <code>$0</code>, <code>$1</code>) substitutes user input before Claude sees the content.
-          Frontmatter can also override <code>model</code>, <code>effort</code>, <code>allowed-tools</code>, and scope lifecycle <code>hooks</code> to the skill's lifetime.
-          <br><br>
-          Skills supersede the older <code>.claude/commands/</code> format &mdash; a command file and a skill directory with the same name create the same <code>/name</code> slash command,
-          but skills add a directory for supporting files, richer frontmatter, and auto-invocation.
-          Built-in skills (commit, review-pr, etc.) ship with Claude Code and are always available.
-          Deny the <code>Skill</code> tool or specific skills via permission rules to restrict access.
+          <strong>Skills</strong> are Markdown playbooks (<code>.claude/skills/&lt;name&gt;/SKILL.md</code>) with YAML frontmatter.
+          Invoked by typing <code>/name</code> or auto-invoked when Claude matches the description.
+          <code>$ARGUMENTS</code> substitutes user input. <code>context: fork</code> runs in an isolated sub-agent.
+          Frontmatter controls model, effort, allowed-tools, hooks, and invocation visibility.
           <br><span id="capSkillsStatus">Currently: <strong>enabled</strong></span>
         </div>
         <div class="cap-section-header">
@@ -729,26 +705,11 @@
       <!-- ===================== AGENTS ===================== -->
       <div class="ref-panel" id="ref-agents">
         <div class="ref-intro">
-          <strong>Agents</strong> are sub-agent definitions &mdash; each one describes a specialized AI instance that runs in its own isolated context window.
-          Stored in <code>.claude/agents/&lt;name&gt;.md</code> (project) or <code>~/.claude/agents/&lt;name&gt;.md</code> (user), with YAML frontmatter and a Markdown body that becomes the agent's system prompt.
-          <br><br>
-          <strong>Frontmatter fields:</strong> <code>name</code> and <code>description</code> (required), plus optional
-          <code>model</code>, <code>tools</code> (allowlist), <code>disallowedTools</code> (denylist), <code>permissionMode</code>,
-          <code>maxTurns</code>, <code>effort</code>, <code>skills</code> (injected at startup), <code>mcpServers</code>,
-          <code>hooks</code> (scoped to the agent's lifetime), <code>memory</code>, <code>isolation</code> (<code>worktree</code> for git isolation), and <code>background</code>.
-          <br><br>
-          <strong>Invocation:</strong> Claude delegates tasks to agents via the <code>Agent</code> tool, choosing which agent to use based on <code>description</code> matching.
-          Users can also force an agent by name in the prompt, <code>@</code>-mention it, or run a full session as that agent with <code>claude --agent name</code>.
-          <br><br>
-          <strong>Isolation model:</strong> each invocation starts with a <strong>fresh context window</strong> &mdash; the agent sees only its own system prompt and environment info, not the parent conversation history.
-          By default, agents inherit all parent tools; restrict with <code>tools</code> (allowlist) or <code>disallowedTools</code> (denylist).
-          Agents <strong>cannot spawn other agents</strong> (no nesting).
-          <br><br>
-          <strong>Return value:</strong> when complete, only a summary of the agent's work is returned to the parent context &mdash; all intermediate tool calls and verbose output stay in the agent's own context, keeping the main conversation clean.
-          <br><br>
-          <strong>Sync vs async:</strong> foreground agents (default) block the main conversation until complete.
-          Background agents (<code>background: true</code>) run concurrently &mdash; the main conversation continues, and the agent's result is delivered later.
-          Built-in agents: <em>Explore</em> (haiku, read-only, fast search), <em>Plan</em> (read-only, architecture), <em>General-purpose</em> (all tools).
+          <strong>Agents</strong> are sub-agent definitions in <code>.claude/agents/&lt;name&gt;.md</code> &mdash; YAML frontmatter + Markdown body (becomes the system prompt).
+          Each invocation gets a <strong>fresh context window</strong>; only a summary returns to the parent.
+          Delegated via the <code>Agent</code> tool, <code>@mention</code>, or <code>claude --agent name</code>.
+          <code>background: true</code> runs concurrently. Agents cannot nest.
+          Built-in: <em>Explore</em>, <em>Plan</em>, <em>General-purpose</em>.
         </div>
         <div class="cap-section-header">
           <span>Custom agents stored in <code>.claude/agents/</code></span>
@@ -767,26 +728,16 @@
         <div class="cap-list" id="capHookList"></div>
 
         <div class="ref-intro" style="margin-top:1.5rem">
-          <strong>Hooks</strong> are user-defined automations that fire at specific lifecycle points in Claude Code.
-          Unlike tools (which Claude invokes), hooks are executed by the <strong>harness</strong> automatically &mdash; Claude cannot trigger or bypass them.
-          They live in <code>settings.json</code> (not CLAUDE.md) to prevent prompt injection from modifying hook behavior.
+          <strong>Hooks</strong> fire automatically at lifecycle points &mdash; executed by the harness, not by Claude.
+          Live in <code>settings.json</code> (user / project / local scope).
           <br><br>
-          <strong>Configuration:</strong> three levels of nesting &mdash; <em>event name</em> &rarr; <em>matcher group</em> (regex filter on tool name, start reason, etc.) &rarr; <em>hook handlers</em>.
-          Omit the matcher or use <code>"*"</code> to match all events of that type.
+          <strong>Handler types:</strong>
+          <em>command</em> (shell, JSON on stdin, exit 0 = allow / 2 = block),
+          <em>prompt</em> (single-turn LLM eval),
+          <em>agent</em> (sub-agent with Read/Grep/Glob).
+          Synchronous by default; set <code>async: true</code> for fire-and-forget.
           <br><br>
-          <strong>Three handler types:</strong>
-          (1)&nbsp;<em>command</em> &mdash; runs a shell command; receives JSON context on <strong>stdin</strong> (session ID, tool name, tool input, tool response); returns decisions via <strong>exit code</strong> (0 = success, 2 = block) or JSON on stdout.
-          (2)&nbsp;<em>prompt</em> &mdash; single-turn LLM evaluation; <code>$ARGUMENTS</code> replaced with the hook's JSON input; returns a yes/no decision. Only for tool events.
-          (3)&nbsp;<em>agent</em> &mdash; spawns a sub-agent with tool access (Read, Grep, Glob) to evaluate the situation before returning a decision. Only for tool events.
-          <br><br>
-          <strong>Execution:</strong> <strong>synchronous by default</strong> &mdash; hooks block Claude Code until complete.
-          Set <code>async: true</code> on command hooks for fire-and-forget background execution (logging, notifications).
-          Some events are inherently async and cannot block (<code>Notification</code>, <code>FileChanged</code>, <code>CwdChanged</code>).
-          <br><br>
-          <strong>JSON output (exit 0):</strong> hooks can return <code>{"continue": false, "stopReason": "..."}</code> to halt Claude,
-          <code>{"hookSpecificOutput": {"permissionDecision": "deny"}}</code> to block a tool call (PreToolUse),
-          <code>{"hookSpecificOutput": {"updatedInput": {...}}}</code> to modify a tool's input before it runs,
-          or <code>{"hookSpecificOutput": {"additionalContext": "..."}}</code> to inject context into Claude's view.
+          JSON output can block tools, modify inputs, inject context, or halt Claude.
         </div>
 
         <!-- Lifecycle -->
@@ -914,12 +865,8 @@
         <!-- Config reference -->
         <div class="ref-category-title" style="margin-top:2rem">Configuration Reference</div>
         <div class="ref-intro">
-          Hooks live in <code>settings.json</code> at three scopes (loaded in order, later overrides earlier):
-          <strong>User</strong> (<code>~/.claude/settings.json</code>),
-          <strong>Project</strong> (<code>.claude/settings.json</code> &mdash; committable, shared with team),
-          <strong>Local</strong> (<code>.claude/settings.local.json</code> &mdash; gitignored, personal overrides).
-          Hooks can also be defined in skill and agent <strong>frontmatter</strong>, scoped to that component's lifetime and auto-cleaned on completion.
-          Managed policy hooks (org-wide) take highest precedence and cannot be overridden.
+          Three scopes: <strong>User</strong> (<code>~/.claude/settings.json</code>), <strong>Project</strong> (<code>.claude/settings.json</code>), <strong>Local</strong> (<code>.claude/settings.local.json</code>).
+          Also definable in skill/agent frontmatter (scoped to lifetime).
         </div>
         <div class="ref-card">
           <div class="ref-card-header" onclick="toggleRef(this)">
@@ -979,32 +926,19 @@
               </div>
             </div>
             <div class="cap-modal-docs">
-              <h4>Skill directory structure</h4>
-              <pre class="cap-modal-pre">.claude/skills/&lt;name&gt;/
-  SKILL.md          # required entrypoint
-  templates/        # optional supporting files
-  scripts/          # shell scripts for hooks
-  examples/         # example inputs/outputs
-  README.md         # extra documentation</pre>
-
               <h4>SKILL.md frontmatter</h4>
               <pre class="cap-modal-pre">---
 name: my-skill
 description: &gt;
   Trigger when user asks to [action].
-  Also when conversation involves [topic].
 argument-hint: &lt;filename&gt; [options]
-# Invocation control:
-# user-invocable: true        # show in / menu (default)
-# disable-model-invocation: false  # auto-invoke (default)
-# Execution:
-# context: fork               # isolate in sub-agent
-# agent: Explore              # which sub-agent
-# model: sonnet               # override model
-# effort: high                # low/medium/high/max
-# allowed-tools: Read, Grep   # tool allowlist
-# shell: bash                 # for !`cmd` blocks
-# hooks:                      # scoped lifecycle hooks
+# user-invocable: true
+# disable-model-invocation: false
+# context: fork       # isolate in sub-agent
+# model: sonnet
+# effort: high
+# allowed-tools: Read, Grep
+# hooks:
 #   PreToolUse:
 #     - matcher: "Bash"
 #       hooks:
@@ -1014,21 +948,15 @@ argument-hint: &lt;filename&gt; [options]
 
 Instructions for Claude here...</pre>
 
-              <h4>String substitutions</h4>
+              <h4>Substitutions</h4>
               <pre class="cap-modal-pre">$ARGUMENTS        # all args from /name args
 $ARGUMENTS[0]     # first arg (also $0)
-$ARGUMENTS[1]     # second arg (also $1)
-${CLAUDE_SESSION_ID}    # current session
 ${CLAUDE_SKILL_DIR}     # this skill's dir</pre>
 
-              <h4>Dynamic context injection</h4>
+              <h4>Dynamic context</h4>
               <pre class="cap-modal-pre"># Shell output injected before Claude sees it:
 !`cat ${CLAUDE_SKILL_DIR}/templates/base.md`
-!`git log --oneline -5`
-!`ls ${CLAUDE_SKILL_DIR}/examples/`</pre>
-
-              <h4>Supporting scripts</h4>
-              <p class="cap-modal-hint">Scripts in the skill directory can be referenced by hooks or <code>!`cmd`</code> blocks. They run relative to the working directory, but <code>${CLAUDE_SKILL_DIR}</code> points to the skill's own directory.</p>
+!`git log --oneline -5`</pre>
             </div>
           </div>
         </div>
@@ -1053,36 +981,20 @@ ${CLAUDE_SKILL_DIR}     # this skill's dir</pre>
               <textarea id="capAgentTextarea" class="cap-modal-code" spellcheck="false" rows="24"></textarea>
             </div>
             <div class="cap-modal-docs">
-              <h4>Agent file</h4>
-              <pre class="cap-modal-pre">.claude/agents/&lt;name&gt;.md
-# Single file, not a directory.
-# YAML frontmatter + Markdown body.
-# Body becomes the agent's system prompt.</pre>
-
               <h4>Frontmatter reference</h4>
               <pre class="cap-modal-pre">---
 name: code-reviewer        # required
 description: |             # required
   Reviews code for quality, security,
-  and style. Use proactively after
-  code changes.
-model: sonnet              # sonnet/opus/haiku/inherit
-tools: [Read, Grep, Glob, Bash]  # allowlist
-disallowedTools: [Write, Edit]   # denylist
-permissionMode: default    # default/plan/dontAsk/auto
-maxTurns: 20               # max agentic turns
-effort: high               # low/medium/high/max
-background: false          # true = run concurrently
-isolation: worktree        # git worktree isolation
-skills:                    # injected at startup
-  - api-conventions
-memory: project            # user/project/local
-mcpServers:                # agent-scoped MCP
-  - playwright:
-      type: stdio
-      command: npx
-      args: ["-y", "@playwright/mcp@latest"]
-hooks:                     # scoped to agent lifetime
+  and style.
+model: sonnet              # sonnet/opus/haiku
+tools: [Read, Grep, Glob, Bash]
+disallowedTools: [Write, Edit]
+maxTurns: 20
+effort: high
+background: false          # true = concurrent
+isolation: worktree        # git worktree
+hooks:
   PreToolUse:
     - matcher: "Bash"
       hooks:
@@ -1090,16 +1002,9 @@ hooks:                     # scoped to agent lifetime
           command: "./validate.sh"
 ---
 
-You are a code reviewer. When invoked...</pre>
+You are a code reviewer...</pre>
 
-              <h4>Invocation</h4>
-              <p class="cap-modal-hint">Claude delegates via the <code>Agent</code> tool based on <code>description</code> matching. Users can also <code>@"name (agent)"</code> or run <code>claude --agent name</code>.</p>
-
-              <h4>Isolation model</h4>
-              <p class="cap-modal-hint">Each invocation starts with a <strong>fresh context window</strong>. The agent sees only its own system prompt, not the parent conversation. Only a summary is returned to the parent. Agents cannot spawn other agents.</p>
-
-              <h4>Foreground vs background</h4>
-              <p class="cap-modal-hint"><strong>Foreground</strong> (default): blocks main conversation until complete. <strong>Background</strong>: runs concurrently, tool permissions gathered upfront.</p>
+              <p class="cap-modal-hint">Fresh context per invocation. Only a summary returns to parent. Invoke via <code>Agent</code> tool, <code>@mention</code>, or <code>claude --agent name</code>.</p>
             </div>
           </div>
         </div>
@@ -1138,59 +1043,36 @@ You are a code reviewer. When invoked...</pre>
               <textarea id="capHookCommand" class="cap-modal-code" spellcheck="false" rows="8" placeholder="Shell command, prompt text, or agent instructions..."></textarea>
             </div>
             <div class="cap-modal-docs">
-              <h4>Hook execution</h4>
-              <p class="cap-modal-hint">Hooks are run by the <strong>harness</strong>, not by Claude. They fire automatically at lifecycle events. <strong>Synchronous by default</strong> &mdash; blocks until complete.</p>
-
               <h4>Handler types</h4>
-              <pre class="cap-modal-pre"># command — runs a shell command
-# receives JSON on stdin:
-# {session_id, tool_name, tool_input,
-#  tool_response, cwd, hook_event_name}
+              <pre class="cap-modal-pre"># command — shell, JSON on stdin
+# prompt  — single-turn LLM eval
+# agent   — sub-agent with Read/Grep/Glob</pre>
 
-# prompt — single-turn LLM evaluation
-# $ARGUMENTS replaced with JSON input
-# returns yes/no decision
-
-# agent — spawns sub-agent with tools
-# (Read, Grep, Glob) to evaluate</pre>
-
-              <h4>Exit codes (command type)</h4>
+              <h4>Exit codes (command)</h4>
               <pre class="cap-modal-pre">exit 0  # success, parse JSON stdout
-exit 2  # block (PreToolUse blocks tool)
-other   # non-blocking error, continue</pre>
+exit 2  # block tool (PreToolUse)
+other   # error, continue</pre>
 
               <h4>JSON output (exit 0)</h4>
               <pre class="cap-modal-pre">{
-  "continue": false,
-  "stopReason": "message to user",
   "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "...",
     "updatedInput": {"command": "..."},
     "additionalContext": "injected text"
   }
 }</pre>
 
-              <h4>Common patterns</h4>
-              <pre class="cap-modal-pre"># Auto-format after file writes:
-jq -r '.tool_input.file_path //
-  .tool_response.filePath' |
+              <h4>Examples</h4>
+              <pre class="cap-modal-pre"># Auto-format after writes:
+jq -r '.tool_input.file_path' |
   { read -r f; prettier --write "$f"; }
-  2>/dev/null || true
-
-# Log all bash commands:
-jq -r '.tool_input.command' \
-  >> ~/.claude/bash-log.txt
 
 # Block dangerous commands:
 jq -r '.tool_input.command' |
   grep -q 'rm -rf' &amp;&amp;
-  echo '{"decision":"block"}' ||
-  echo '{}'</pre>
+  echo '{"decision":"block"}'</pre>
 
-              <h4>Matcher reference</h4>
-              <p class="cap-modal-hint">Regex matched against tool name (<code>Bash</code>, <code>Edit</code>, <code>mcp__server__tool</code>), start reason, or notification type depending on event. Omit or use <code>*</code> to match all.</p>
+              <p class="cap-modal-hint">Matcher: regex on tool name. Omit or <code>*</code> to match all.</p>
             </div>
           </div>
         </div>
@@ -1289,30 +1171,16 @@ jq -r '.tool_input.command' |
             </div>
 
             <div class="cap-modal-docs">
-              <h4>Model definition</h4>
-              <pre class="cap-modal-pre"># Each model configures how a specific
-# LLM works within the tool-calling
-# environment.
-
-# API key and base URL come from the
-# provider group — set them once in
-# the Models panel.</pre>
-
               <h4>Provider group</h4>
-              <p class="cap-modal-hint">Models inherit their API key and base URL from the selected <strong>provider group</strong>. Set the key once per provider — all models share it. Custom providers can override both.</p>
+              <p class="cap-modal-hint">API key and base URL inherited from provider group. Set once per provider.</p>
 
               <h4>System prompt mode</h4>
-              <pre class="cap-modal-pre"># replace — swap Claude's 27K prompt
-#   with yours (recommended)
-# prepend — add yours before Claude's
-# append — add yours after Claude's
+              <pre class="cap-modal-pre"># replace — swap Claude's prompt (rec.)
+# prepend/append — add to Claude's
 # passthrough — keep Claude's as-is</pre>
 
-              <h4>Default system prompt</h4>
-              <p class="cap-modal-hint">The default prompt lists available tools and coding guidelines. Reasoning models get an extra section about thinking capabilities. Uncheck to write a custom prompt.</p>
-
               <h4>Tool overrides</h4>
-              <p class="cap-modal-hint">JSON object mapping tool names to custom descriptions. Use this if a model struggles with the default tool descriptions. Leave empty to use defaults.</p>
+              <p class="cap-modal-hint">JSON mapping tool names to custom descriptions. Leave empty for defaults.</p>
             </div>
           </div>
         </div>
@@ -1341,11 +1209,8 @@ jq -r '.tool_input.command' |
     </div>
     <div class="view-body" id="rulesBody">
       <div class="ref-intro">
-        <strong>Proxy Rules</strong> are AI-authored middleware that intercept every request flowing through the proxy.
-        Rules run in order before model routing. They can modify request bodies, filter tools, swap models, replace system prompts, or short-circuit responses entirely.
-        <br><br>
-        Rules are created and edited by describing what you want in natural language &mdash; Claude writes the implementation.
-        Toggle rules on/off, or drag to reorder. Changes are hot-reloaded and take effect immediately &mdash; no restart required.
+        <strong>Proxy Rules</strong> are JavaScript middleware that intercept every API request before model routing.
+        Describe what you want &mdash; Claude generates the JS. Toggle on/off, drag to reorder. Hot-reloaded, no restart.
       </div>
       <div id="ruleGeneratingStatus" class="hidden" style="padding:12px 14px;font-size:13px;color:var(--text-dim);">
         <span class="busy-dot"></span> Generating rule&hellip;

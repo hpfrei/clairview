@@ -1001,6 +1001,7 @@
   function computeNodeHeight(interaction) {
     const tools = extractToolCalls(interaction);
     if (interaction.isHook) return 28;
+    if (!isStandardLlm(interaction)) return 28;
     if (interaction.isMcp) return 42;
     const minH = D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
     const dur = interaction.timing?.duration
@@ -1117,6 +1118,33 @@
   // --- Build node HTML elements (reusing existing patterns) ---
 
   function buildD3TurnEl(interaction, turnNum, isSubagentTurn) {
+    const stdLlm = isStandardLlm(interaction);
+
+    if (!stdLlm) {
+      const group = document.createElement('div');
+      group.className = `turn-group endpoint-call-group status-${interaction.status || 'pending'}`;
+      group.dataset.turnId = interaction.id;
+
+      const el = document.createElement('div');
+      el.className = 'timeline-entry turn-entry endpoint-call-entry';
+      el.dataset.id = interaction.id;
+
+      const ep = interaction.endpoint.replace('/v1/messages/', '');
+      const statusClass = badgeClass(interaction.status);
+      el.innerHTML = `
+        <span class="endpoint-label">${escHtml(ep)}</span>
+        <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+        <span class="entry-tokens" data-tokenlabel="${interaction.id}">${compactTokens(interaction.usage)}</span>
+      `;
+
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        select({ type: 'turn', id: interaction.id }, { userClick: true });
+      });
+      group.appendChild(el);
+      return group;
+    }
+
     const group = document.createElement('div');
     let cls = 'turn-group';
     if (isNewUserTurn(interaction)) cls += ' new-user-turn';
@@ -1136,7 +1164,6 @@
     el.className = 'timeline-entry turn-entry';
     el.dataset.id = interaction.id;
 
-    const stdLlm = isStandardLlm(interaction);
     const statusClass = badgeClass(interaction.status);
     const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
@@ -1144,13 +1171,7 @@
     const shortModel = model.replace('claude-', '').split('-202')[0];
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
-    let modelLabel;
-    if (!stdLlm) {
-      const ep = interaction.endpoint.replace('/v1/messages/', '');
-      modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
-    } else {
-      modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
-    }
+    const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     let turnLabel = '';
     if (turnNum != null) {
       const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
@@ -1956,6 +1977,32 @@
       return appendHookEntryToTimeline(interaction);
     }
 
+    if (!isStandardLlm(interaction)) {
+      const group = document.createElement('div');
+      group.className = 'turn-group endpoint-call-group';
+      group.dataset.turnId = interaction.id;
+
+      const el = document.createElement('div');
+      el.className = 'timeline-entry turn-entry endpoint-call-entry';
+      el.dataset.id = interaction.id;
+
+      const ep = interaction.endpoint.replace('/v1/messages/', '');
+      const statusClass = badgeClass(interaction.status);
+      el.innerHTML = `
+        <span class="endpoint-label">${escHtml(ep)}</span>
+        <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
+        <span class="entry-tokens" data-tokenlabel="${interaction.id}">${compactTokens(interaction.usage)}</span>
+      `;
+
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        select({ type: 'turn', id: interaction.id }, { userClick: true });
+      });
+      group.appendChild(el);
+      timelineList.appendChild(group);
+      return;
+    }
+
     const group = document.createElement('div');
     let groupClass = 'turn-group' + (isNewUserTurn(interaction) ? ' new-user-turn' : '');
     if (interaction.subagent?.isSidechain) groupClass += ' sidechain-group';
@@ -1981,7 +2028,6 @@
     el.className = 'timeline-entry turn-entry';
     el.dataset.id = interaction.id;
 
-    const stdLlm = isStandardLlm(interaction);
     const statusClass = badgeClass(interaction.status);
     const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
@@ -1989,13 +2035,7 @@
     const shortModel = model.replace('claude-', '').split('-202')[0];
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
-    let modelLabel;
-    if (!stdLlm) {
-      const ep = interaction.endpoint.replace('/v1/messages/', '');
-      modelLabel = `<span class="entry-endpoint-label">${escHtml(ep)}</span>`;
-    } else {
-      modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
-    }
+    const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
     let turnLabel = '';
     if (turnNum != null) {
       const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
@@ -2313,11 +2353,13 @@
     }
     const modelEl = document.querySelector(`[data-model="${interaction.id}"]`);
     if (modelEl) {
-      const model = interaction.request?.model || 'unknown';
-      const shortModel = model.replace('claude-', '').split('-202')[0];
-      const profile = interaction.profile || '';
       const modelSpan = modelEl.querySelector('.entry-model-label');
-      if (modelSpan) modelSpan.innerHTML = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+      if (modelSpan) {
+        const model = interaction.request?.model || 'unknown';
+        const shortModel = model.replace('claude-', '').split('-202')[0];
+        const profile = interaction.profile || '';
+        modelSpan.innerHTML = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+      }
     }
   }
 
