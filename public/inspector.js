@@ -922,10 +922,11 @@
     MIN_ENTRY_HEIGHT: 52,
     TOOL_HEIGHT: 24,
     MIN_GAP: 6,
-    MAX_GAP: 60,
     TIME_SCALE: 0.04,
     HEADER_HEIGHT: 30,
     NODE_BORDER_RADIUS: 6,
+    TICK_INTERVAL: 10000,
+    ZIGZAG_MIN_CUT: 10000,
   };
 
   function resolveHookAgentId(hookInteraction, interactions) {
@@ -948,7 +949,9 @@
     const historicalColumns = new Map();
     const columnAgents = new Map();
     const freeColumns = [];
+    const parallelRegions = [];
     let nextColumn = 1;
+    let currentRegion = null;
 
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
@@ -991,120 +994,243 @@
           activeColumns.delete(closedAgentId);
         }
       }
-    }
 
-    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn };
+      const inParallel = activeColumns.size > 0;
+      if (inParallel && !currentRegion) {
+        currentRegion = { startIdx: idx, endIdx: idx, startTime: interaction.timestamp, endTime: interaction.timestamp };
+      } else if (inParallel && currentRegion) {
+        currentRegion.endIdx = idx;
+        currentRegion.endTime = interaction.timestamp;
+      } else if (!inParallel && currentRegion) {
+        currentRegion.endIdx = idx;
+        currentRegion.endTime = interaction.timestamp;
+        parallelRegions.push(currentRegion);
+        currentRegion = null;
+      }
+    }
+    if (currentRegion) parallelRegions.push(currentRegion);
+
+    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions };
   }
 
   // --- Layout computation ---
 
   function computeNodeHeight(interaction) {
-    const tools = extractToolCalls(interaction);
     if (interaction.isHook) return 28;
     if (!isStandardLlm(interaction)) return 28;
     if (interaction.isMcp) return 42;
-    const minH = D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
-    const dur = interaction.timing?.duration
-      || (interaction.status === 'streaming' && interaction.timing?.startedAt
-        ? Date.now() - interaction.timing.startedAt : 0);
-    if (!dur) return minH;
-    const timeH = Math.min(dur * D3_CONST.TIME_SCALE, 400);
-    return Math.max(minH, timeH);
+    const tools = extractToolCalls(interaction);
+    return D3_CONST.MIN_ENTRY_HEIGHT + tools.length * D3_CONST.TOOL_HEIGHT;
   }
 
-  // Threshold for collapsing idle gaps (ms). Gaps larger than this get compressed.
   const GAP_COLLAPSE_THRESHOLD = 30000;
-  const GAP_COLLAPSE_HEIGHT = 28; // px reserved for the break indicator
+  const GAP_COLLAPSE_HEIGHT = 28;
 
-  function computeD3Layout(interactions, columnFor, totalColumns) {
+  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions) {
     const C = D3_CONST;
     const layout = [];
-    const breaks = []; // { y, elapsedBefore, elapsedAfter } — collapsed time regions
+    const breaks = [];
     const colBottoms = new Map();
     const sessionStart = interactions.length > 0 ? interactions[0].timestamp : 0;
     let globalBottom = C.HEADER_HEIGHT + 8;
+    const availWidth = computeColumnWidth(totalColumns);
 
-    // Build a compressed elapsed→Y mapping by collapsing large time gaps
-    const timestamps = interactions.map(i => i.timestamp - sessionStart);
-    const sorted = [...new Set(timestamps)].sort((a, b) => a - b);
-    let cumulativeShift = 0;
-    const shifts = new Map(); // elapsed → shift to subtract
-    const breakElapsed = []; // { before, after } — gap boundaries in elapsed ms
-    for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i] - sorted[i - 1];
-      if (gap > GAP_COLLAPSE_THRESHOLD) {
-        const collapse = gap - GAP_COLLAPSE_THRESHOLD * 0.1;
-        cumulativeShift += collapse;
-        breakElapsed.push({ before: sorted[i - 1], after: sorted[i] });
-      }
-      shifts.set(sorted[i], cumulativeShift);
+    // Index → parallel region lookup
+    const idxRegion = new Array(interactions.length).fill(null);
+    for (const r of (parallelRegions || [])) {
+      for (let i = r.startIdx; i <= r.endIdx; i++) idxRegion[i] = r;
     }
 
-    function compressedY(elapsed) {
-      const shift = shifts.get(elapsed) || 0;
-      // For timestamps between known points, interpolate the shift
-      let s = 0;
-      if (!shifts.has(elapsed)) {
-        for (const [ts, sh] of shifts) {
-          if (ts <= elapsed) s = sh; else break;
+    // Pre-compute per-region: gap compression and minimum viable time scale
+    const regionCache = new Map();
+    for (const region of (parallelRegions || [])) {
+      const regionElapsed = [];
+      for (let i = region.startIdx; i <= region.endIdx; i++) {
+        regionElapsed.push(interactions[i].timestamp - sessionStart);
+      }
+      const sorted = [...new Set(regionElapsed)].sort((a, b) => a - b);
+
+      let cumShift = 0;
+      const shifts = [];
+      const regionBreaks = [];
+      for (let i = 1; i < sorted.length; i++) {
+        const gap = sorted[i] - sorted[i - 1];
+        if (gap > GAP_COLLAPSE_THRESHOLD) {
+          cumShift += gap - GAP_COLLAPSE_THRESHOLD * 0.1;
+          regionBreaks.push({ before: sorted[i - 1], after: sorted[i] });
         }
-      } else {
-        s = shift;
+        shifts.push({ elapsed: sorted[i], shift: cumShift });
       }
-      return C.HEADER_HEIGHT + 8 + (elapsed - s) * C.TIME_SCALE;
+      function compressElapsed(elapsed) {
+        let s = 0;
+        for (const { elapsed: e, shift } of shifts) {
+          if (e <= elapsed) s = shift; else break;
+        }
+        return elapsed - s;
+      }
+
+      // Compute scale: for each column, consecutive pairs determine minimum scale
+      const byCols = new Map();
+      for (let i = region.startIdx; i <= region.endIdx; i++) {
+        const col = columnFor.get(interactions[i].id) || 0;
+        if (!byCols.has(col)) byCols.set(col, []);
+        byCols.get(col).push({
+          height: computeNodeHeight(interactions[i]),
+          compElapsed: compressElapsed(interactions[i].timestamp - sessionStart)
+        });
+      }
+      let maxScale = 0.005;
+      for (const [, nodes] of byCols) {
+        for (let i = 0; i < nodes.length - 1; i++) {
+          const dt = nodes[i + 1].compElapsed - nodes[i].compElapsed;
+          if (dt > 0) {
+            const needed = (nodes[i].height + C.MIN_GAP) / dt;
+            if (needed > maxScale) maxScale = needed;
+          }
+        }
+      }
+
+      regionCache.set(region, {
+        scale: Math.min(maxScale, C.TIME_SCALE),
+        compressElapsed,
+        regionBreaks,
+        startElapsed: region.startTime - sessionStart
+      });
     }
 
-    for (const interaction of interactions) {
+    // Main layout pass
+    let prevElapsed = null;
+    let activeRegion = null;
+    let regionStartY = 0;
+
+    for (let idx = 0; idx < interactions.length; idx++) {
+      const interaction = interactions[idx];
       const col = columnFor.get(interaction.id) || 0;
       const height = computeNodeHeight(interaction);
       const elapsed = interaction.timestamp - sessionStart;
-      const timeY = compressedY(elapsed);
-
-      let y;
-      if (col === 0) {
-        let maxBottom = globalBottom;
-        for (const b of colBottoms.values()) {
-          if (b > maxBottom) maxBottom = b;
-        }
-        y = Math.max(timeY, maxBottom + C.MIN_GAP);
-      } else {
-        const colBottom = colBottoms.get(col) || globalBottom;
-        y = Math.max(timeY, colBottom + C.MIN_GAP);
-      }
-
-      if (colBottoms.has(col)) {
-        const prevBottom = colBottoms.get(col);
-        if (y - prevBottom > C.MAX_GAP + height) {
-          y = (col === 0)
-            ? Math.max(prevBottom + C.MAX_GAP, globalBottom + C.MIN_GAP)
-            : prevBottom + C.MAX_GAP;
-        }
-      }
-
-      const availWidth = computeColumnWidth(totalColumns);
       const x = C.RULER_WIDTH + col * (availWidth + C.COLUMN_GAP);
+      const region = idxRegion[idx];
+      let y;
+
+      if (region) {
+        // Entering a new parallel region
+        if (activeRegion !== region) {
+          if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
+            const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
+            breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
+            globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
+          }
+          activeRegion = region;
+          regionStartY = globalBottom + C.MIN_GAP;
+        }
+
+        const rs = regionCache.get(region);
+        const compE = rs.compressElapsed(elapsed);
+        const compStart = rs.compressElapsed(rs.startElapsed);
+        const timeY = regionStartY + (compE - compStart) * rs.scale;
+
+        y = colBottoms.has(col)
+          ? Math.max(timeY, colBottoms.get(col) + C.MIN_GAP)
+          : timeY;
+      } else {
+        // Sequential: compact stacking
+        if (activeRegion) activeRegion = null;
+
+        if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
+          const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
+          breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
+          globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
+        }
+
+        if (col === 0) {
+          let maxBottom = globalBottom;
+          for (const b of colBottoms.values()) {
+            if (b > maxBottom) maxBottom = b;
+          }
+          y = maxBottom + C.MIN_GAP;
+        } else {
+          const colBottom = colBottoms.get(col) || globalBottom;
+          y = colBottom + C.MIN_GAP;
+        }
+      }
 
       layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed });
-
       colBottoms.set(col, y + height);
       if (y + height > globalBottom) globalBottom = y + height;
+      prevElapsed = elapsed;
     }
 
-    // Compute break Y positions from the final layout
-    for (const br of breakElapsed) {
-      // Find the last layout item at or before br.before, and first at or after br.after
-      let yEnd = null, yStart = null;
-      for (const item of layout) {
-        if (item.elapsed <= br.before) yEnd = item.y + item.height;
-        if (item.elapsed >= br.after && yStart == null) yStart = item.y;
+    // Stretch shorter columns in parallel regions so all columns span equal height
+    for (const region of (parallelRegions || [])) {
+      const colItems = new Map();
+      for (let i = region.startIdx; i <= region.endIdx; i++) {
+        const item = layout[i];
+        if (!colItems.has(item.col)) colItems.set(item.col, []);
+        colItems.get(item.col).push(item);
       }
-      if (yEnd != null && yStart != null && yStart > yEnd) {
-        const midY = (yEnd + yStart) / 2;
-        breaks.push({ y: midY, elapsedBefore: br.before, elapsedAfter: br.after });
+      let tallestBottom = 0;
+      for (const items of colItems.values()) {
+        const last = items[items.length - 1];
+        if (last.y + last.height > tallestBottom) tallestBottom = last.y + last.height;
+      }
+      for (const [, items] of colItems) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const stretchable = !item.interaction.isHook && !item.interaction.isMcp
+            && isStandardLlm(item.interaction);
+          if (!stretchable) continue;
+          if (i < items.length - 1) {
+            item.height = Math.max(item.height, items[i + 1].y - item.y - C.MIN_GAP);
+          } else {
+            item.height = Math.max(item.height, tallestBottom - item.y);
+          }
+        }
       }
     }
 
-    return { layout, totalHeight: globalBottom + 40, sessionStart, breaks, compressedY };
+    // Breaks from parallel-region internal gaps
+    for (const region of (parallelRegions || [])) {
+      const rs = regionCache.get(region);
+      for (const br of rs.regionBreaks) {
+        if (br.after - br.before <= C.ZIGZAG_MIN_CUT) continue;
+        let yEnd = null, yStart = null;
+        for (let i = region.startIdx; i <= region.endIdx; i++) {
+          const item = layout[i];
+          if (item.elapsed <= br.before) yEnd = item.y + item.height;
+          if (item.elapsed >= br.after && yStart == null) yStart = item.y;
+        }
+        if (yEnd != null && yStart != null && yStart > yEnd) {
+          breaks.push({ y: (yEnd + yStart) / 2, elapsedBefore: br.before, elapsedAfter: br.after });
+        }
+      }
+    }
+
+    // Build monotonic elapsed→Y interpolation from layout
+    const yPoints = layout.map(item => ({ elapsed: item.elapsed, y: item.y }));
+    for (let i = 1; i < yPoints.length; i++) {
+      if (yPoints[i].y < yPoints[i - 1].y) yPoints[i].y = yPoints[i - 1].y;
+    }
+    function elapsedToY(t) {
+      if (yPoints.length === 0) return C.HEADER_HEIGHT + 8;
+      if (t <= yPoints[0].elapsed) return yPoints[0].y;
+      if (t >= yPoints[yPoints.length - 1].elapsed) return yPoints[yPoints.length - 1].y;
+      for (let i = 0; i < yPoints.length - 1; i++) {
+        if (yPoints[i].elapsed <= t && t <= yPoints[i + 1].elapsed) {
+          const dt = yPoints[i + 1].elapsed - yPoints[i].elapsed;
+          if (dt === 0) return yPoints[i].y;
+          const frac = (t - yPoints[i].elapsed) / dt;
+          return yPoints[i].y + frac * (yPoints[i + 1].y - yPoints[i].y);
+        }
+      }
+      return yPoints[yPoints.length - 1].y;
+    }
+
+    let finalBottom = C.HEADER_HEIGHT + 8;
+    for (const item of layout) {
+      if (item.y + item.height > finalBottom) finalBottom = item.y + item.height;
+    }
+
+    return { layout, totalHeight: finalBottom + 40, sessionStart, breaks, compressedY: elapsedToY };
   }
 
   function computeColumnWidth(totalColumns) {
@@ -1304,7 +1430,7 @@
     return `${hh}:${mm}:${ss}`;
   }
 
-  function renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY) {
+  function renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, elapsedToY) {
     if (layout.length === 0) return;
     breaks = breaks || [];
 
@@ -1318,37 +1444,46 @@
     const minTickGap = 36;
     const breakHalf = 7;
 
-    // Collect candidate tick positions from layout elements
-    const hasParallel = layout.some(item => item.col > 0);
+    // Generate tick candidates at fixed 10-second intervals using elapsedToY
+    const maxElapsed = layout[layout.length - 1].elapsed;
+    const interval = D3_CONST.TICK_INTERVAL;
     const candidates = [];
 
-    if (!hasParallel) {
-      for (const item of layout) {
-        candidates.push({ y: item.y, elapsed: item.elapsed });
-      }
-    } else {
-      for (const item of layout) {
-        if (item.col === 0) candidates.push({ y: item.y, elapsed: item.elapsed });
-      }
-      const maxElapsed = layout[layout.length - 1].elapsed;
-      const intervals = [1000, 2000, 5000, 10000, 30000, 60000];
-      const targetCount = Math.max(8, Math.floor(totalHeight / 80));
-      const interval = intervals.find(i => maxElapsed / i <= targetCount) || 60000;
-      const startRem = sessionStart % interval;
-      const firstOffset = startRem === 0 ? interval : (interval - startRem);
-      for (let t = firstOffset; t <= maxElapsed; t += interval) {
-        const inGap = breaks.some(br => t > br.elapsedBefore && t < br.elapsedAfter);
-        if (inGap) continue;
-        const y = compressedY ? compressedY(t) : (D3_CONST.HEADER_HEIGHT + 8 + t * D3_CONST.TIME_SCALE);
-        candidates.push({ y, elapsed: t });
-      }
-      candidates.sort((a, b) => a.y - b.y);
+    // First tick aligned to 10s boundary of wall-clock time
+    const startRem = sessionStart % interval;
+    const firstOffset = startRem === 0 ? interval : (interval - startRem);
+    for (let t = firstOffset; t <= maxElapsed; t += interval) {
+      const inGap = breaks.some(br => t > br.elapsedBefore && t < br.elapsedAfter);
+      if (inGap) continue;
+      const y = elapsedToY ? elapsedToY(t) : (D3_CONST.HEADER_HEIGHT + 8 + t * D3_CONST.TIME_SCALE);
+      candidates.push({ y, elapsed: t });
     }
 
-    // Filter out ticks too close together or near break indicators
+    // Also add ticks at the first and last layout items for context
+    if (layout.length > 0) {
+      candidates.push({ y: layout[0].y, elapsed: layout[0].elapsed });
+      if (layout.length > 1) {
+        const last = layout[layout.length - 1];
+        candidates.push({ y: last.y, elapsed: last.elapsed });
+      }
+    }
+
+    // Sort by elapsed (guarantees monotonic time), then by Y
+    candidates.sort((a, b) => a.elapsed - b.elapsed || a.y - b.y);
+
+    // Deduplicate and ensure monotonic elapsed
+    const deduped = [];
+    let lastElapsed = -Infinity;
+    for (const c of candidates) {
+      if (c.elapsed <= lastElapsed) continue;
+      deduped.push(c);
+      lastElapsed = c.elapsed;
+    }
+
+    // Filter out ticks too close in Y-space or near break indicators
     const ticks = [];
     let lastY = -Infinity;
-    for (const c of candidates) {
+    for (const c of deduped) {
       if (c.y - lastY < minTickGap) continue;
       const nearBreak = breaks.some(br => Math.abs(c.y - br.y) < breakHalf + 8);
       if (nearBreak) continue;
@@ -1387,13 +1522,11 @@
           .attr('x1', axisX).attr('x2', axisX)
           .attr('y1', segStart).attr('y2', brTop);
       }
-      // Zigzag break indicator
       const zw = 4;
       rulerG.append('path')
         .attr('class', 'axis-break')
         .attr('d', `M${axisX},${brTop} l${zw},${breakHalf * 0.5} l${-zw * 2},${breakHalf} l${zw},${breakHalf * 0.5}`)
         .attr('fill', 'none');
-      // Cut duration label
       const cutMs = br.elapsedAfter - br.elapsedBefore;
       const cutSec = Math.round(cutMs / 1000);
       const cutLabel = cutSec >= 60 ? `${Math.floor(cutSec / 60)}m${cutSec % 60 ? ` ${cutSec % 60}s` : ''}` : `${cutSec}s`;
@@ -1418,7 +1551,7 @@
 
   function computeConnectorData(layout, columnFor, columnAgents, totalColumns) {
     const connectors = [];
-    const colEntries = new Map(); // col -> [{y, yBottom, id}]
+    const colEntries = new Map();
 
     for (const item of layout) {
       if (!colEntries.has(item.col)) colEntries.set(item.col, []);
@@ -1427,7 +1560,6 @@
 
     const mainEntries = colEntries.get(0);
 
-    // Subagent forks + merges (no spines)
     const colWidth = computeColumnWidth(totalColumns);
     for (let col = 1; col < totalColumns; col++) {
       const entries = colEntries.get(col);
@@ -1435,34 +1567,36 @@
 
       const agent = columnAgents.get(col);
       const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
-      const agentX = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) + colWidth / 2;
+
+      // Background rect edges: fork/merge attach at the left edge of the bg rect
+      const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
+      const bgTop = entries[0].y - 4;
+      const bgBottom = entries[entries.length - 1].yBottom + 4;
       const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
 
-      // Fork: curve from main thread to agent column start
-      const forkY = entries[0].y;
-      // Find the closest main-thread entry above this fork point
-      let forkOriginY = forkY;
+      // Fork: curve from main thread to top-left of agent bg rect
+      let forkOriginY = bgTop;
       if (mainEntries) {
         for (let i = mainEntries.length - 1; i >= 0; i--) {
-          if (mainEntries[i].y <= forkY) {
+          if (mainEntries[i].y <= entries[0].y) {
             forkOriginY = mainEntries[i].yBottom - 6;
             break;
           }
         }
       }
 
-      const cpX = (agentX - mainX) * 0.6;
+      const cpX = (bgLeft - mainX) * 0.6;
       connectors.push({
         type: 'fork',
         col,
-        path: `M${mainX},${forkOriginY} C${mainX + cpX},${forkOriginY} ${agentX - cpX},${forkY + 6} ${agentX},${forkY + 6}`,
+        path: `M${mainX},${forkOriginY} C${mainX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
         color,
         opacity: 0.6,
         strokeWidth: 1.5,
         agentId: agent?.agentId,
       });
 
-      // Merge: curve from agent column end back to main spine (if agent has completed)
+      // Merge: curve from bottom-left of agent bg rect back to main thread
       const lastEntry = entries[entries.length - 1];
       let mergeTargetY = null;
       if (mainEntries) {
@@ -1474,11 +1608,11 @@
         }
       }
       if (mergeTargetY != null) {
-        const mCpX = (agentX - mainX) * 0.6;
+        const mCpX = (bgLeft - mainX) * 0.6;
         connectors.push({
           type: 'merge',
           col,
-          path: `M${agentX},${lastEntry.yBottom - 6} C${agentX - mCpX},${lastEntry.yBottom - 6} ${mainX + mCpX},${mergeTargetY} ${mainX},${mergeTargetY}`,
+          path: `M${bgLeft},${bgBottom} C${bgLeft - mCpX},${bgBottom} ${mainX + mCpX},${mergeTargetY} ${mainX},${mergeTargetY}`,
           color,
           opacity: 0.5,
           strokeWidth: 1.5,
@@ -1490,16 +1624,18 @@
     return connectors;
   }
 
-  function renderConnectors(svg, connectors, layout, columnAgents, totalColumns) {
-    const g = svg.select('.tl-connectors');
-    g.selectAll('*').remove();
+  function renderConnectors(svgBg, svgFg, connectors, layout, columnAgents, totalColumns) {
+    const gBg = svgBg.select('.tl-connectors');
+    gBg.selectAll('*').remove();
+    const gFg = svgFg.select('.tl-connectors-fg');
+    gFg.selectAll('*').remove();
 
-    let defs = svg.select('defs');
-    if (defs.empty()) defs = svg.append('defs');
-    defs.selectAll('.connector-marker').remove();
+    let defsFg = svgFg.select('defs');
+    if (defsFg.empty()) defsFg = svgFg.append('defs');
+    defsFg.selectAll('.connector-marker').remove();
 
-    // Fork diamond marker
-    defs.append('marker')
+    // Fork diamond marker (in foreground SVG)
+    defsFg.append('marker')
       .attr('class', 'connector-marker')
       .attr('id', 'fork-diamond')
       .attr('viewBox', '0 0 8 8')
@@ -1509,8 +1645,8 @@
       .attr('d', 'M4,0.5 L7.5,4 L4,7.5 L0.5,4 Z')
       .attr('fill', 'var(--accent)');
 
-    // Merge circle marker
-    defs.append('marker')
+    // Merge circle marker (in foreground SVG)
+    defsFg.append('marker')
       .attr('class', 'connector-marker')
       .attr('id', 'merge-dot')
       .attr('viewBox', '0 0 8 8')
@@ -1520,7 +1656,7 @@
       .attr('cx', 4).attr('cy', 4).attr('r', 3)
       .attr('fill', 'var(--accent)').attr('opacity', 0.8);
 
-    // Column background rects
+    // Column background rects (in background SVG, behind nodes)
     const colWidth = computeColumnWidth(totalColumns);
     const colEntries = new Map();
     for (const item of layout) {
@@ -1536,7 +1672,7 @@
       const yTop = entries[0].y - 4;
       const yBottom = entries[entries.length - 1].y + entries[entries.length - 1].height + 4;
       const isStreaming = entries.some(e => e.interaction.status === 'streaming');
-      g.append('rect')
+      gBg.append('rect')
         .attr('class', 'col-bg-rect' + (isStreaming ? ' col-bg-streaming' : ''))
         .attr('data-agent-id', agent?.agentId || '')
         .attr('x', x)
@@ -1549,9 +1685,9 @@
         .attr('opacity', 0.08);
     }
 
-    // Fork and merge curves
+    // Fork and merge curves (in foreground SVG, above nodes)
     for (const c of connectors) {
-      const path = g.append('path')
+      const path = gFg.append('path')
         .attr('class', `connector-path connector-${c.type}`)
         .attr('d', c.path)
         .attr('stroke', c.color)
@@ -1652,10 +1788,10 @@
     if (filtered.length === 0) return;
 
     const assignment = buildColumnAssignment(filtered);
-    const { columnFor, totalColumns, columnAgents } = assignment;
+    const { columnFor, totalColumns, columnAgents, parallelRegions } = assignment;
     const colWidth = computeColumnWidth(totalColumns);
 
-    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns);
+    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions);
 
     // Create wrapper
     const wrapper = document.createElement('div');
@@ -1691,7 +1827,7 @@
       headers.appendChild(h);
     }
 
-    // SVG connector overlay
+    // SVG background layer (behind nodes): ruler + column backgrounds
     const svgColumnsWidth = D3_CONST.RULER_WIDTH + totalColumns * (colWidth + D3_CONST.COLUMN_GAP);
     const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svgEl.setAttribute('class', 'tl-connector-svg');
@@ -1707,6 +1843,15 @@
     const nodesLayer = document.createElement('div');
     nodesLayer.className = 'tl-nodes-layer';
     nodesLayer.style.height = totalHeight + 'px';
+
+    // SVG foreground layer (above nodes): fork/merge curves
+    const svgFgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svgFgEl.setAttribute('class', 'tl-connector-svg tl-connector-fg');
+    svgFgEl.setAttribute('width', '100%');
+    svgFgEl.setAttribute('height', totalHeight);
+    const svgFg = d3.select(svgFgEl);
+    svgFg.append('defs');
+    svgFg.append('g').attr('class', 'tl-connectors-fg');
 
     // Render nodes
     let turnNum = 0;
@@ -1747,12 +1892,13 @@
 
     wrapper.appendChild(svgEl);
     wrapper.appendChild(nodesLayer);
+    wrapper.appendChild(svgFgEl);
     timelineList.appendChild(headers);
     timelineList.appendChild(wrapper);
 
-    // Render connectors and column backgrounds
+    // Render connectors: backgrounds in svg (behind nodes), curves in svgFg (above nodes)
     const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns);
-    renderConnectors(svg, connectors, layout, columnAgents, totalColumns);
+    renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns);
 
     // Render time ruler
     renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY);
@@ -1772,7 +1918,7 @@
 
     // Save state for incremental appends
     _d3State = {
-      wrapper, svg, nodesLayer, headers,
+      wrapper, svg, svgFg, nodesLayer, headers,
       columnFor, columnAgents, totalColumns,
       layout, totalHeight, sessionStart, breaks, compressedY,
       turnNum, subagentTurnCounts,
@@ -1780,6 +1926,7 @@
       historicalColumns: assignment.historicalColumns,
       freeColumns: assignment.freeColumns,
       nextColumn: assignment.nextColumn,
+      parallelRegions,
     };
 
     // Set up resize observer
@@ -1829,40 +1976,25 @@
       col = ds.activeColumns.get(agentId) || ds.historicalColumns.get(agentId) || 0;
     }
 
-    // Check if column count increased — full re-render needed for layout
-    if (col >= ds.totalColumns) {
+    // Full re-render when parallel activity is detected or columns change
+    if (col >= ds.totalColumns || ds.activeColumns.size > 0 || col > 0) {
       renderTimelineParallel();
       return;
     }
 
-    // Compute position for new node
+    // Sequential compact stacking for single-column appends
     const colWidth = computeColumnWidth(ds.totalColumns);
     const height = computeNodeHeight(interaction);
     const elapsed = interaction.timestamp - ds.sessionStart;
     const x = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP);
 
-    // Find bottom of last node in this column
-    let colBottom = D3_CONST.HEADER_HEIGHT + 8;
-    let hasColEntry = false;
     let globalBottom = D3_CONST.HEADER_HEIGHT + 8;
     for (const item of ds.layout) {
       const b = item.y + item.height;
-      if (item.col === col) { if (b > colBottom) colBottom = b; hasColEntry = true; }
       if (b > globalBottom) globalBottom = b;
     }
 
-    let y;
-    const timeY = D3_CONST.HEADER_HEIGHT + 8 + elapsed * D3_CONST.TIME_SCALE;
-    if (col === 0) {
-      y = Math.max(timeY, globalBottom + D3_CONST.MIN_GAP);
-    } else {
-      y = Math.max(timeY, colBottom + D3_CONST.MIN_GAP);
-    }
-    if (hasColEntry && y - colBottom > D3_CONST.MAX_GAP + height) {
-      y = (col === 0)
-        ? Math.max(colBottom + D3_CONST.MAX_GAP, globalBottom + D3_CONST.MIN_GAP)
-        : colBottom + D3_CONST.MAX_GAP;
-    }
+    const y = globalBottom + D3_CONST.MIN_GAP;
 
     const item = { id: interaction.id, x, y, width: colWidth, height, col, interaction, elapsed };
     ds.layout.push(item);
@@ -1875,6 +2007,7 @@
       ds.wrapper.style.height = newTotalHeight + 'px';
       ds.nodesLayer.style.height = newTotalHeight + 'px';
       ds.svg.attr('height', newTotalHeight);
+      ds.svgFg.attr('height', newTotalHeight);
     }
 
     // Build and append element
@@ -1905,18 +2038,14 @@
     el.style.transform = `translate(${x}px, ${y - 8}px)`;
     ds.nodesLayer.appendChild(el);
 
-    // Entry animation
     requestAnimationFrame(() => {
       el.style.transition = 'opacity 0.25s cubic-bezier(0.33,1,0.68,1), transform 0.25s cubic-bezier(0.33,1,0.68,1)';
       el.style.opacity = '1';
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    // Redraw connectors and column backgrounds
     const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns);
-    renderConnectors(ds.svg, connectors, ds.layout, ds.columnAgents, ds.totalColumns);
-
-    // Redraw time ruler
+    renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns);
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
 
     // Handle agent close
@@ -1934,7 +2063,6 @@
       }
     }
 
-    // Start bg pulse if streaming subagent
     if (interaction.status === 'streaming' && interaction.subagent?.agentId) {
       startFlowAnimation(ds.svg, interaction.subagent.agentId);
     }

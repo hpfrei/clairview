@@ -4892,6 +4892,9 @@ aside#timeline.parallel-mode {
   z-index: 0;
   overflow: visible;
 }
+.tl-connector-fg {
+  z-index: 2;
+}
 
 .tl-lane-headers {
   display: flex;
