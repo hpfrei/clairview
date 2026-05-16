@@ -1054,6 +1054,7 @@
     const columnSegments = []; // { col, agentId, subagent, startIdx, endHookId, startHookId }
     const activeSegments = new Map(); // agentId → segment (currently open)
     const pendingPreHooks = []; // PreToolUse/Agent hooks awaiting segment match
+    const pendingPostHooks = []; // PostToolUse/Agent hooks that couldn't resolve at encounter time
     const depthAt = new Array(interactions.length);
     let nextColumn = 1;
     let currentRegion = null;
@@ -1120,6 +1121,8 @@
           if (seg) { seg.endHookId = interaction.id; activeSegments.delete(closedAgentId); }
           freeColumns.push(closedCol);
           activeColumns.delete(closedAgentId);
+        } else {
+          pendingPostHooks.push({ id: interaction.id, toolUseId: interaction.toolUseId, description: interaction.request?.tool_input?.description, idx });
         }
       }
 
@@ -1139,6 +1142,53 @@
       }
     }
     if (currentRegion) parallelRegions.push(currentRegion);
+
+    // Deferred post-hook matching: link PostToolUse/Agent hooks that arrived
+    // before their subagent's turns (missing timestamp or background agents).
+    for (const ph of pendingPostHooks) {
+      let matched = false;
+      if (ph.description) {
+        for (const seg of columnSegments) {
+          if (seg.endHookId) continue;
+          if (seg.subagent?.description === ph.description) {
+            seg.endHookId = ph.id;
+            postHookClosedCol.set(ph.id, seg.col);
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched && ph.toolUseId) {
+        for (let j = ph.idx - 1; j >= 0; j--) {
+          const prev = interactions[j];
+          if (prev.isHook || prev.isMcp) continue;
+          const tools = extractToolCalls(prev);
+          const matchedTool = tools.find(tc => tc.id === ph.toolUseId);
+          if (matchedTool) {
+            const toolDesc = matchedTool.input?.description;
+            if (toolDesc) {
+              for (const seg of columnSegments) {
+                if (seg.endHookId) continue;
+                if (seg.subagent?.description === toolDesc) {
+                  seg.endHookId = ph.id;
+                  postHookClosedCol.set(ph.id, seg.col);
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        const unclosed = columnSegments.filter(s => !s.endHookId);
+        if (unclosed.length === 1) {
+          unclosed[0].endHookId = ph.id;
+          postHookClosedCol.set(ph.id, unclosed[0].col);
+        }
+      }
+    }
 
     return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments, depthAt };
   }
