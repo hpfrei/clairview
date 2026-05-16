@@ -41,31 +41,41 @@ class InteractionStore {
       try { return fs.statSync(path.join(INTERACTIONS_DIR, name)).isDirectory(); } catch { return false; }
     });
 
-    // Collect all interaction files with their timestamps for global chronological ordering
-    const allFiles = [];
+    // Collect files grouped by session
+    const sessions = [];
     for (const sessId of sessionDirs) {
       const dir = path.join(INTERACTIONS_DIR, sessId);
       let files;
       try { files = fs.readdirSync(dir).filter(f => f.endsWith('.json')); } catch { continue; }
+      if (files.length === 0) continue;
 
       let maxSeq = 0;
+      let latestMtime = 0;
+      const sessionFiles = [];
       for (const file of files) {
         const seqNum = parseInt(file);
         if (seqNum > maxSeq) maxSeq = seqNum;
-        allFiles.push({ sessId, file, seqNum, filePath: path.join(dir, file) });
+        const filePath = path.join(dir, file);
+        let mtime = 0;
+        try { mtime = fs.statSync(filePath).mtimeMs; } catch {}
+        if (mtime > latestMtime) latestMtime = mtime;
+        sessionFiles.push({ sessId, seqNum, filePath, mtime });
       }
       this.sessionSeqs.set(sessId, maxSeq);
+      sessions.push({ sessId, files: sessionFiles, latestMtime });
     }
 
-    // Sort by timestamp (read from file), keep only the most recent maxSize
-    // For efficiency, sort by file mtime as a proxy for timestamp
-    for (const entry of allFiles) {
-      try { entry.mtime = fs.statSync(entry.filePath).mtimeMs; } catch { entry.mtime = 0; }
-    }
-    allFiles.sort((a, b) => a.mtime - b.mtime);
+    // Sort sessions by most recent activity, load complete sessions up to maxSize
+    sessions.sort((a, b) => b.latestMtime - a.latestMtime);
 
-    // Only load the most recent maxSize interactions
-    const toLoad = allFiles.slice(-this.maxSize);
+    const toLoad = [];
+    for (const sess of sessions) {
+      if (toLoad.length + sess.files.length > this.maxSize && toLoad.length > 0) break;
+      sess.files.sort((a, b) => a.mtime - b.mtime);
+      toLoad.push(...sess.files);
+    }
+    // Final sort chronologically across all loaded sessions
+    toLoad.sort((a, b) => a.mtime - b.mtime);
 
     for (const { sessId, seqNum, filePath } of toLoad) {
       const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
