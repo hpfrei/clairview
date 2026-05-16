@@ -450,6 +450,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
         });
 
         interaction.response.status = upstream.status;
+        const upstreamHeaders = filterResponseHeaders(upstream.headers);
+        const translatedRequestId = upstreamHeaders['request-id'] || upstreamHeaders['x-request-id'] || interaction.id;
+        interaction.response.headers = { ...upstreamHeaders, 'request-id': translatedRequestId };
 
         // Translation always uses streaming (translateRequest forces stream:true)
         if (upstream.ok) {
@@ -458,6 +461,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
             'cache-control': 'no-cache',
             'connection': 'keep-alive',
             'x-accel-buffering': 'no',
+            'request-id': translatedRequestId,
           });
 
           const streamState = provider.createStreamState();
@@ -569,13 +573,13 @@ function createProxyRouter(store, broadcaster, targetUrl) {
               error: { type: 'api_error', message: `Provider ${modelDef.name} error (${upstream.status}): ${responseBody.slice(0, 500)}` },
             };
             interaction.response.body = errorBody;
-            res.writeHead(upstream.status, { 'content-type': 'application/json' });
+            res.writeHead(upstream.status, { 'content-type': 'application/json', 'request-id': translatedRequestId });
             res.end(JSON.stringify(errorBody));
           } else {
             // Non-streaming success — translate response body
             try { interaction.response.body = JSON.parse(responseBody); }
             catch { interaction.response.body = responseBody; }
-            res.writeHead(200, { 'content-type': 'application/json' });
+            res.writeHead(200, { 'content-type': 'application/json', 'request-id': translatedRequestId });
             res.end(responseBody);
           }
 
