@@ -278,6 +278,7 @@
     activeInstanceTab = instanceId;
     renderInspectorTabStrip();
     renderTimelineActive();
+    updateStats();
     // Select last matching interaction
     const filtered = activeInstanceTab === 'all'
       ? state.interactions.filter(i => !i.instanceId || !knownInstances.has(i.instanceId) )
