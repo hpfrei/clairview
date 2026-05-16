@@ -3684,7 +3684,16 @@
 
       case 'interaction:start':
         stampExtInteraction(msg.interaction);
-        state.interactions.push(msg.interaction);
+        // Insert in timestamp order — hooks and subagent turns arrive via
+        // independent paths and may reach the client out of logical order.
+        const _ts = msg.interaction.timestamp || 0;
+        let _lo = 0, _hi = state.interactions.length;
+        while (_lo < _hi) {
+          const mid = (_lo + _hi) >>> 1;
+          if ((state.interactions[mid].timestamp || 0) <= _ts) _lo = mid + 1;
+          else _hi = mid;
+        }
+        state.interactions.splice(_lo, 0, msg.interaction);
         // Auto-discover instance from interaction
         if (msg.interaction.instanceId && !knownInstances.has(msg.interaction.instanceId)) {
           knownInstances.set(msg.interaction.instanceId, {
