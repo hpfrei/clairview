@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DATA_HOME } = require('./utils');
+const { getModelPricing } = require('./capabilities');
 
 const INTERACTIONS_DIR = path.join(DATA_HOME, 'interactions');
 
@@ -305,6 +306,7 @@ class InteractionStore {
       bare: req.bare || false,
       disableAutoMemory: req.disableAutoMemory !== false,
       subagent: subagent || undefined,
+      pricing: data.pricing || (req.model ? getModelPricing(DATA_HOME, req.model) : undefined),
     };
     if (data.isHook) {
       interaction.isHook = true;
@@ -436,6 +438,7 @@ class InteractionStore {
         result: interaction.status,
       },
       subagent: interaction.subagent || undefined,
+      pricing: interaction.pricing || undefined,
     };
     if (interaction.isHook) {
       out.isHook = true;
