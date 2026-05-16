@@ -20,7 +20,7 @@ class OpenAIProvider extends BaseProvider {
 
     // Convert Anthropic messages to OpenAI format
     for (const msg of (body.messages || [])) {
-      const converted = this._convertMessage(msg);
+      const converted = this._convertMessage(msg, modelDef);
       if (converted) messages.push(...(Array.isArray(converted) ? converted : [converted]));
     }
 
@@ -109,11 +109,11 @@ class OpenAIProvider extends BaseProvider {
     }
   }
 
-  _convertMessage(msg) {
+  _convertMessage(msg, modelDef) {
     if (msg.role === 'user') {
       return this._convertUserMessage(msg);
     } else if (msg.role === 'assistant') {
-      return this._convertAssistantMessage(msg);
+      return this._convertAssistantMessage(msg, modelDef);
     }
     return null;
   }
@@ -179,14 +179,20 @@ class OpenAIProvider extends BaseProvider {
     return results.length > 0 ? results : null;
   }
 
-  _convertAssistantMessage(msg) {
+  _convertAssistantMessage(msg, modelDef) {
     if (typeof msg.content === 'string') {
       return { role: 'assistant', content: msg.content };
     }
 
     if (!Array.isArray(msg.content)) return null;
 
+    // DeepSeek and Kimi/Moonshot use reasoning_content for thinking
+    const usesReasoningContent = modelDef && (
+      modelDef.providerKey === 'deepseek' || modelDef.providerKey === 'moonshot'
+    );
+
     const result = { role: 'assistant', content: '', tool_calls: [] };
+    let reasoningContent = '';
     let toolCallIndex = 0;
 
     for (const block of msg.content) {
@@ -202,12 +208,14 @@ class OpenAIProvider extends BaseProvider {
           },
           index: toolCallIndex++,
         });
+      } else if (block.type === 'thinking' && usesReasoningContent) {
+        reasoningContent += block.thinking || '';
       }
-      // Skip 'thinking' blocks — not relevant for other providers
     }
 
     if (result.tool_calls.length === 0) delete result.tool_calls;
     if (!result.content) result.content = '';
+    if (reasoningContent) result.reasoning_content = reasoningContent;
 
     return result;
   }
@@ -271,6 +279,7 @@ class OpenAIProvider extends BaseProvider {
       messageId: `msg_${Date.now()}`,
       contentIndex: 0,
       hasStarted: false,
+      thinkingBlockOpen: false,
       textBlockOpen: false,
       toolCalls: {},       // indexed by tool call index
       inputTokens: 0,
@@ -337,8 +346,34 @@ class OpenAIProvider extends BaseProvider {
 
     const delta = choice.delta || {};
 
+    // Reasoning content (DeepSeek, Kimi thinking models)
+    if (delta.reasoning_content != null && delta.reasoning_content !== '') {
+      if (!ss.thinkingBlockOpen) {
+        ss.thinkingBlockOpen = true;
+        events.push(this._sseEvent('content_block_start', {
+          type: 'content_block_start',
+          index: ss.contentIndex,
+          content_block: { type: 'thinking', thinking: '' },
+        }));
+      }
+      events.push(this._sseEvent('content_block_delta', {
+        type: 'content_block_delta',
+        index: ss.contentIndex,
+        delta: { type: 'thinking_delta', thinking: delta.reasoning_content },
+      }));
+    }
+
     // Text content
     if (delta.content != null && delta.content !== '') {
+      // Close thinking block before starting text
+      if (ss.thinkingBlockOpen) {
+        events.push(this._sseEvent('content_block_stop', {
+          type: 'content_block_stop',
+          index: ss.contentIndex,
+        }));
+        ss.contentIndex++;
+        ss.thinkingBlockOpen = false;
+      }
       if (!ss.textBlockOpen) {
         ss.textBlockOpen = true;
         events.push(this._sseEvent('content_block_start', {
@@ -360,7 +395,15 @@ class OpenAIProvider extends BaseProvider {
         const idx = tc.index ?? 0;
 
         if (tc.id || tc.function?.name) {
-          // New tool call starting — close text block if open
+          // New tool call starting — close thinking/text blocks if open
+          if (ss.thinkingBlockOpen) {
+            events.push(this._sseEvent('content_block_stop', {
+              type: 'content_block_stop',
+              index: ss.contentIndex,
+            }));
+            ss.contentIndex++;
+            ss.thinkingBlockOpen = false;
+          }
           if (ss.textBlockOpen) {
             events.push(this._sseEvent('content_block_stop', {
               type: 'content_block_stop',
@@ -421,6 +464,15 @@ class OpenAIProvider extends BaseProvider {
   _finalize(ss) {
     ss.finalized = true;
     const events = [];
+
+    // Close any open thinking block
+    if (ss.thinkingBlockOpen) {
+      events.push(this._sseEvent('content_block_stop', {
+        type: 'content_block_stop',
+        index: ss.contentIndex,
+      }));
+      ss.contentIndex++;
+    }
 
     // Close any open text block
     if (ss.textBlockOpen) {
