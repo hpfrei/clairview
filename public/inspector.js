@@ -1690,14 +1690,18 @@
         const lastEntry = entries[entries.length - 1];
 
         // Determine bgBottom: prefer the PostToolUse hook's Y as the end boundary
-        let bgBottom = lastEntry.y + lastEntry.height + 4;
+        // Use natural (unstretched) height so bgRect ends at the agent's true finish,
+        // not at the tallest parallel column's bottom.
+        const naturalHeight = computeNodeHeight(lastEntry.interaction);
+        const naturalBottom = lastEntry.y + naturalHeight;
+        let bgBottom = naturalBottom + 4;
         const hookEntry = seg.endHookId ? hookEntryById.get(seg.endHookId) : null;
         if (hookEntry) {
-          bgBottom = Math.max(hookEntry.y + hookEntry.height / 2, lastEntry.y + lastEntry.height) + 4;
+          bgBottom = Math.max(hookEntry.y + hookEntry.height / 2, naturalBottom) + 4;
         } else if (elapsedToY && sessionStart != null && lastEntry.interaction) {
           const endTs = lastEntry.interaction.timestamp + (lastEntry.interaction.timing?.duration || 0);
           const timeBottom = elapsedToY(endTs - sessionStart);
-          bgBottom = Math.max(timeBottom, lastEntry.y + lastEntry.height) + 4;
+          bgBottom = Math.max(timeBottom, naturalBottom) + 4;
         }
 
         // Fork arrow: from last main-thread node at or before this segment's first entry
@@ -1727,7 +1731,7 @@
         } else {
           // Fallback: first main entry below the segment
           for (const me of mainEntries) {
-            if (me.y >= lastEntry.y + lastEntry.height) {
+            if (me.y >= naturalBottom) {
               mergeTargetY = me.y + me.height / 2;
               mergeTargetX = me.x + me.width / 2;
               break;
@@ -1762,7 +1766,8 @@
         const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
         const bgTop = entries[0].y - 4;
         const lastEntry = entries[entries.length - 1];
-        let bgBottom = lastEntry.y + lastEntry.height + 4;
+        const legacyNaturalBottom = lastEntry.y + computeNodeHeight(lastEntry.interaction);
+        let bgBottom = legacyNaturalBottom + 4;
 
         connectors.push({
           type: 'bgRect', col,
