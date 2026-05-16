@@ -962,6 +962,36 @@
     return null;
   }
 
+  function resolveClosedAgentId(hookInteraction, interactions, hookIdx, activeColumns) {
+    if (hookInteraction.toolUseId) {
+      // Find the parent turn that contains the Agent tool_use matching this hook's toolUseId
+      let parentIdx = -1;
+      for (let j = hookIdx - 1; j >= 0; j--) {
+        const prev = interactions[j];
+        if (prev.isHook || prev.isMcp) continue;
+        const tools = extractToolCalls(prev);
+        if (tools.some(tc => tc.id === hookInteraction.toolUseId)) { parentIdx = j; break; }
+      }
+      if (parentIdx >= 0) {
+        // Scan forward from parent to find the subagent spawned by this tool call
+        for (let j = parentIdx + 1; j < hookIdx; j++) {
+          const child = interactions[j];
+          if (child.isHook || child.isMcp) continue;
+          const aid = child.subagent?.agentId;
+          if (aid && activeColumns.has(aid)) return aid;
+        }
+      }
+    }
+    // Fallback: last active agent seen before this hook
+    for (let j = hookIdx - 1; j >= 0; j--) {
+      const prev = interactions[j];
+      if (prev.isHook || prev.isMcp) continue;
+      const aid = prev.subagent?.agentId;
+      if (aid && activeColumns.has(aid)) return aid;
+    }
+    return null;
+  }
+
   function buildColumnAssignment(interactions) {
     const columnFor = new Map();
     const activeColumns = new Map();
@@ -1005,13 +1035,7 @@
       columnFor.set(interaction.id, assignedCol);
 
       if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
-        let closedAgentId = null;
-        for (let j = idx - 1; j >= 0; j--) {
-          const prev = interactions[j];
-          if (prev.isHook || prev.isMcp) continue;
-          const aid = prev.subagent?.agentId;
-          if (aid && activeColumns.has(aid)) { closedAgentId = aid; break; }
-        }
+        const closedAgentId = resolveClosedAgentId(interaction, interactions, idx, activeColumns);
         if (closedAgentId) {
           const closedCol = activeColumns.get(closedAgentId);
           postHookClosedCol.set(interaction.id, closedCol);
@@ -1839,6 +1863,9 @@
     resetSubagentRegistry();
     stopAllFlowAnimations();
 
+    // Rebuild footer badges filtered to the active instance tab
+    rebuildFooterBadgesForTab();
+
     const visible = state.interactions.filter(i => isVisibleInTimeline(i) && i.timestamp > 0 && !_inflightSet.has(i.id));
     if (visible.length === 0) return;
 
@@ -2138,16 +2165,12 @@
 
     // Handle agent close
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
-      for (let j = state.interactions.length - 2; j >= 0; j--) {
-        const prev = state.interactions[j];
-        if (prev.isHook || prev.isMcp) continue;
-        const aid = prev.subagent?.agentId;
-        if (aid && ds.activeColumns.has(aid)) {
-          stopFlowAnimation(aid);
-          ds.freeColumns.push(ds.activeColumns.get(aid));
-          ds.activeColumns.delete(aid);
-          break;
-        }
+      const hookIdx = state.interactions.indexOf(interaction);
+      const closedAgentId = resolveClosedAgentId(interaction, state.interactions, hookIdx >= 0 ? hookIdx : state.interactions.length - 1, ds.activeColumns);
+      if (closedAgentId) {
+        stopFlowAnimation(closedAgentId);
+        ds.freeColumns.push(ds.activeColumns.get(closedAgentId));
+        ds.activeColumns.delete(closedAgentId);
       }
     }
 
@@ -2204,6 +2227,23 @@
       const status = interaction.status || 'pending';
       statusEl.textContent = status;
       statusEl.className = 'badge-status badge-status-' + status;
+    }
+  }
+
+  function rebuildFooterBadgesForTab() {
+    for (const iv of _inflightTimers.values()) clearInterval(iv);
+    _inflightSet.clear();
+    _inflightTimers.clear();
+    const container = document.getElementById('timeline-footer-streaming');
+    if (container) container.innerHTML = '';
+
+    for (const interaction of state.interactions) {
+      if (!isVisibleInTimeline(interaction)) continue;
+      const iStatus = interaction.status || 'pending';
+      const isLongLived = !interaction.isHook && !interaction.isMcp;
+      if (isLongLived && (iStatus === 'pending' || iStatus === 'streaming')) {
+        addFooterBadge(interaction);
+      }
     }
   }
 
