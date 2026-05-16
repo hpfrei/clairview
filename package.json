@@ -1,6 +1,6 @@
 {
   "name": "vistaclair",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Remote control room, agent inspector, and multi-provider model router for Claude Code",
   "author": "Hans-Peter Frei (https://hpfreilabs.com)",
   "license": "Apache-2.0",
@@ -47,7 +47,8 @@
     "public/",
     "lib/",
     "server.js",
-    "templates/"
+    "templates/",
+    "mcp-servers/integrated/"
   ],
   "scripts": {
     "start": "node server.js",
