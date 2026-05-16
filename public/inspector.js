@@ -813,7 +813,9 @@
   // ============================================================
 
   function isStandardLlm(interaction) {
-    return !interaction.endpoint || interaction.endpoint === '/v1/messages';
+    if (!interaction.endpoint || interaction.endpoint === '/v1/messages') return true;
+    if (interaction.translatedFrom) return true;
+    return false;
   }
 
   function llmTurnNumber(interaction) {

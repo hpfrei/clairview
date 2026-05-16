@@ -480,6 +480,8 @@ class InteractionStore {
         const delta = e.data?.delta;
         if (delta?.type === 'text_delta' && content[idx]) {
           content[idx].text = (content[idx].text || '') + (delta.text || '');
+        } else if (delta?.type === 'thinking_delta' && content[idx]) {
+          content[idx].thinking = (content[idx].thinking || '') + (delta.thinking || '');
         } else if (delta?.type === 'input_json_delta' && jsonParts.has(idx)) {
           jsonParts.set(idx, jsonParts.get(idx) + (delta.partial_json || ''));
         }
