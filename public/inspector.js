@@ -1053,6 +1053,7 @@
     const postHookClosedCol = new Map();
     const columnSegments = []; // { col, agentId, subagent, startIdx, endHookId }
     const activeSegments = new Map(); // agentId → segment (currently open)
+    const depthAt = new Array(interactions.length);
     let nextColumn = 1;
     let currentRegion = null;
 
@@ -1104,6 +1105,8 @@
         }
       }
 
+      depthAt[idx] = activeColumns.size;
+
       const inParallel = activeColumns.size > 0;
       if (inParallel && !currentRegion) {
         currentRegion = { startIdx: idx, endIdx: idx, startTime: interaction.timestamp, endTime: interaction.timestamp };
@@ -1119,7 +1122,7 @@
     }
     if (currentRegion) parallelRegions.push(currentRegion);
 
-    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments };
+    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments, depthAt };
   }
 
   // --- Layout computation ---
@@ -1135,7 +1138,7 @@
   const GAP_COLLAPSE_THRESHOLD = 30000;
   const GAP_COLLAPSE_HEIGHT = 28;
 
-  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol) {
+  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt) {
     const C = D3_CONST;
     const layout = [];
     const breaks = [];
@@ -1178,9 +1181,10 @@
         return elapsed - s;
       };
 
-      // Compute scale: for each column, consecutive pairs determine minimum scale
+      // Compute scale: only from items with 2+ concurrent threads (truly parallel)
       const byCols = new Map();
       for (let i = region.startIdx; i <= region.endIdx; i++) {
+        if (depthAt && depthAt[i] < 2) continue;
         const col = columnFor.get(interactions[i].id) || 0;
         if (!byCols.has(col)) byCols.set(col, []);
         byCols.get(col).push({
@@ -1241,8 +1245,8 @@
           if (closedCol != null && colBottoms.has(closedCol)) {
             y = Math.max(y, colBottoms.get(closedCol) + C.MIN_GAP);
           }
-        } else {
-          // Subagent columns: time-proportional positioning
+        } else if (depthAt && depthAt[idx] >= 2) {
+          // Subagent columns with true parallelism: time-proportional positioning
           const rs = regionCache.get(region);
           const compE = rs.compressElapsed(elapsed);
           const compStart = rs.compressElapsed(rs.startElapsed);
@@ -1251,6 +1255,9 @@
           y = colBottoms.has(col)
             ? Math.max(timeY, colBottoms.get(col) + C.MIN_GAP)
             : timeY;
+        } else {
+          // Subagent column but running alone: compact stacking
+          y = (colBottoms.get(col) || globalBottom) + C.MIN_GAP;
         }
       } else {
         // Sequential: compact stacking
@@ -1274,13 +1281,13 @@
         }
       }
 
-      layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed });
+      layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed, idx });
       colBottoms.set(col, y + height);
       if (y + height > globalBottom) globalBottom = y + height;
       prevElapsed = elapsed;
     }
 
-    // Stretch shorter subagent columns in parallel regions so all span equal height
+    // Stretch subagent items only when truly parallel (2+ concurrent threads)
     // Column 0 (main thread) is never stretched — it keeps its natural height.
     for (const region of (parallelRegions || [])) {
       const colItems = new Map();
@@ -1299,6 +1306,7 @@
         if (col === 0) continue;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
+          if (depthAt && depthAt[item.idx] < 2) continue;
           const stretchable = !item.interaction.isHook && !item.interaction.isMcp
             && isStandardLlm(item.interaction);
           if (!stretchable) continue;
@@ -1948,10 +1956,10 @@
     const filtered = visible;
 
     const assignment = buildColumnAssignment(filtered);
-    const { columnFor, totalColumns, columnAgents, columnSegments, parallelRegions, postHookClosedCol } = assignment;
+    const { columnFor, totalColumns, columnAgents, columnSegments, parallelRegions, postHookClosedCol, depthAt } = assignment;
     const colWidth = computeColumnWidth(totalColumns);
 
-    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol);
+    const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt);
 
     // Create wrapper
     const wrapper = document.createElement('div');
