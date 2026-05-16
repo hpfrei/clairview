@@ -25,6 +25,5 @@ capabilities/workflows/*/runs/
 mcp-servers/*/node_modules/
 mcp-servers/*/logs/
 mcp-servers/*/package-lock.json
-mcp-servers/*/server.js
 mcp-servers/*/workflows/
 mcp-servers/blank/
