@@ -1001,6 +1001,8 @@
     const freeColumns = [];
     const parallelRegions = [];
     const postHookClosedCol = new Map();
+    const columnSegments = []; // { col, agentId, subagent, startIdx, endHookId }
+    const activeSegments = new Map(); // agentId → segment (currently open)
     let nextColumn = 1;
     let currentRegion = null;
 
@@ -1021,6 +1023,9 @@
           registerSubagent(interaction.subagent);
           columnAgents.set(col, interaction.subagent);
         }
+        const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null };
+        columnSegments.push(seg);
+        activeSegments.set(agentId, seg);
       }
 
       const resolvedCol = agentId
@@ -1040,6 +1045,8 @@
         if (closedAgentId) {
           const closedCol = activeColumns.get(closedAgentId);
           postHookClosedCol.set(interaction.id, closedCol);
+          const seg = activeSegments.get(closedAgentId);
+          if (seg) { seg.endHookId = interaction.id; activeSegments.delete(closedAgentId); }
           freeColumns.push(closedCol);
           activeColumns.delete(closedAgentId);
         }
@@ -1060,7 +1067,7 @@
     }
     if (currentRegion) parallelRegions.push(currentRegion);
 
-    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol };
+    return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments };
   }
 
   // --- Layout computation ---
@@ -1609,101 +1616,135 @@
 
   // --- SVG connectors ---
 
-  function computeConnectorData(layout, columnFor, columnAgents, totalColumns, elapsedToY, sessionStart, postHookClosedCol) {
+  function computeConnectorData(layout, columnFor, columnAgents, totalColumns, elapsedToY, sessionStart, postHookClosedCol, columnSegments) {
     const connectors = [];
-    const colEntries = new Map();
-
-    for (const item of layout) {
-      if (!colEntries.has(item.col)) colEntries.set(item.col, []);
-      colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width, interaction: item.interaction });
-    }
-
-    // Reverse map: subagent column → PostToolUse/Agent hook entry in main thread
-    const colToPostHook = new Map();
-    if (postHookClosedCol) {
-      const mainEntryById = new Map();
-      for (const me of (colEntries.get(0) || [])) mainEntryById.set(me.id, me);
-      for (const [hookId, closedCol] of postHookClosedCol) {
-        const me = mainEntryById.get(hookId);
-        if (me) colToPostHook.set(closedCol, me);
-      }
-    }
-
-    const mainEntries = colEntries.get(0);
-
     const colWidth = computeColumnWidth(totalColumns);
-    for (let col = 1; col < totalColumns; col++) {
-      const entries = colEntries.get(col);
-      if (!entries || entries.length === 0) continue;
 
-      const agent = columnAgents.get(col);
-      const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
+    // Build lookup structures
+    const layoutById = new Map();
+    const colEntries = new Map();
+    for (const item of layout) {
+      layoutById.set(item.id, item);
+      if (!colEntries.has(item.col)) colEntries.set(item.col, []);
+      colEntries.get(item.col).push(item);
+    }
+    const mainEntries = colEntries.get(0) || [];
 
-      const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
-      const bgTop = entries[0].y - 4;
+    // Map hook IDs to their layout items
+    const hookEntryById = new Map();
+    for (const me of mainEntries) hookEntryById.set(me.id, me);
 
-      // Bg rect bottom: use end time of last entry (timestamp + duration) if available
-      const lastEntry = entries[entries.length - 1];
-      let bgBottom = lastEntry.yBottom + 4;
-      if (elapsedToY && sessionStart != null && lastEntry.interaction) {
-        const endTs = lastEntry.interaction.timestamp + (lastEntry.interaction.timing?.duration || 0);
-        const timeBottom = elapsedToY(endTs - sessionStart);
-        bgBottom = Math.max(timeBottom, lastEntry.yBottom) + 4;
-      }
+    // Process each segment individually
+    if (columnSegments && columnSegments.length > 0) {
+      for (const seg of columnSegments) {
+        const entries = (colEntries.get(seg.col) || []).filter(item => {
+          const aid = item.interaction.subagent?.agentId;
+          return aid === seg.agentId;
+        });
+        if (entries.length === 0) continue;
 
-      const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
+        const agent = seg.subagent;
+        const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
+        const bgLeft = D3_CONST.RULER_WIDTH + seg.col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
+        const bgTop = entries[0].y - 4;
+        const lastEntry = entries[entries.length - 1];
 
-      // Fork: starts from center of preToolUse hook node
-      let forkOriginY = bgTop;
-      let forkOriginX = mainX;
-      if (mainEntries) {
+        // Determine bgBottom: prefer the PostToolUse hook's Y as the end boundary
+        let bgBottom = lastEntry.y + lastEntry.height + 4;
+        const hookEntry = seg.endHookId ? hookEntryById.get(seg.endHookId) : null;
+        if (hookEntry) {
+          bgBottom = Math.max(hookEntry.y + hookEntry.height / 2, lastEntry.y + lastEntry.height) + 4;
+        } else if (elapsedToY && sessionStart != null && lastEntry.interaction) {
+          const endTs = lastEntry.interaction.timestamp + (lastEntry.interaction.timing?.duration || 0);
+          const timeBottom = elapsedToY(endTs - sessionStart);
+          bgBottom = Math.max(timeBottom, lastEntry.y + lastEntry.height) + 4;
+        }
+
+        // Fork arrow: from last main-thread node at or before this segment's first entry
+        let forkOriginY = bgTop;
+        let forkOriginX = D3_CONST.RULER_WIDTH + colWidth / 2;
         for (let i = mainEntries.length - 1; i >= 0; i--) {
           if (mainEntries[i].y <= entries[0].y) {
-            forkOriginY = (mainEntries[i].y + mainEntries[i].yBottom) / 2;
+            forkOriginY = mainEntries[i].y + mainEntries[i].height / 2;
             forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
             break;
           }
         }
+
+        const cpX = (bgLeft - forkOriginX) * 0.6;
+        connectors.push({
+          type: 'fork', col: seg.col,
+          path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
+          color, opacity: 0.6, strokeWidth: 1.5, agentId: seg.agentId,
+        });
+
+        // Merge arrow: from bgBottom to PostToolUse hook center
+        let mergeTargetY = null;
+        let mergeTargetX = D3_CONST.RULER_WIDTH + colWidth / 2;
+        if (hookEntry) {
+          mergeTargetY = hookEntry.y + hookEntry.height / 2;
+          mergeTargetX = hookEntry.x + hookEntry.width / 2;
+        } else {
+          // Fallback: first main entry below the segment
+          for (const me of mainEntries) {
+            if (me.y >= lastEntry.y + lastEntry.height) {
+              mergeTargetY = me.y + me.height / 2;
+              mergeTargetX = me.x + me.width / 2;
+              break;
+            }
+          }
+        }
+        if (mergeTargetY != null) {
+          const bgCenterX = bgLeft + (colWidth + 8) / 2;
+          const mCpX = (bgCenterX - mergeTargetX) * 0.6;
+          connectors.push({
+            type: 'merge', col: seg.col,
+            path: `M${bgCenterX},${bgBottom} C${bgCenterX - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
+            color, opacity: 0.5, strokeWidth: 1.5, agentId: seg.agentId,
+          });
+        }
+
+        // Store bgRect info on connector for renderConnectors
+        connectors.push({
+          type: 'bgRect', col: seg.col,
+          x: bgLeft, y: bgTop, width: colWidth + 8, height: bgBottom - bgTop,
+          color, agentId: seg.agentId,
+          isStreaming: entries.some(e => e.interaction.status === 'streaming'),
+        });
       }
+    } else {
+      // Fallback for legacy/incremental path without segments
+      for (let col = 1; col < totalColumns; col++) {
+        const entries = colEntries.get(col);
+        if (!entries || entries.length === 0) continue;
+        const agent = columnAgents.get(col);
+        const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
+        const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
+        const bgTop = entries[0].y - 4;
+        const lastEntry = entries[entries.length - 1];
+        let bgBottom = lastEntry.y + lastEntry.height + 4;
 
-      const cpX = (bgLeft - forkOriginX) * 0.6;
-      connectors.push({
-        type: 'fork',
-        col,
-        path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
-        color,
-        opacity: 0.6,
-        strokeWidth: 1.5,
-        agentId: agent?.agentId,
-      });
+        connectors.push({
+          type: 'bgRect', col,
+          x: bgLeft, y: bgTop, width: colWidth + 8, height: bgBottom - bgTop,
+          color, agentId: agent?.agentId,
+          isStreaming: entries.some(e => e.interaction.status === 'streaming'),
+        });
 
-      // Merge: from bg rect bottom-center to center of corresponding PostToolUse/Agent hook
-      let mergeTargetY = null;
-      let mergeTargetX = mainX;
-      const directHook = colToPostHook.get(col);
-      if (directHook) {
-        mergeTargetY = directHook.y + directHook.height / 2;
-        mergeTargetX = directHook.x + directHook.width / 2;
-      } else if (mainEntries) {
-        for (const me of mainEntries) {
-          if (me.y >= lastEntry.yBottom) {
-            mergeTargetY = me.yBottom;
-            mergeTargetX = me.x + me.width / 2;
+        let forkOriginY = bgTop;
+        let forkOriginX = D3_CONST.RULER_WIDTH + colWidth / 2;
+        for (let i = mainEntries.length - 1; i >= 0; i--) {
+          if (mainEntries[i].y <= entries[0].y) {
+            forkOriginY = mainEntries[i].y + mainEntries[i].height / 2;
+            forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
             break;
           }
         }
-      }
-      if (mergeTargetY != null) {
-        const bgCenterX = bgLeft + (colWidth + 8) / 2;
-        const mCpX = (bgCenterX - mergeTargetX) * 0.6;
+        const cpX = (bgLeft - forkOriginX) * 0.6;
         connectors.push({
-          type: 'merge',
-          col,
-          path: `M${bgCenterX},${bgBottom} C${bgCenterX - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
-          color,
-          opacity: 0.5,
-          strokeWidth: 1.5,
-          agentId: agent?.agentId,
+          type: 'fork', col,
+          path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
+          color, opacity: 0.6, strokeWidth: 1.5, agentId: agent?.agentId,
         });
       }
     }
@@ -1711,7 +1752,7 @@
     return connectors;
   }
 
-  function renderConnectors(svgBg, svgFg, connectors, layout, columnAgents, totalColumns, elapsedToY, sessionStart) {
+  function renderConnectors(svgBg, svgFg, connectors, layout, columnAgents, totalColumns, elapsedToY, sessionStart, columnSegments) {
     const gBg = svgBg.select('.tl-connectors');
     gBg.selectAll('*').remove();
     const gFg = svgFg.select('.tl-connectors-fg');
@@ -1721,7 +1762,7 @@
     if (defsFg.empty()) defsFg = svgFg.append('defs');
     defsFg.selectAll('.connector-marker').remove();
 
-    // Fork diamond marker (in foreground SVG)
+    // Fork diamond marker
     defsFg.append('marker')
       .attr('class', 'connector-marker')
       .attr('id', 'fork-diamond')
@@ -1732,7 +1773,7 @@
       .attr('d', 'M4,0.5 L7.5,4 L4,7.5 L0.5,4 Z')
       .attr('fill', 'var(--accent)');
 
-    // Merge circle marker (in foreground SVG)
+    // Merge circle marker
     defsFg.append('marker')
       .attr('class', 'connector-marker')
       .attr('id', 'merge-dot')
@@ -1743,71 +1784,40 @@
       .attr('cx', 4).attr('cy', 4).attr('r', 3)
       .attr('fill', 'var(--accent)').attr('opacity', 0.8);
 
-    // Column background rects (in background SVG, behind nodes)
-    const colWidth = computeColumnWidth(totalColumns);
-    const colEntries = new Map();
-    for (const item of layout) {
-      if (!colEntries.has(item.col)) colEntries.set(item.col, []);
-      colEntries.get(item.col).push(item);
-    }
-    for (let col = 1; col < totalColumns; col++) {
-      const entries = colEntries.get(col);
-      if (!entries || entries.length === 0) continue;
-      const agent = columnAgents.get(col);
-      const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
-      const x = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
-      const yTop = entries[0].y - 4;
-      const lastE = entries[entries.length - 1];
-      let yBottom = lastE.y + lastE.height + 4;
-      if (elapsedToY && sessionStart != null && lastE.interaction) {
-        const endTs = lastE.interaction.timestamp + (lastE.interaction.timing?.duration || 0);
-        const timeBottom = elapsedToY(endTs - sessionStart);
-        yBottom = Math.max(timeBottom, lastE.y + lastE.height) + 4;
-      }
-      const isStreaming = entries.some(e => e.interaction.status === 'streaming');
-      gBg.append('rect')
-        .attr('class', 'col-bg-rect' + (isStreaming ? ' col-bg-streaming' : ''))
-        .attr('data-agent-id', agent?.agentId || '')
-        .attr('x', x)
-        .attr('y', yTop)
-        .attr('width', colWidth + 8)
-        .attr('height', yBottom - yTop)
-        .attr('rx', 6)
-        .attr('ry', 6)
-        .attr('fill', color)
-        .attr('opacity', 0.08);
-    }
-
-    // Fork and merge curves (in foreground SVG, above nodes)
     for (const c of connectors) {
-      const path = gFg.append('path')
-        .attr('class', `connector-path connector-${c.type}`)
-        .attr('d', c.path)
-        .attr('stroke', c.color)
-        .attr('stroke-width', c.strokeWidth)
-        .attr('stroke-linecap', 'round')
-        .attr('stroke-linejoin', 'round')
-        .attr('fill', 'none')
-        .attr('opacity', c.opacity);
-
-      if (c.type === 'fork') {
-        path.attr('marker-start', 'url(#fork-diamond)');
-        const pathNode = path.node();
-        const length = pathNode.getTotalLength();
-        path.attr('stroke-dasharray', `${length} ${length}`)
-          .attr('stroke-dashoffset', length)
-          .transition()
-          .duration(400)
-          .ease(d3.easeLinear)
-          .attr('stroke-dashoffset', 0);
-      }
-
-      if (c.type === 'merge') {
-        path.attr('marker-end', 'url(#merge-dot)');
-      }
-
-      if (c.agentId) {
-        path.attr('data-agent-id', c.agentId);
+      if (c.type === 'bgRect') {
+        gBg.append('rect')
+          .attr('class', 'col-bg-rect' + (c.isStreaming ? ' col-bg-streaming' : ''))
+          .attr('data-agent-id', c.agentId || '')
+          .attr('x', c.x)
+          .attr('y', c.y)
+          .attr('width', c.width)
+          .attr('height', c.height)
+          .attr('rx', 6).attr('ry', 6)
+          .attr('fill', c.color)
+          .attr('opacity', 0.08);
+      } else if (c.type === 'fork') {
+        gFg.append('path')
+          .attr('class', 'connector-path connector-fork')
+          .attr('d', c.path)
+          .attr('stroke', c.color)
+          .attr('stroke-width', c.strokeWidth)
+          .attr('stroke-linecap', 'round')
+          .attr('fill', 'none')
+          .attr('opacity', c.opacity)
+          .attr('marker-start', 'url(#fork-diamond)')
+          .attr('data-agent-id', c.agentId || '');
+      } else if (c.type === 'merge') {
+        gFg.append('path')
+          .attr('class', 'connector-path connector-merge')
+          .attr('d', c.path)
+          .attr('stroke', c.color)
+          .attr('stroke-width', c.strokeWidth)
+          .attr('stroke-linecap', 'round')
+          .attr('fill', 'none')
+          .attr('opacity', c.opacity)
+          .attr('marker-end', 'url(#merge-dot)')
+          .attr('data-agent-id', c.agentId || '');
       }
     }
   }
@@ -1881,7 +1891,7 @@
     const filtered = visible;
 
     const assignment = buildColumnAssignment(filtered);
-    const { columnFor, totalColumns, columnAgents, parallelRegions, postHookClosedCol } = assignment;
+    const { columnFor, totalColumns, columnAgents, columnSegments, parallelRegions, postHookClosedCol } = assignment;
     const colWidth = computeColumnWidth(totalColumns);
 
     const { layout, totalHeight, sessionStart, breaks, compressedY } = computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol);
@@ -1906,16 +1916,28 @@
       const h = document.createElement('div');
       h.className = 'tl-lane-header';
       h.style.width = (colWidth + (col < totalColumns - 1 ? D3_CONST.COLUMN_GAP : 0)) + 'px';
-      const agent = columnAgents.get(col);
       if (col === 0) {
         h.textContent = 'Main Thread';
-      } else if (agent) {
-        const label = getSubagentLabel(agent);
-        const color = getSubagentColor(agent);
-        h.textContent = label;
-        if (color) { h.style.color = color; h.style.borderBottomColor = color; }
       } else {
-        h.textContent = `Agent ${col}`;
+        const segs = columnSegments.filter(s => s.col === col);
+        if (segs.length > 0) {
+          h.innerHTML = segs.map(s => {
+            const label = s.subagent ? escHtml(getSubagentLabel(s.subagent)) : 'agent';
+            const color = s.subagent ? getSubagentColor(s.subagent) : SUBAGENT_COLORS[0];
+            return `<span style="color:${color}">${label}</span>`;
+          }).join('<span class="tl-lane-sep"> · </span>');
+          const firstColor = segs[0].subagent ? getSubagentColor(segs[0].subagent) : null;
+          if (firstColor) h.style.borderBottomColor = firstColor;
+        } else {
+          const agent = columnAgents.get(col);
+          if (agent) {
+            h.textContent = getSubagentLabel(agent);
+            const color = getSubagentColor(agent);
+            if (color) { h.style.color = color; h.style.borderBottomColor = color; }
+          } else {
+            h.textContent = `Agent ${col}`;
+          }
+        }
       }
       headers.appendChild(h);
     }
@@ -1990,8 +2012,8 @@
     timelineList.appendChild(wrapper);
 
     // Render connectors: backgrounds in svg (behind nodes), curves in svgFg (above nodes)
-    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart, postHookClosedCol);
-    renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns, compressedY, sessionStart);
+    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart, postHookClosedCol, columnSegments);
+    renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns, compressedY, sessionStart, columnSegments);
 
     // Render time ruler
     renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY);
@@ -2030,7 +2052,7 @@
     // Save state for incremental appends
     _d3State = {
       wrapper, svg, svgFg, nodesLayer, headers,
-      columnFor, columnAgents, totalColumns,
+      columnFor, columnAgents, columnSegments, totalColumns,
       layout, totalHeight, sessionStart, breaks, compressedY,
       turnNum, subagentTurnCounts,
       activeColumns: assignment.activeColumns,
@@ -2160,8 +2182,8 @@
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.postHookClosedCol);
-    renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart);
+    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.postHookClosedCol, ds.columnSegments || []);
+    renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.columnSegments || []);
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
 
     // Handle agent close

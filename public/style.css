@@ -5048,6 +5048,10 @@ aside#timeline.parallel-mode {
 .tl-lane-header:last-child {
   border-right: none;
 }
+.tl-lane-sep {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
 
 .tl-nodes-layer {
   position: relative;
