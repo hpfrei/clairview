@@ -964,12 +964,32 @@
   }
 
   function resolveClosedAgentId(hookInteraction, interactions, hookIdx, activeColumns) {
-    // 1. Direct: hook already has subagent enrichment
-    if (hookInteraction.subagent?.agentId && activeColumns.has(hookInteraction.subagent.agentId)) {
-      return hookInteraction.subagent.agentId;
+    // 1. Authoritative: tool_response contains the agentId of the completed subagent
+    const responseAgentId = hookInteraction.response?.body?.agentId
+      || hookInteraction.request?.tool_response?.agentId;
+    if (responseAgentId && activeColumns.has(responseAgentId)) {
+      return responseAgentId;
     }
 
-    // 2. Match by description from the Agent tool_input against active agents
+    // 2. Direct: hook already has subagent enrichment (guard against nested-agent mismatch)
+    if (hookInteraction.subagent?.agentId && activeColumns.has(hookInteraction.subagent.agentId)) {
+      const candidateId = hookInteraction.subagent.agentId;
+      let isLikelyChild = true;
+      for (let j = hookIdx - 1; j >= 0; j--) {
+        const prev = interactions[j];
+        if (prev.isHook || prev.isMcp) continue;
+        if (prev.subagent?.agentId === candidateId) {
+          const tools = extractToolCalls(prev);
+          if (tools.some(tc => tc.name === 'Agent' && tc.id === hookInteraction.toolUseId)) {
+            isLikelyChild = false;
+          }
+          break;
+        }
+      }
+      if (isLikelyChild) return candidateId;
+    }
+
+    // 3. Match by description from the Agent tool_input against active agents
     const hookDesc = hookInteraction.request?.tool_input?.description;
     if (hookDesc) {
       for (let j = hookIdx - 1; j >= 0; j--) {
@@ -981,40 +1001,32 @@
       }
     }
 
-    // 3. Match by toolUseId position within the parent turn's Agent tool calls
+    // 4. Match by toolUseId: find the parent turn's Agent tool call, use its description
+    //    to match against active agents (order-independent unlike counting)
     if (hookInteraction.toolUseId) {
-      let parentIdx = -1;
-      let agentToolIndex = -1;
       for (let j = hookIdx - 1; j >= 0; j--) {
         const prev = interactions[j];
         if (prev.isHook || prev.isMcp) continue;
         const tools = extractToolCalls(prev);
-        const matchIdx = tools.findIndex(tc => tc.id === hookInteraction.toolUseId);
-        if (matchIdx >= 0) {
-          parentIdx = j;
-          agentToolIndex = 0;
-          for (let k = 0; k < matchIdx; k++) {
-            if (tools[k].name === 'Agent') agentToolIndex++;
+        const matchedTool = tools.find(tc => tc.id === hookInteraction.toolUseId);
+        if (matchedTool) {
+          const toolDesc = matchedTool.input?.description;
+          if (toolDesc) {
+            for (const [aid] of activeColumns) {
+              for (let k = j + 1; k < hookIdx; k++) {
+                const child = interactions[k];
+                if (child.subagent?.agentId === aid && child.subagent?.description === toolDesc) {
+                  return aid;
+                }
+              }
+            }
           }
           break;
         }
       }
-      if (parentIdx >= 0 && agentToolIndex >= 0) {
-        // Find the (agentToolIndex)th unique agent after the parent turn
-        const seenAgentIds = [];
-        for (let j = parentIdx + 1; j < hookIdx; j++) {
-          const child = interactions[j];
-          if (child.isHook || child.isMcp) continue;
-          const aid = child.subagent?.agentId;
-          if (aid && !seenAgentIds.includes(aid)) {
-            if (seenAgentIds.length === agentToolIndex) return aid;
-            seenAgentIds.push(aid);
-          }
-        }
-      }
     }
 
-    // 4. Fallback: last active agent seen before this hook (only when single agent)
+    // 5. Fallback: unambiguous single active agent
     if (activeColumns.size === 1) {
       for (const [agentId] of activeColumns) return agentId;
     }

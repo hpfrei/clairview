@@ -287,15 +287,16 @@ dashboardApp.post('/api/hook-report', (req, res) => {
   try {
     const hookData = typeof req.body.hookData === 'string' ? JSON.parse(req.body.hookData) : req.body.hookData;
     const id = `hook-${Date.now()}-${++hookSeq}`;
+    const hookTs = hookData.timestamp || Date.now();
     const interaction = {
-      id, timestamp: Date.now(), isHook: true,
+      id, timestamp: hookTs, isHook: true,
       instanceId: req.body.instanceId || null,
       hookEvent: hookData.hook_event_name || 'unknown',
       toolName: hookData.tool_name || null,
       toolUseId: hookData.tool_use_id || null,
       request: hookData,
       response: { status: 200, body: hookData.tool_response || null },
-      timing: { startedAt: Date.now(), duration: 0 },
+      timing: { startedAt: hookTs, duration: hookData.duration_ms || 0 },
       status: 'complete', isStreaming: false,
     };
     store.add(interaction);
