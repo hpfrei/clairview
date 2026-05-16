@@ -273,11 +273,11 @@ class InteractionStore {
     }
 
     const interaction = {
-      id: `${sessId}-${seqNum}`,
+      id: data.id || `${sessId}-${seqNum}`,
       timestamp: req.timestamp || 0,
       endpoint: req.endpoint || '/v1/messages',
       originalEndpoint: req.endpoint || undefined,
-      instanceId: `cli-${sessId}`,
+      instanceId: data.instanceId || `cli-${sessId}`,
       stepId: req.stepId || null,
       runId: req.runId || null,
       request: req,
@@ -332,8 +332,17 @@ class InteractionStore {
         allFiles.push({ sessId, seqNum, filePath: path.join(dir, file) });
       }
     }
+    // Build reverse lookup: filePath → in-memory ID (for files saved before id was persisted)
+    const pathToMemId = new Map();
+    for (const [id, fp] of this.filePaths) pathToMemId.set(fp, id);
+
     const results = [];
     for (const { sessId, seqNum, filePath } of allFiles) {
+      const memId = pathToMemId.get(filePath);
+      if (memId) {
+        const memInteraction = this.interactions.get(memId);
+        if (memInteraction) { results.push(memInteraction); continue; }
+      }
       const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
       if (interaction) results.push(interaction);
     }
@@ -396,6 +405,8 @@ class InteractionStore {
 
   _buildFileContent(interaction) {
     const out = {
+      id: interaction.id,
+      instanceId: interaction.instanceId || undefined,
       request: {
         ...interaction.request,
         endpoint: interaction.endpoint,
