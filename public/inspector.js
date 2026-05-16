@@ -914,6 +914,8 @@
 
   let _d3State = null; // persisted between incremental appends; reset on full re-render
   let _flowAnimations = new Map(); // agentId -> animFrameId
+  let _inflightSet = new Set(); // interaction IDs currently shown as footer badges
+  let _inflightTimers = new Map(); // id -> intervalId for elapsed counter
 
   const D3_CONST = {
     RULER_WIDTH: 52,
@@ -979,7 +981,10 @@
         registerSubagent(interaction.subagent);
         columnAgents.set(resolvedCol, interaction.subagent);
       }
-      columnFor.set(interaction.id, resolvedCol);
+      // PostToolUse/Agent hooks go to column 0 (main thread) so merge connectors can target them
+      const assignedCol = (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent')
+        ? 0 : resolvedCol;
+      columnFor.set(interaction.id, assignedCol);
 
       if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
         let closedAgentId = null;
@@ -1124,14 +1129,21 @@
           regionStartY = globalBottom + C.MIN_GAP;
         }
 
-        const rs = regionCache.get(region);
-        const compE = rs.compressElapsed(elapsed);
-        const compStart = rs.compressElapsed(rs.startElapsed);
-        const timeY = regionStartY + (compE - compStart) * rs.scale;
+        if (col === 0) {
+          // Main thread: compact stacking even inside parallel regions
+          const colBottom = colBottoms.get(0) || globalBottom;
+          y = colBottom + C.MIN_GAP;
+        } else {
+          // Subagent columns: time-proportional positioning
+          const rs = regionCache.get(region);
+          const compE = rs.compressElapsed(elapsed);
+          const compStart = rs.compressElapsed(rs.startElapsed);
+          const timeY = regionStartY + (compE - compStart) * rs.scale;
 
-        y = colBottoms.has(col)
-          ? Math.max(timeY, colBottoms.get(col) + C.MIN_GAP)
-          : timeY;
+          y = colBottoms.has(col)
+            ? Math.max(timeY, colBottoms.get(col) + C.MIN_GAP)
+            : timeY;
+        }
       } else {
         // Sequential: compact stacking
         if (activeRegion) activeRegion = null;
@@ -1160,7 +1172,8 @@
       prevElapsed = elapsed;
     }
 
-    // Stretch shorter columns in parallel regions so all columns span equal height
+    // Stretch shorter subagent columns in parallel regions so all span equal height
+    // Column 0 (main thread) is never stretched — it keeps its natural height.
     for (const region of (parallelRegions || [])) {
       const colItems = new Map();
       for (let i = region.startIdx; i <= region.endIdx; i++) {
@@ -1173,7 +1186,8 @@
         const last = items[items.length - 1];
         if (last.y + last.height > tallestBottom) tallestBottom = last.y + last.height;
       }
-      for (const [, items] of colItems) {
+      for (const [col, items] of colItems) {
+        if (col === 0) continue;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
           const stretchable = !item.interaction.isHook && !item.interaction.isMcp
@@ -1355,6 +1369,8 @@
     const hookEvent = interaction.hookEvent || 'Hook';
     const toolName = interaction.toolName || '';
     const arrow = /post/i.test(hookEvent) ? '←' : '→';
+    const subType = interaction.subagent?.agentType;
+    const label = subType ? `${toolName} (${subType})` : toolName;
 
     const group = document.createElement('div');
     group.className = `turn-group hook-call-group status-${interaction.status || 'complete'}`;
@@ -1366,8 +1382,8 @@
 
     el.innerHTML = `
       <span class="hook-arrow">${arrow}</span>
-      <span class="hook-label">${escHtml(hookEvent)}</span>
-      <span class="hook-tool-name">${escHtml(toolName)}</span>
+      <span class="hook-label">${escHtml(/pre/i.test(hookEvent) ? 'pre' : 'post')}</span>
+      <span class="hook-tool-name">${escHtml(label)}</span>
     `;
 
     el.addEventListener('click', (e) => {
@@ -1543,13 +1559,13 @@
 
   // --- SVG connectors ---
 
-  function computeConnectorData(layout, columnFor, columnAgents, totalColumns) {
+  function computeConnectorData(layout, columnFor, columnAgents, totalColumns, elapsedToY, sessionStart) {
     const connectors = [];
     const colEntries = new Map();
 
     for (const item of layout) {
       if (!colEntries.has(item.col)) colEntries.set(item.col, []);
-      colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width });
+      colEntries.get(item.col).push({ y: item.y, yBottom: item.y + item.height, id: item.id, x: item.x, width: item.width, interaction: item.interaction });
     }
 
     const mainEntries = colEntries.get(0);
@@ -1562,51 +1578,70 @@
       const agent = columnAgents.get(col);
       const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
 
-      // Background rect edges: fork/merge attach at the left edge of the bg rect
       const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
       const bgTop = entries[0].y - 4;
-      const bgBottom = entries[entries.length - 1].yBottom + 4;
+
+      // Bg rect bottom: use end time of last entry (timestamp + duration) if available
+      const lastEntry = entries[entries.length - 1];
+      let bgBottom = lastEntry.yBottom + 4;
+      if (elapsedToY && sessionStart != null && lastEntry.interaction) {
+        const endTs = lastEntry.interaction.timestamp + (lastEntry.interaction.timing?.duration || 0);
+        const timeBottom = elapsedToY(endTs - sessionStart);
+        bgBottom = Math.max(timeBottom, lastEntry.yBottom) + 4;
+      }
+
       const mainX = D3_CONST.RULER_WIDTH + colWidth / 2;
 
-      // Fork: curve from main thread to top-left of agent bg rect
+      // Fork: starts from top edge of preToolUse node at its horizontal center
       let forkOriginY = bgTop;
+      let forkOriginX = mainX;
       if (mainEntries) {
         for (let i = mainEntries.length - 1; i >= 0; i--) {
           if (mainEntries[i].y <= entries[0].y) {
-            forkOriginY = mainEntries[i].yBottom - 6;
+            forkOriginY = mainEntries[i].y;
+            forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
             break;
           }
         }
       }
 
-      const cpX = (bgLeft - mainX) * 0.6;
+      const cpX = (bgLeft - forkOriginX) * 0.6;
       connectors.push({
         type: 'fork',
         col,
-        path: `M${mainX},${forkOriginY} C${mainX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
+        path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
         color,
         opacity: 0.6,
         strokeWidth: 1.5,
         agentId: agent?.agentId,
       });
 
-      // Merge: curve from bottom-left of agent bg rect back to main thread
-      const lastEntry = entries[entries.length - 1];
+      // Merge: from bg rect bottom-left to bottom edge of corresponding PostToolUse/Agent in col 0
       let mergeTargetY = null;
+      let mergeTargetX = mainX;
       if (mainEntries) {
         for (const me of mainEntries) {
-          if (me.y > lastEntry.yBottom) {
-            mergeTargetY = me.y + 6;
-            break;
+          if (me.y >= lastEntry.yBottom) {
+            const inter = me.interaction;
+            if (inter && inter.isHook && /PostToolUse/i.test(inter.hookEvent) && inter.toolName === 'Agent') {
+              mergeTargetY = me.yBottom;
+              mergeTargetX = me.x + me.width / 2;
+              break;
+            }
+            if (mergeTargetY == null) {
+              mergeTargetY = me.yBottom;
+              mergeTargetX = me.x + me.width / 2;
+              break;
+            }
           }
         }
       }
       if (mergeTargetY != null) {
-        const mCpX = (bgLeft - mainX) * 0.6;
+        const mCpX = (bgLeft - mergeTargetX) * 0.6;
         connectors.push({
           type: 'merge',
           col,
-          path: `M${bgLeft},${bgBottom} C${bgLeft - mCpX},${bgBottom} ${mainX + mCpX},${mergeTargetY} ${mainX},${mergeTargetY}`,
+          path: `M${bgLeft},${bgBottom} C${bgLeft - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
           color,
           opacity: 0.5,
           strokeWidth: 1.5,
@@ -1618,7 +1653,7 @@
     return connectors;
   }
 
-  function renderConnectors(svgBg, svgFg, connectors, layout, columnAgents, totalColumns) {
+  function renderConnectors(svgBg, svgFg, connectors, layout, columnAgents, totalColumns, elapsedToY, sessionStart) {
     const gBg = svgBg.select('.tl-connectors');
     gBg.selectAll('*').remove();
     const gFg = svgFg.select('.tl-connectors-fg');
@@ -1664,7 +1699,13 @@
       const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
       const x = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
       const yTop = entries[0].y - 4;
-      const yBottom = entries[entries.length - 1].y + entries[entries.length - 1].height + 4;
+      const lastE = entries[entries.length - 1];
+      let yBottom = lastE.y + lastE.height + 4;
+      if (elapsedToY && sessionStart != null && lastE.interaction) {
+        const endTs = lastE.interaction.timestamp + (lastE.interaction.timing?.duration || 0);
+        const timeBottom = elapsedToY(endTs - sessionStart);
+        yBottom = Math.max(timeBottom, lastE.y + lastE.height) + 4;
+      }
       const isStreaming = entries.some(e => e.interaction.status === 'streaming');
       gBg.append('rect')
         .attr('class', 'col-bg-rect' + (isStreaming ? ' col-bg-streaming' : ''))
@@ -1765,21 +1806,18 @@
     resetSubagentRegistry();
     stopAllFlowAnimations();
 
-    const visible = state.interactions.filter(i => isVisibleInTimeline(i) && i.timestamp > 0);
+    const visible = state.interactions.filter(i => isVisibleInTimeline(i) && i.timestamp > 0 && !_inflightSet.has(i.id));
     if (visible.length === 0) return;
 
-    // Only render the most recent session cluster — drop interactions separated
-    // by a gap longer than 5 minutes (stale data from previous server runs).
+    // Detect session boundaries (gaps > 5 min) for visual separators
     const SESSION_GAP = 5 * 60 * 1000;
-    let sessionCutoff = 0;
-    for (let i = visible.length - 1; i > 0; i--) {
+    const sessionBoundaries = new Set();
+    for (let i = 1; i < visible.length; i++) {
       if (visible[i].timestamp - visible[i - 1].timestamp > SESSION_GAP) {
-        sessionCutoff = i;
-        break;
+        sessionBoundaries.add(i);
       }
     }
-    const filtered = sessionCutoff > 0 ? visible.slice(sessionCutoff) : visible;
-    if (filtered.length === 0) return;
+    const filtered = visible;
 
     const assignment = buildColumnAssignment(filtered);
     const { columnFor, totalColumns, columnAgents, parallelRegions } = assignment;
@@ -1891,11 +1929,29 @@
     timelineList.appendChild(wrapper);
 
     // Render connectors: backgrounds in svg (behind nodes), curves in svgFg (above nodes)
-    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns);
-    renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns);
+    const connectors = computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart);
+    renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns, compressedY, sessionStart);
 
     // Render time ruler
     renderTimeRuler(svg, layout, sessionStart, totalHeight, breaks, compressedY);
+
+    // Render session boundary separators
+    if (sessionBoundaries.size > 0) {
+      const gSep = svg.select('.tl-connectors');
+      const totalW = D3_CONST.RULER_WIDTH + totalColumns * (colWidth + D3_CONST.COLUMN_GAP);
+      for (const idx of sessionBoundaries) {
+        const itemAbove = layout[idx - 1];
+        const itemBelow = layout[idx];
+        if (!itemAbove || !itemBelow) continue;
+        const sepY = (itemAbove.y + itemAbove.height + itemBelow.y) / 2;
+        gSep.append('line')
+          .attr('class', 'session-separator')
+          .attr('x1', D3_CONST.RULER_WIDTH)
+          .attr('x2', totalW)
+          .attr('y1', sepY)
+          .attr('y2', sepY);
+      }
+    }
 
     // Apply current selection
     d3UpdateSelection(nodesLayer);
@@ -1954,6 +2010,10 @@
       agentId = interaction.subagent?.agentId || resolveHookAgentId(interaction, state.interactions);
     } else {
       agentId = interaction.subagent?.agentId || null;
+    }
+    // PostToolUse/Agent hooks go to column 0
+    if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
+      agentId = null;
     }
 
     let col = 0;
@@ -2038,8 +2098,8 @@
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns);
-    renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns);
+    const connectors = computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart);
+    renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart);
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
 
     // Handle agent close
@@ -2085,6 +2145,109 @@
         stopFlowAnimation(agentId);
       }
     }
+  }
+
+  // --- Footer streaming badges ---
+
+  function _footerBadgeStats(interaction) {
+    const tools = extractToolCalls(interaction);
+    const resp = interaction.response || {};
+    let msgCount = 0;
+    if (resp.sseEvents?.length) {
+      for (const ev of resp.sseEvents) {
+        if (ev.eventType === 'content_block_start' && ev.data?.content_block?.type === 'text') msgCount++;
+      }
+    } else if (resp.body?.content) {
+      msgCount = resp.body.content.filter(b => b.type === 'text').length;
+    }
+    return { msgCount, toolCount: tools.length };
+  }
+
+  function _updateFooterBadgeStats(badge, interaction) {
+    const { msgCount, toolCount } = _footerBadgeStats(interaction);
+    const statsEl = badge.querySelector('.badge-stats');
+    if (statsEl) {
+      const parts = [];
+      if (msgCount > 0) parts.push(`${msgCount} msg`);
+      if (toolCount > 0) parts.push(`${toolCount} tool${toolCount > 1 ? 's' : ''}`);
+      statsEl.textContent = parts.join(', ');
+    }
+    const statusEl = badge.querySelector('.badge-status');
+    if (statusEl) {
+      const status = interaction.status || 'pending';
+      statusEl.textContent = status;
+      statusEl.className = 'badge-status badge-status-' + status;
+    }
+  }
+
+  function addFooterBadge(interaction) {
+    if (_inflightSet.has(interaction.id)) return;
+    _inflightSet.add(interaction.id);
+
+    const container = document.getElementById('timeline-footer-streaming');
+    if (!container) return;
+
+    const badge = document.createElement('div');
+    const statusCls = interaction.status === 'streaming' ? ' is-streaming' : ' is-pending';
+    badge.className = 'footer-streaming-badge' + statusCls;
+    badge.dataset.interactionId = interaction.id;
+
+    const agentLabel = interaction.subagent
+      ? getSubagentLabel(interaction.subagent)
+      : 'main';
+    const agentColor = interaction.subagent?.agentId
+      ? getSubagentColor(interaction.subagent)
+      : 'var(--accent)';
+
+    const status = interaction.status || 'pending';
+    badge.innerHTML =
+      `<span class="badge-agent-dot" style="background:${agentColor}"></span>` +
+      `<span class="badge-label">${escHtml(agentLabel)}</span>` +
+      `<span class="badge-stats"></span>` +
+      `<span class="badge-status badge-status-${status}">${status}</span>` +
+      `<span class="badge-elapsed">0s</span>`;
+
+    badge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      select({ type: 'turn', id: interaction.id }, { userClick: true });
+    });
+
+    container.appendChild(badge);
+
+    const startedAt = interaction.timing?.startedAt || Date.now();
+    const iv = setInterval(() => {
+      const elapsedEl = badge.querySelector('.badge-elapsed');
+      if (elapsedEl) elapsedEl.textContent = formatDuration(Date.now() - startedAt);
+      _updateFooterBadgeStats(badge, interaction);
+    }, 1000);
+    _inflightTimers.set(interaction.id, iv);
+  }
+
+  function removeFooterBadge(id) {
+    if (!_inflightSet.has(id)) return;
+    _inflightSet.delete(id);
+
+    const iv = _inflightTimers.get(id);
+    if (iv != null) { clearInterval(iv); _inflightTimers.delete(id); }
+
+    const container = document.getElementById('timeline-footer-streaming');
+    const badge = container?.querySelector(`[data-interaction-id="${id}"]`);
+    if (badge) {
+      badge.classList.add('animate-out');
+      setTimeout(() => badge.remove(), 300);
+    }
+
+    if (_timelineMode === 'parallel') {
+      setTimeout(() => renderTimelineParallel(), 320);
+    }
+  }
+
+  function clearAllFooterBadges() {
+    for (const iv of _inflightTimers.values()) clearInterval(iv);
+    _inflightSet.clear();
+    _inflightTimers.clear();
+    const container = document.getElementById('timeline-footer-streaming');
+    if (container) container.innerHTML = '';
   }
 
   // === END D3 PARALLEL TIMELINE ===
@@ -2419,8 +2582,20 @@
     if (status === 'streaming' || status === 'pending') {
       const interaction = state.interactions.find(i => i.id === id);
       if (interaction) startDurationTimer(interaction);
+      // Update footer badge streaming state and status text
+      const footerBadge = document.querySelector(`.footer-streaming-badge[data-interaction-id="${id}"]`);
+      if (footerBadge) {
+        footerBadge.classList.toggle('is-pending', status === 'pending');
+        footerBadge.classList.toggle('is-streaming', status === 'streaming');
+        const statusEl = footerBadge.querySelector('.badge-status');
+        if (statusEl) {
+          statusEl.textContent = status;
+          statusEl.className = 'badge-status badge-status-' + status;
+        }
+      }
     } else {
       stopDurationTimer(id);
+      removeFooterBadge(id);
     }
     if (_timelineMode === 'parallel') d3UpdateNodeStatus(id, status);
   }
@@ -3318,8 +3493,17 @@
           ? (!msg.interaction.instanceId || !knownInstances.has(msg.interaction.instanceId))
           : msg.interaction.instanceId === activeInstanceTab;
         if (matchesFilter) {
-          if (_timelineMode === 'parallel') appendToParallelTimeline(msg.interaction);
-          else appendTurnToTimeline(msg.interaction);
+          if (_timelineMode === 'parallel') {
+            const iStatus = msg.interaction.status || 'pending';
+            const isLongLived = !msg.interaction.isHook && !msg.interaction.isMcp;
+            if (isLongLived && (iStatus === 'pending' || iStatus === 'streaming')) {
+              addFooterBadge(msg.interaction);
+            } else {
+              appendToParallelTimeline(msg.interaction);
+            }
+          } else {
+            appendTurnToTimeline(msg.interaction);
+          }
           if (_liveMode) {
             select({ type: 'turn', id: msg.interaction.id });
             scrollTimelineToBottom();
@@ -3372,6 +3556,7 @@
         extTabCounter = 0;
         activeExtTab = null;
         stopAllFlowAnimations();
+        clearAllFooterBadges();
         _d3State = null;
         renderInspectorTabStrip();
         timelineList.innerHTML = '';
