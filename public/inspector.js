@@ -2150,17 +2150,10 @@
   // --- Footer streaming badges ---
 
   function _footerBadgeStats(interaction) {
-    const tools = extractToolCalls(interaction);
-    const resp = interaction.response || {};
-    let msgCount = 0;
-    if (resp.sseEvents?.length) {
-      for (const ev of resp.sseEvents) {
-        if (ev.eventType === 'content_block_start' && ev.data?.content_block?.type === 'text') msgCount++;
-      }
-    } else if (resp.body?.content) {
-      msgCount = resp.body.content.filter(b => b.type === 'text').length;
-    }
-    return { msgCount, toolCount: tools.length };
+    const req = interaction.request || {};
+    const msgCount = req.messages?.length || 0;
+    const toolCount = req.tools?.length || 0;
+    return { msgCount, toolCount };
   }
 
   function _updateFooterBadgeStats(badge, interaction) {
@@ -2213,12 +2206,13 @@
     });
 
     container.appendChild(badge);
+    _updateFooterBadgeStats(badge, interaction);
+    _updateFooterBusyIndicator();
 
     const startedAt = interaction.timing?.startedAt || Date.now();
     const iv = setInterval(() => {
       const elapsedEl = badge.querySelector('.badge-elapsed');
       if (elapsedEl) elapsedEl.textContent = formatDuration(Date.now() - startedAt);
-      _updateFooterBadgeStats(badge, interaction);
     }, 1000);
     _inflightTimers.set(interaction.id, iv);
   }
@@ -2237,8 +2231,29 @@
       setTimeout(() => badge.remove(), 300);
     }
 
+    _updateFooterBusyIndicator();
+
     if (_timelineMode === 'parallel') {
       setTimeout(() => renderTimelineParallel(), 320);
+    }
+  }
+
+  function _updateFooterBusyIndicator() {
+    const container = document.getElementById('timeline-footer-streaming');
+    if (!container) return;
+    let indicator = container.querySelector('.footer-busy-indicator');
+    if (_inflightSet.size > 0) {
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'footer-busy-indicator';
+        indicator.innerHTML =
+          '<span class="busy-dot"></span>' +
+          '<span class="busy-dot"></span>' +
+          '<span class="busy-dot"></span>';
+        container.appendChild(indicator);
+      }
+    } else {
+      if (indicator) indicator.remove();
     }
   }
 
