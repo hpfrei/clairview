@@ -964,33 +964,71 @@
   }
 
   function resolveClosedAgentId(hookInteraction, interactions, hookIdx, activeColumns) {
+    // 1. Direct: hook already has subagent enrichment
+    if (hookInteraction.subagent?.agentId && activeColumns.has(hookInteraction.subagent.agentId)) {
+      return hookInteraction.subagent.agentId;
+    }
+
+    // 2. Match by description from the Agent tool_input against active agents
+    const hookDesc = hookInteraction.request?.tool_input?.description;
+    if (hookDesc) {
+      for (let j = hookIdx - 1; j >= 0; j--) {
+        const prev = interactions[j];
+        const aid = prev.subagent?.agentId;
+        if (aid && activeColumns.has(aid) && prev.subagent?.description === hookDesc) {
+          return aid;
+        }
+      }
+    }
+
+    // 3. Match by toolUseId position within the parent turn's Agent tool calls
     if (hookInteraction.toolUseId) {
-      // Find the parent turn that contains the Agent tool_use matching this hook's toolUseId
       let parentIdx = -1;
+      let agentToolIndex = -1;
       for (let j = hookIdx - 1; j >= 0; j--) {
         const prev = interactions[j];
         if (prev.isHook || prev.isMcp) continue;
         const tools = extractToolCalls(prev);
-        if (tools.some(tc => tc.id === hookInteraction.toolUseId)) { parentIdx = j; break; }
+        const matchIdx = tools.findIndex(tc => tc.id === hookInteraction.toolUseId);
+        if (matchIdx >= 0) {
+          parentIdx = j;
+          agentToolIndex = 0;
+          for (let k = 0; k < matchIdx; k++) {
+            if (tools[k].name === 'Agent') agentToolIndex++;
+          }
+          break;
+        }
       }
-      if (parentIdx >= 0) {
-        // Scan forward from parent to find the subagent spawned by this tool call
+      if (parentIdx >= 0 && agentToolIndex >= 0) {
+        // Find the (agentToolIndex)th unique agent after the parent turn
+        const seenAgentIds = [];
         for (let j = parentIdx + 1; j < hookIdx; j++) {
           const child = interactions[j];
           if (child.isHook || child.isMcp) continue;
           const aid = child.subagent?.agentId;
-          if (aid && activeColumns.has(aid)) return aid;
+          if (aid && !seenAgentIds.includes(aid)) {
+            if (seenAgentIds.length === agentToolIndex) return aid;
+            seenAgentIds.push(aid);
+          }
         }
       }
     }
-    // Fallback: last active agent seen before this hook
-    for (let j = hookIdx - 1; j >= 0; j--) {
-      const prev = interactions[j];
-      if (prev.isHook || prev.isMcp) continue;
-      const aid = prev.subagent?.agentId;
-      if (aid && activeColumns.has(aid)) return aid;
+
+    // 4. Fallback: last active agent seen before this hook (only when single agent)
+    if (activeColumns.size === 1) {
+      for (const [agentId] of activeColumns) return agentId;
     }
     return null;
+  }
+
+  function allocateColumn(freeColumns, activeColumns, nextColumnRef) {
+    // Pop from freeColumns but skip any column still occupied by an active agent
+    const activeCols = new Set(activeColumns.values());
+    while (freeColumns.length > 0) {
+      const col = freeColumns.pop();
+      if (!activeCols.has(col)) return { col, nextColumn: nextColumnRef };
+    }
+    return { col: nextColumnRef, nextColumn: nextColumnRef + 1 };
   }
 
   function buildColumnAssignment(interactions) {
@@ -1016,7 +1054,9 @@
       }
 
       if (agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
-        const col = freeColumns.length > 0 ? freeColumns.pop() : nextColumn++;
+        const alloc = allocateColumn(freeColumns, activeColumns, nextColumn);
+        const col = alloc.col;
+        nextColumn = alloc.nextColumn;
         activeColumns.set(agentId, col);
         historicalColumns.set(agentId, col);
         if (interaction.subagent) {
@@ -1042,7 +1082,7 @@
 
       if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
         const closedAgentId = resolveClosedAgentId(interaction, interactions, idx, activeColumns);
-        if (closedAgentId) {
+        if (closedAgentId && activeColumns.has(closedAgentId)) {
           const closedCol = activeColumns.get(closedAgentId);
           postHookClosedCol.set(interaction.id, closedCol);
           const seg = activeSegments.get(closedAgentId);
@@ -2103,7 +2143,9 @@
     let col = 0;
     if (agentId) {
       if (!ds.activeColumns.has(agentId) && !ds.historicalColumns.has(agentId)) {
-        col = ds.freeColumns.length > 0 ? ds.freeColumns.pop() : ds.nextColumn++;
+        const alloc = allocateColumn(ds.freeColumns, ds.activeColumns, ds.nextColumn);
+        col = alloc.col;
+        ds.nextColumn = alloc.nextColumn;
         ds.activeColumns.set(agentId, col);
         ds.historicalColumns.set(agentId, col);
         if (interaction.subagent) {
@@ -2190,7 +2232,7 @@
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
       const hookIdx = state.interactions.indexOf(interaction);
       const closedAgentId = resolveClosedAgentId(interaction, state.interactions, hookIdx >= 0 ? hookIdx : state.interactions.length - 1, ds.activeColumns);
-      if (closedAgentId) {
+      if (closedAgentId && ds.activeColumns.has(closedAgentId)) {
         stopFlowAnimation(closedAgentId);
         ds.freeColumns.push(ds.activeColumns.get(closedAgentId));
         ds.activeColumns.delete(closedAgentId);
