@@ -1134,22 +1134,27 @@ document.addEventListener('keydown', e => {
   if (!resizer || !timeline) return;
 
   let startX, startW;
+  window.__timelineUserWidth = null;
+  window.__timelineDragging = false;
 
   resizer.addEventListener('mousedown', (e) => {
     e.preventDefault();
     startX = e.clientX;
     startW = timeline.offsetWidth;
+    window.__timelineDragging = true;
     resizer.classList.add('dragging');
     document.addEventListener('mousemove', onDrag);
     document.addEventListener('mouseup', onUp);
   });
 
   function onDrag(e) {
-    const w = startW + (e.clientX - startX);
-    timeline.style.width = Math.max(140, w) + 'px';
+    const w = Math.max(140, startW + (e.clientX - startX));
+    timeline.style.width = w + 'px';
+    window.__timelineUserWidth = w;
   }
 
   function onUp() {
+    window.__timelineDragging = false;
     resizer.classList.remove('dragging');
     document.removeEventListener('mousemove', onDrag);
     document.removeEventListener('mouseup', onUp);

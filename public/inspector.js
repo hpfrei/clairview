@@ -369,9 +369,20 @@
           knownInstances.delete(id);
           sendWs({ type: 'inspector:clearInstances', instanceIds: [id] });
           if (activeInstanceTab === id) {
-            const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value
-              : hasOrphanInteractions() ? 'all' : 'all';
-            switchInstanceTab(fallback);
+            if (knownInstances.size > 0) {
+              switchInstanceTab(knownInstances.keys().next().value);
+            } else if (hasOrphanInteractions()) {
+              switchInstanceTab('all');
+            } else {
+              activeInstanceTab = 'all';
+              state.selection = null;
+              document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
+              detailContent.classList.add('hidden');
+              emptyState.classList.remove('hidden');
+              renderInspectorTabStrip();
+              renderTimelineActive();
+              updateStats();
+            }
           } else renderInspectorTabStrip();
         }
         return;
@@ -1321,7 +1332,10 @@
           .attr('height', c.height)
           .attr('rx', 6).attr('ry', 6)
           .attr('fill', c.color)
-          .attr('opacity', 0.08);
+          .attr('fill-opacity', 0.08)
+          .attr('stroke', c.color)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-opacity', 0.35);
       } else if (c.type === 'fork') {
         gFg.append('path')
           .attr('class', 'connector-path connector-fork')
@@ -1425,7 +1439,12 @@
     const aside = document.getElementById('timeline');
     if (aside) {
       const neededWidth = D3_CONST.RULER_WIDTH + totalColumns * colWidth + (totalColumns - 1) * D3_CONST.COLUMN_GAP + 24;
-      aside.style.width = neededWidth + 'px';
+      aside.style.minWidth = neededWidth + 'px';
+      const userW = window.__timelineUserWidth;
+      if (!userW || neededWidth > userW) {
+        aside.style.width = neededWidth + 'px';
+        window.__timelineUserWidth = null;
+      }
     }
 
     const { layout, totalHeight, sessionStart, breaks, compressedY } = wl.computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt);
@@ -1602,6 +1621,7 @@
     if (!_d3ResizeObserver) {
       _d3ResizeObserver = new ResizeObserver(() => {
         if (_timelineMode !== 'parallel' || !_d3State) return;
+        if (window.__timelineDragging) return;
         _d3ResizeDebounce = _d3ResizeDebounce || requestAnimationFrame(() => {
           _d3ResizeDebounce = null;
           renderTimelineParallel();
@@ -3260,6 +3280,12 @@
         renderInspectorTabStrip();
         renderTimelineActive();
         updateStats();
+        if (state.selection && !state.interactions.some(i => i.id === state.selection.id)) {
+          state.selection = null;
+          document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
+          detailContent.classList.add('hidden');
+          emptyState.classList.remove('hidden');
+        }
         break;
       }
 

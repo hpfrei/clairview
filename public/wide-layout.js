@@ -615,7 +615,7 @@
         connectors.push({
           type: 'fork', col: seg.col,
           path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
-          color, opacity: 0.6, strokeWidth: 1.5, agentId: seg.agentId,
+          color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
         });
 
         // Merge arrow: from bgBottom to the matching PostToolUse/Agent hook
@@ -639,7 +639,7 @@
           connectors.push({
             type: 'merge', col: seg.col,
             path: `M${bgCenterX},${bgBottom} C${bgCenterX - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
-            color, opacity: 0.5, strokeWidth: 1.5, agentId: seg.agentId,
+            color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
           });
         }
 
@@ -682,7 +682,7 @@
         connectors.push({
           type: 'fork', col,
           path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
-          color, opacity: 0.6, strokeWidth: 1.5, agentId: agent?.agentId,
+          color, opacity: 0.6, strokeWidth: 2.5, agentId: agent?.agentId,
         });
       }
     }
