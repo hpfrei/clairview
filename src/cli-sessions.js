@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const CliSession = require('./cli-session');
-const { readJSON, writeJSON, DATA_HOME } = require('./utils');
+const { readJSON, writeJSON, DATA_HOME, PACKAGE_ROOT } = require('./utils');
 
 const HISTORY_FILE = path.join(DATA_HOME, 'data', 'cli-history.json');
 
@@ -71,7 +71,7 @@ class CliSessionManager {
   _onSessionExit(tabId) {
     const session = this.sessions.get(tabId);
     if (session?.sessId && session.cwd) {
-      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
+      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     }
     this.sessions.delete(tabId);
     this.broadcastTabs();
@@ -80,7 +80,7 @@ class CliSessionManager {
   saveAllToHistory() {
     for (const [, session] of this.sessions) {
       if (session?.sessId && session.cwd) {
-        this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
+        this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
       }
     }
   }
@@ -101,6 +101,7 @@ class CliSessionManager {
       title: entry.title || null,
       settings: entry.settings || {},
       isolated: entry.isolated === true,
+      autoMemory: entry.autoMemory === true,
       savedAt: Date.now(),
     });
     writeJSON(HISTORY_FILE, deduped);
@@ -158,14 +159,14 @@ class CliSessionManager {
     return this.sessions.get(tabId) || null;
   }
 
-  spawn(tabId, cwd, cols, rows, { resumeSessionId, isolated } = {}) {
+  spawn(tabId, cwd, cols, rows, { resumeSessionId, isolated, autoMemory } = {}) {
     const session = this.getOrCreate(tabId);
     if (session.sessId && session.cwd) {
-      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
+      this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     }
-    session.spawn(cwd, cols, rows, { resumeSessionId, isolated });
+    session.spawn(cwd, cols, rows, { resumeSessionId, isolated, autoMemory });
     // Persist immediately so session survives ungraceful server death
-    this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
+    this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     this.broadcastTabs();
   }
 
@@ -199,6 +200,10 @@ class CliSessionManager {
       if (session.sessId && session.cwd) {
         this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated });
       }
+      if (session.sessId) {
+        this.store.deleteSessionData(session.sessId);
+        try { fs.rmSync(path.join(PACKAGE_ROOT, 'uploads', session.sessId), { recursive: true, force: true }); } catch {}
+      }
       session.kill();
       this.sessions.delete(tabId);
     }
@@ -218,6 +223,7 @@ class CliSessionManager {
         instanceId: session.instanceId,
         sessId: session.sessId,
         isolated: session.isolated,
+        autoMemory: session.autoMemory,
         status: session.status,
         cwd: session.cwd,
         title: session.title,

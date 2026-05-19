@@ -1341,12 +1341,24 @@ jq -r '.tool_input.command' |
           <button class="dir-picker-new-cancel" id="dirPickerNewCancel">&times;</button>
         </div>
       </div>
+      <div class="dir-picker-options">
+        <label class="dir-picker-option">
+          <input type="checkbox" id="dirPickerIsolated">
+          <span class="dir-picker-option-text">
+            <span class="dir-picker-option-label">Isolated</span>
+            <span class="dir-picker-option-help">Store config in a local .claude directory inside the project instead of ~/.claude</span>
+          </span>
+        </label>
+        <label class="dir-picker-option">
+          <input type="checkbox" id="dirPickerAutoMemory">
+          <span class="dir-picker-option-text">
+            <span class="dir-picker-option-label">Auto-memory</span>
+            <span class="dir-picker-option-help">Allow Claude to read and write CLAUDE.md project memory files</span>
+          </span>
+        </label>
+      </div>
       <div class="cap-modal-footer">
         <button class="dir-picker-new-btn" id="dirPickerNewBtn">+ New Folder</button>
-        <label class="dir-picker-isolated" id="dirPickerIsolatedLabel">
-          <input type="checkbox" id="dirPickerIsolated">
-          Isolated
-        </label>
         <span style="flex:1"></span>
         <button class="cap-cancel-btn" id="dirPickerCancelBtn">Cancel</button>
         <button class="cap-save-btn" id="dirPickerSelectBtn">Select</button>

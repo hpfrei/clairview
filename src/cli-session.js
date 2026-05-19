@@ -43,12 +43,13 @@ class CliSession {
     return this.status === 'running' && this.pty !== null;
   }
 
-  spawn(cwd, cols, rows, { resumeSessionId, isolated } = {}) {
+  spawn(cwd, cols, rows, { resumeSessionId, isolated, autoMemory } = {}) {
     this._spawnGen++;
     if (this.running) this.kill();
 
     this.cwd = cwd;
     this.isolated = isolated === true;
+    this.autoMemory = autoMemory === true;
     this.status = 'running';
 
     if (resumeSessionId) {
@@ -106,6 +107,7 @@ class CliSession {
       dashboardPort: this._dashboardPort,
       authToken: this._authToken,
       isolated: this.isolated,
+      autoMemory: this.autoMemory,
     });
 
     this._scrollback = '';
@@ -137,6 +139,7 @@ class CliSession {
       title: this.title,
       settings: this.settings,
       isolated: this.isolated,
+      autoMemory: this.autoMemory,
     });
   }
 

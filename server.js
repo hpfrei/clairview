@@ -288,17 +288,26 @@ dashboardApp.post('/api/hook-report', (req, res) => {
     const hookData = typeof req.body.hookData === 'string' ? JSON.parse(req.body.hookData) : req.body.hookData;
     const id = `hook-${Date.now()}-${++hookSeq}`;
     const hookTs = hookData.timestamp || Date.now();
+    const hookEvent = hookData.hook_event_name || 'unknown';
     const interaction = {
       id, timestamp: hookTs, isHook: true,
       instanceId: req.body.instanceId || null,
-      hookEvent: hookData.hook_event_name || 'unknown',
+      hookEvent,
       toolName: hookData.tool_name || null,
       toolUseId: hookData.tool_use_id || null,
+      hookAgentId: hookData.agent_id || null,
       request: hookData,
       response: { status: 200, body: hookData.tool_response || null },
       timing: { startedAt: hookTs, duration: hookData.duration_ms || 0 },
       status: 'complete', isStreaming: false,
     };
+    if ((hookEvent === 'SubagentStart' || hookEvent === 'SubagentStop') && hookData.agent_id) {
+      interaction.subagent = {
+        agentId: hookData.agent_id,
+        agentType: hookData.agent_type || 'agent',
+        description: hookData.description || null,
+      };
+    }
     store.add(interaction);
     store.save(interaction.id);
     broadcaster.broadcast({ type: 'interaction:start', interaction });
@@ -372,6 +381,10 @@ dashboardApp.use(express.static(path.join(__dirname, 'public')));
 // Serve chat outputs at /outputs (directory auto-created)
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
+
+// CLI file uploads (paste / drag-drop)
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+ensureDir(UPLOADS_DIR);
 
 function rewriteGitUrl(url, auth) {
   const parsed = new URL(url);

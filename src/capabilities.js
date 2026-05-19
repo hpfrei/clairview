@@ -15,12 +15,35 @@ const KNOWN_TOOLS = [
 ];
 
 const HOOK_EVENTS = [
-  'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
-  'SessionStart', 'Notification', 'PreCompact', 'PostCompact',
+  // Session
+  'SessionStart', 'Setup', 'SessionEnd',
+  // Prompt
+  'UserPromptSubmit', 'UserPromptExpansion',
+  // Tool
+  'PreToolUse', 'PermissionRequest', 'PermissionDenied',
+  'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
+  // Stop
+  'Stop', 'StopFailure',
+  // Subagent / Task
+  'SubagentStart', 'SubagentStop', 'TeammateIdle',
+  'TaskCreated', 'TaskCompleted',
+  // Config / Environment
+  'InstructionsLoaded', 'ConfigChange', 'CwdChanged', 'FileChanged',
+  // Worktree
+  'WorktreeCreate', 'WorktreeRemove',
+  // Compaction
+  'PreCompact', 'PostCompact',
+  // MCP Elicitation
+  'Elicitation', 'ElicitationResult',
+  // Notification
+  'Notification',
 ];
 
 // Events that support a matcher (tool name filter)
-const MATCHER_EVENTS = ['PreToolUse', 'PostToolUse'];
+const MATCHER_EVENTS = [
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
+  'PermissionRequest', 'PermissionDenied',
+];
 
 const KNOWN_SKILLS = [
   { name: 'commit', description: 'Create a git commit with a well-crafted message' },
@@ -255,7 +278,7 @@ function isReporterHook(h) {
 function ensureHookReporters(cwd, reporterPath) {
   const settings = readSettingsLocal(cwd);
   if (!settings.hooks) settings.hooks = {};
-  const events = ['PreToolUse', 'PostToolUse'];
+  const events = HOOK_EVENTS;
   let changed = false;
   for (const event of events) {
     if (!settings.hooks[event]) settings.hooks[event] = [];
@@ -266,15 +289,23 @@ function ensureHookReporters(cwd, reporterPath) {
       settings.hooks[event] = entries.filter(e => !legacy.includes(e));
       changed = true;
     }
-    // Check if current reporter already exists
-    const hasReporter = settings.hooks[event].some(e =>
-      e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
+    // Check if current reporter already exists with the correct path
+    const expectedCmd = `node "${reporterPath}" # ${HOOK_REPORTER_MARKER}`;
+    const hasCorrectReporter = settings.hooks[event].some(e =>
+      e.hooks?.some(h => h.command === expectedCmd)
     );
-    if (!hasReporter) {
+    if (!hasCorrectReporter) {
+      // Remove stale reporters with correct marker but wrong path
+      const stale = settings.hooks[event].filter(e =>
+        e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
+      );
+      if (stale.length > 0) {
+        settings.hooks[event] = settings.hooks[event].filter(e => !stale.includes(e));
+      }
       settings.hooks[event].push({
         hooks: [{
           type: 'command',
-          command: `node "${reporterPath}" # ${HOOK_REPORTER_MARKER}`,
+          command: expectedCmd,
           timeout: 5,
         }],
       });

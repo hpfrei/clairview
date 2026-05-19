@@ -335,7 +335,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       id: generateId(),
       timestamp: Date.now(),
       endpoint: '/v1/messages',
-      disableAutoMemory: true,
+      disableAutoMemory: !instCtx?.autoMemory,
       instanceId: req.instanceId || null,
       stepId: instCtx?.stepId || null,
       runId: instCtx?.runId || null,

@@ -168,7 +168,7 @@
 
   function buildClampGroups(interactions, columnFor) {
     const CLAMP_WINDOW = 5000;
-    const CLAMP_EVENTS = /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure)$/i;
+    const CLAMP_EVENTS = /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure|TaskCreated|TaskCompleted)$/i;
 
     for (const interaction of interactions) {
       if (interaction._clampedHooks) delete interaction._clampedHooks;
@@ -495,7 +495,9 @@
     const tools = extractToolCalls(interaction);
     const foldedCount = interaction._foldedPreHooks?.length || 0;
     const clampedCount = interaction._clampedHooks?.length || 0;
-    return D3_CONST.MIN_ENTRY_HEIGHT + (tools.length + foldedCount + clampedCount) * D3_CONST.TOOL_HEIGHT;
+    const clampedRows = clampedCount > 3 ? 1 : clampedCount;
+    const clampedPad = clampedCount > 0 ? 4 : 0;
+    return D3_CONST.MIN_ENTRY_HEIGHT + (tools.length + foldedCount + clampedRows) * D3_CONST.TOOL_HEIGHT + clampedPad;
   }
 
   // --- Column width ---

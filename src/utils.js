@@ -156,7 +156,7 @@ function prepareLocalConfigDir(cwd) {
   return localConfigDir;
 }
 
-function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated }) {
+function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
@@ -165,13 +165,13 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
     delete env.ANTHROPIC_BASE_URL;
   }
   if (isolated !== false) env.CLAUDE_CONFIG_DIR = prepareLocalConfigDir(cwd);
-  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  if (!autoMemory) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
   env.VISTACLAIR_INSTANCE_ID = instanceId;
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
-  _activeProcesses.set(instanceId, { proc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
+  _activeProcesses.set(instanceId, { proc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: { ...sourceContext, autoMemory: autoMemory === true }, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
   proc.on('exit', () => {
     const entry = _activeProcesses.get(instanceId);
@@ -188,7 +188,7 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
 /**
  * Spawn `claude` in interactive PTY mode with the proxy URL injected.
  */
-function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated }) {
+function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated, autoMemory }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
   const env = { ...process.env, ...extraEnv };
   if (proxyPort) {
@@ -197,7 +197,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
     delete env.ANTHROPIC_BASE_URL;
   }
   if (isolated !== false) env.CLAUDE_CONFIG_DIR = prepareLocalConfigDir(cwd);
-  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  if (!autoMemory) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
   env.VISTACLAIR_INSTANCE_ID = instanceId;
@@ -210,7 +210,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
     env,
   });
 
-  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: sourceContext || null, cwd: cwd || null });
+  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: { ...sourceContext, autoMemory: autoMemory === true }, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
   ptyProc.onExit(() => {
     const entry = _activeProcesses.get(instanceId);

@@ -1090,22 +1090,67 @@
     }
 
     if (interaction._clampedHooks) {
-      for (const hookInt of interaction._clampedHooks) {
-        const hookEl = document.createElement('div');
-        hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
-        hookEl.dataset.id = hookInt.id;
-        const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
-        hookEl.innerHTML = `
+      const hooks = interaction._clampedHooks;
+      if (hooks.length > 3) {
+        const clampGroup = document.createElement('div');
+        clampGroup.className = 'clamped-hooks-group collapsed';
+
+        const summaryEl = document.createElement('div');
+        summaryEl.className = 'timeline-entry tool-entry clamped-hooks-summary';
+        summaryEl.innerHTML = `
           <span class="tool-connector hook-connector"></span>
-          <span class="hook-arrow">${arrow}</span>
-          <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
-          <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
+          <span class="hook-arrow clamped-chevron">▸</span>
+          <span class="hook-entry-name">${hooks.length} hooks</span>
         `;
-        hookEl.addEventListener('click', (e) => {
+        summaryEl.addEventListener('click', (e) => {
           e.stopPropagation();
-          select({ type: 'turn', id: hookInt.id }, { userClick: true });
+          const wasCollapsed = clampGroup.classList.contains('collapsed');
+          clampGroup.classList.toggle('collapsed');
+          const groupEl = summaryEl.closest('.turn-group');
+          if (groupEl) {
+            const delta = (hooks.length - 1) * 24;
+            const h = parseFloat(groupEl.style.height) || 0;
+            groupEl.style.height = (wasCollapsed ? h + delta : h - delta) + 'px';
+          }
         });
-        toolsContainer.appendChild(hookEl);
+        clampGroup.appendChild(summaryEl);
+
+        for (const hookInt of hooks) {
+          const hookEl = document.createElement('div');
+          hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
+          hookEl.dataset.id = hookInt.id;
+          const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
+          hookEl.innerHTML = `
+            <span class="tool-connector hook-connector"></span>
+            <span class="hook-arrow">${arrow}</span>
+            <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
+            <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
+          `;
+          hookEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            select({ type: 'turn', id: hookInt.id }, { userClick: true });
+          });
+          clampGroup.appendChild(hookEl);
+        }
+        toolsContainer.appendChild(clampGroup);
+      } else {
+        for (const hookInt of hooks) {
+          const hookEl = document.createElement('div');
+          hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
+          hookEl.dataset.id = hookInt.id;
+          const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
+          hookEl.innerHTML = `
+            <span class="tool-connector hook-connector"></span>
+            <span class="hook-arrow">${arrow}</span>
+            <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
+            <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
+          `;
+          hookEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            select({ type: 'turn', id: hookInt.id }, { userClick: true });
+          });
+          toolsContainer.appendChild(hookEl);
+        }
       }
     }
 
@@ -1736,7 +1781,7 @@
     }
 
     // Clamp candidates: re-render so they collapse into the anchor turn
-    if (interaction.isHook && /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure)$/i.test(interaction.hookEvent)
+    if (interaction.isHook && /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure|TaskCreated|TaskCompleted)$/i.test(interaction.hookEvent)
         && interaction.toolName !== 'Agent') {
       const lastItem = ds.layout[ds.layout.length - 1];
       if (lastItem && !lastItem.interaction.isHook && !lastItem.interaction.isMcp

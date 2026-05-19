@@ -16,7 +16,7 @@
   function _saveOpenTabs() {
     const entries = [];
     for (const [tabId, tab] of tabs) {
-      entries.push({ tabId, cwd: tab.cwd, title: tab.title, settings: tab.settings, instanceId: tab.instanceId, sessId: tab.sessId, isolated: tab.isolated });
+      entries.push({ tabId, cwd: tab.cwd, title: tab.title, settings: tab.settings, instanceId: tab.instanceId, sessId: tab.sessId, isolated: tab.isolated, autoMemory: tab.autoMemory });
     }
     try { sessionStorage.setItem('cli-open-tabs', JSON.stringify(entries)); } catch {}
   }
@@ -26,6 +26,80 @@
 
   function getTheme() {
     return { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' };
+  }
+
+  function _blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function _fileToDataURL(file) {
+    return _blobToDataURL(file);
+  }
+
+  async function handleClipboardPaste(tabId) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) sendWs({ type: 'cli:input', tabId, data: text });
+    } catch {}
+  }
+
+  function _setupDropOverlay(wrap, tabId) {
+    let dragCounter = 0;
+    let overlay = null;
+
+    function showOverlay() {
+      if (overlay) return;
+      overlay = document.createElement('div');
+      overlay.className = 'cli-drop-overlay';
+      overlay.textContent = 'Drop files here to upload';
+      wrap.appendChild(overlay);
+    }
+
+    function hideOverlay() {
+      if (overlay) { overlay.remove(); overlay = null; }
+    }
+
+    wrap.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      if (dragCounter === 1) showOverlay();
+    }, true);
+
+    wrap.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }, true);
+
+    wrap.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) { dragCounter = 0; hideOverlay(); }
+    }, true);
+
+    wrap.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter = 0;
+      hideOverlay();
+      const files = [...(e.dataTransfer.files || [])];
+      if (files.length === 0 && e.dataTransfer.items) {
+        for (const item of e.dataTransfer.items) {
+          if (item.kind === 'file') {
+            const f = item.getAsFile();
+            if (f) files.push(f);
+          }
+        }
+      }
+      for (const file of files) {
+        const dataUrl = await _fileToDataURL(file);
+        sendWs({ type: 'cli:uploadFile', tabId, data: dataUrl, filename: file.name });
+      }
+    }, true);
   }
 
   function createTab(tabId) {
@@ -49,6 +123,34 @@
 
     terminal.open(wrap);
 
+    terminal.attachCustomKeyEventHandler(ev => {
+      if (ev.type === 'keydown' && ev.key === 'v' && (ev.ctrlKey || ev.metaKey) && !ev.shiftKey) {
+        handleClipboardPaste(tabId);
+        return false;
+      }
+      return true;
+    });
+
+    wrap.addEventListener('paste', async (e) => {
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (const item of items) {
+          if (item.type.startsWith('image/')) {
+            e.preventDefault();
+            e.stopPropagation();
+            const blob = item.getAsFile();
+            if (blob) {
+              const dataUrl = await _blobToDataURL(blob);
+              const ext = item.type === 'image/jpeg' ? '.jpg' : '.png';
+              const filename = `paste-${Date.now()}${ext}`;
+              sendWs({ type: 'cli:uploadFile', tabId, data: dataUrl, filename });
+            }
+            return;
+          }
+        }
+      }
+    }, true);
+
     terminal.onData(data => {
       sendWs({ type: 'cli:input', tabId, data });
     });
@@ -56,6 +158,8 @@
     terminal.onResize(({ cols, rows }) => {
       sendWs({ type: 'cli:resize', tabId, cols, rows });
     });
+
+    _setupDropOverlay(wrap, tabId);
 
     const tab = { terminal, fitAddon, wrap, cwd: null, title: null, settings: {}, status: 'idle' };
     tabs.set(tabId, tab);
@@ -268,6 +372,7 @@
       if (!picked) return;
       state._pendingCliCwd = picked.dir;
       state._pendingCliIsolated = picked.isolated;
+      state._pendingCliAutoMemory = picked.autoMemory;
       sendWs({ type: 'cli:newTab' });
     });
     menu.appendChild(newItem);
@@ -308,6 +413,12 @@
         badge.className = 'cli-new-menu-badge';
         badge.textContent = sess.isolated === true ? 'isolated' : 'shared';
         metaRow.appendChild(badge);
+        if (sess.autoMemory === true) {
+          const memBadge = document.createElement('span');
+          memBadge.className = 'cli-new-menu-badge';
+          memBadge.textContent = 'memory';
+          metaRow.appendChild(memBadge);
+        }
         if (mappings) {
           const mapSpan = document.createElement('span');
           mapSpan.className = 'cli-new-menu-badge cli-new-menu-badge-model';
@@ -341,6 +452,7 @@
           state._pendingCliSettings = sess.settings;
           state._pendingCliTitle = sess.title || null;
           state._pendingCliIsolated = sess.isolated === true;
+          state._pendingCliAutoMemory = sess.autoMemory === true;
           sendWs({ type: 'cli:newTab' });
         });
         menu.appendChild(item);
@@ -522,8 +634,9 @@
       newNameInput.removeEventListener('keydown', onNewKey);
     }
     const isolatedCheckbox = document.getElementById('dirPickerIsolated');
+    const autoMemoryCheckbox = document.getElementById('dirPickerAutoMemory');
     function onClose() { cleanup(); resolve(null); }
-    function onSelect() { cleanup(); resolve({ dir: currentDir, isolated: isolatedCheckbox.checked }); }
+    function onSelect() { cleanup(); resolve({ dir: currentDir, isolated: isolatedCheckbox.checked, autoMemory: autoMemoryCheckbox.checked }); }
 
     closeBtn.addEventListener('click', onClose);
     cancelBtn.addEventListener('click', onClose);
@@ -629,6 +742,7 @@
             tab.sessId = msg.instanceId.replace(/^cli-/, '');
           }
           if (msg.isolated != null) tab.isolated = msg.isolated;
+          if (msg.autoMemory != null) tab.autoMemory = msg.autoMemory;
           if (msg.title) tab.title = msg.title;
           tab.settings = msg.settings || {};
           _saveOpenTabs();
@@ -657,7 +771,7 @@
           if (respawnEntry.title) sendWs({ type: 'cli:rename', tabId, title: respawnEntry.title });
           if (respawnEntry.settings) sendWs({ type: 'cli:settings', tabId, settings: respawnEntry.settings });
           const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          sendWs({ type: 'cli:spawn', tabId, cwd: respawnEntry.cwd, cols, rows, isolated: respawnEntry.isolated === true, resumeSessionId: respawnEntry.sessId });
+          sendWs({ type: 'cli:spawn', tabId, cwd: respawnEntry.cwd, cols, rows, isolated: respawnEntry.isolated === true, autoMemory: respawnEntry.autoMemory === true, resumeSessionId: respawnEntry.sessId });
           break;
         }
 
@@ -666,11 +780,13 @@
         const pendingSettings = state._pendingCliSettings;
         const pendingTitle = state._pendingCliTitle || null;
         const pendingIsolated = state._pendingCliIsolated;
+        const pendingAutoMemory = state._pendingCliAutoMemory;
         state._pendingCliCwd = null;
         state._pendingCliResumeSessionId = null;
         state._pendingCliSettings = null;
         state._pendingCliTitle = null;
         state._pendingCliIsolated = null;
+        state._pendingCliAutoMemory = null;
         if (pendingTitle) {
           const tab = tabs.get(tabId);
           if (tab) tab.title = pendingTitle;
@@ -683,10 +799,11 @@
           const tab = tabs.get(tabId);
           if (tab) {
             tab.isolated = pendingIsolated === true;
+            tab.autoMemory = pendingAutoMemory === true;
             if (pendingResumeSessionId) tab.sessId = pendingResumeSessionId;
           }
           const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, isolated: pendingIsolated === true };
+          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, isolated: pendingIsolated === true, autoMemory: pendingAutoMemory === true };
           if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
           sendWs(spawnMsg);
         }
@@ -701,6 +818,9 @@
           state._showNewMenu = false;
           showNewMenu(msg.sessions || []);
         }
+        break;
+      }
+      case 'cli:fileUploaded': {
         break;
       }
     }
@@ -753,6 +873,7 @@
       if (st.instanceId) tab.instanceId = st.instanceId;
       if (st.sessId) tab.sessId = st.sessId;
       if (st.isolated != null) tab.isolated = st.isolated;
+      if (st.autoMemory != null) tab.autoMemory = st.autoMemory;
     }
     if (!activeTabId && tabs.size > 0) {
       const first = Array.from(tabs.keys())[0];

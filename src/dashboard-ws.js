@@ -1,6 +1,7 @@
+const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME } = require('./utils');
+const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME, PACKAGE_ROOT, ensureDir } = require('./utils');
 const createProxyRouter = require('./proxy');
 const { pendingQuestions, clearPendingQuestionsForTab } = createProxyRouter;
 const caps = require('./capabilities');
@@ -303,12 +304,39 @@ class DashboardBroadcaster {
                 const session = this.cliSessionManager.getOrCreate(msg.tabId);
                 session.spawnShell(msg.cwd, msg.cols || 80, msg.rows || 24);
               } else {
-                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined, isolated: msg.isolated === true });
+                this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined, isolated: msg.isolated === true, autoMemory: msg.autoMemory === true });
               }
             }
           } else if (msg.type === 'cli:input') {
             if (this.cliSessionManager && msg.tabId) {
               this.cliSessionManager.write(msg.tabId, msg.data || '');
+            }
+          } else if (msg.type === 'cli:uploadFile') {
+            if (this.cliSessionManager && msg.tabId && msg.data) {
+              try {
+                const session = this.cliSessionManager.get(msg.tabId);
+                const subfolder = session?.sessId || msg.tabId;
+                const uploadsDir = path.join(DATA_HOME, 'interactions', subfolder, 'uploads');
+                ensureDir(uploadsDir);
+
+                const match = (msg.data || '').match(/^data:([^;]*);base64,(.+)$/);
+                if (!match) throw new Error('Invalid data URL');
+                const buffer = Buffer.from(match[2], 'base64');
+                let safeName = (msg.filename || 'file').replace(/[/\\]/g, '_').replace(/[^a-zA-Z0-9._-]/g, '_');
+                if (safeName.length > 200) safeName = safeName.slice(0, 200);
+                const filePath = path.join(uploadsDir, safeName);
+                fs.writeFileSync(filePath, buffer);
+
+                const ext = path.extname(safeName).toLowerCase();
+                const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext);
+                const injection = isImage
+                  ? `the image at ${filePath} must be read and contains: `
+                  : `the file at ${filePath} has been provided and `;
+                this.cliSessionManager.write(msg.tabId, injection);
+                ws.send(JSON.stringify({ type: 'cli:fileUploaded', tabId: msg.tabId, filePath }));
+              } catch (err) {
+                ws.send(JSON.stringify({ type: 'cli:fileUploaded', tabId: msg.tabId, error: err.message }));
+              }
             }
           } else if (msg.type === 'cli:resize') {
             if (this.cliSessionManager && msg.tabId) {

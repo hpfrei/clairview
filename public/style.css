@@ -919,6 +919,24 @@ aside#timeline {
 .clamped-hook-entry .hook-entry-name { color: var(--magenta, #c084fc); }
 .clamped-hook-entry .hook-arrow { color: var(--magenta, #c084fc); font-size: 12px; }
 .clamped-hook-entry .tool-entry-summary { color: var(--text-dim); font-size: 11px; }
+.clamped-hooks-group.collapsed .clamped-hook-entry { display: none; }
+.clamped-hooks-summary { cursor: pointer; }
+.clamped-hooks-summary .hook-entry-name { color: var(--magenta, #c084fc); font-size: 11px; }
+.clamped-hooks-summary .hook-connector { background: var(--magenta, #c084fc); }
+.clamped-chevron { transition: transform 0.15s ease; }
+.clamped-hooks-group:not(.collapsed) .clamped-chevron { transform: rotate(90deg); }
+.turn-group:has(.clamped-hooks-group:not(.collapsed)) {
+  z-index: 50;
+  overflow: visible;
+}
+.clamped-hooks-group:not(.collapsed) {
+  background: var(--bg-surface, #1a1b26);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.4);
+  padding-bottom: 4px;
+  margin: 2px -4px 0;
+}
 .tag-hook { color: var(--magenta, #c084fc); background: color-mix(in srgb, var(--magenta, #c084fc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--magenta, #c084fc) 20%, transparent); }
 /* Endpoint call entries (count_tokens etc.) */
 .endpoint-call-group {
@@ -3949,8 +3967,8 @@ footer {
 /* ── Directory Picker Modal ──────────────────────────────────────── */
 
 .dir-picker-modal {
-  max-width: 520px !important;
-  max-height: 70vh !important;
+  max-width: 600px !important;
+  max-height: 75vh !important;
 }
 
 .dir-picker-breadcrumbs {
@@ -4102,15 +4120,50 @@ footer {
 }
 .dir-picker-new-btn:hover { background: var(--bg-selected); }
 
-.dir-picker-isolated {
+.dir-picker-options {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-dim);
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.dir-picker-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
   cursor: pointer;
   user-select: none;
-  margin-left: 8px;
+  transition: background 0.1s;
+}
+.dir-picker-option:hover {
+  background: var(--bg-hover);
+}
+.dir-picker-option input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.dir-picker-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dir-picker-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.dir-picker-option-help {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.35;
 }
 
 /* ── Chat Files Panel (overlay) ───────────────── */

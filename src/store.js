@@ -313,6 +313,7 @@ class InteractionStore {
       interaction.hookEvent = data.hookEvent || 'unknown';
       interaction.toolName = data.toolName || null;
       interaction.toolUseId = data.toolUseId || null;
+      interaction.hookAgentId = data.hookAgentId || null;
     }
     if (data.isMcp) {
       interaction.isMcp = true;
@@ -445,6 +446,7 @@ class InteractionStore {
       out.hookEvent = interaction.hookEvent;
       out.toolName = interaction.toolName || undefined;
       out.toolUseId = interaction.toolUseId || undefined;
+      out.hookAgentId = interaction.hookAgentId || undefined;
     }
     if (interaction.isMcp) {
       out.isMcp = true;
