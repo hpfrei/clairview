@@ -1089,6 +1089,26 @@
       }
     }
 
+    if (interaction._clampedHooks) {
+      for (const hookInt of interaction._clampedHooks) {
+        const hookEl = document.createElement('div');
+        hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
+        hookEl.dataset.id = hookInt.id;
+        const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
+        hookEl.innerHTML = `
+          <span class="tool-connector hook-connector"></span>
+          <span class="hook-arrow">${arrow}</span>
+          <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
+          <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
+        `;
+        hookEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          select({ type: 'turn', id: hookInt.id }, { userClick: true });
+        });
+        toolsContainer.appendChild(hookEl);
+      }
+    }
+
     if (interaction.status === 'pending' || interaction.status === 'streaming') {
       startDurationTimer(interaction);
     }
@@ -1099,9 +1119,18 @@
   function buildD3HookEl(interaction) {
     const hookEvent = interaction.hookEvent || 'Hook';
     const toolName = interaction.toolName || '';
-    const arrow = /post/i.test(hookEvent) ? '←' : '→';
     const subType = interaction.subagent?.agentType;
-    const label = subType ? `${toolName} (${subType})` : toolName;
+    const isToolHook = /PreToolUse|PostToolUse|PermissionReq|PermissionDen|PostToolBatch|PostToolUseFailure/i.test(hookEvent);
+    const isSubagentHook = /SubagentStart|SubagentStop/i.test(hookEvent);
+    let nameLabel;
+    if (isToolHook) {
+      nameLabel = subType ? `${toolName} (${subType})` : toolName;
+    } else if (isSubagentHook && subType) {
+      nameLabel = subType;
+    } else {
+      nameLabel = toolName || interaction.subagent?.description || '';
+    }
+    const arrow = /Stop|End$|Remove|Completed/i.test(hookEvent) ? '◼' : '▸';
 
     const group = document.createElement('div');
     group.className = `turn-group hook-call-group status-${interaction.status || 'complete'}`;
@@ -1113,8 +1142,8 @@
 
     el.innerHTML = `
       <span class="hook-arrow">${arrow}</span>
-      <span class="hook-label">${escHtml(/pre/i.test(hookEvent) ? 'pre' : 'post')}</span>
-      <span class="hook-tool-name">${escHtml(label)}</span>
+      <span class="hook-label">${escHtml(hookEvent)}</span>
+      <span class="hook-tool-name">${escHtml(nameLabel)}</span>
     `;
 
     el.addEventListener('click', (e) => {
@@ -1196,17 +1225,14 @@
     for (let t = firstOffset; t <= maxElapsed; t += interval) {
       const inGap = breaks.some(br => t > br.elapsedBefore && t < br.elapsedAfter);
       if (inGap) continue;
-      const y = elapsedToY ? elapsedToY(t) : (D3_CONST.HEADER_HEIGHT + 8 + t * D3_CONST.TIME_SCALE);
+      const y = elapsedToY ? elapsedToY(t) : (D3_CONST.HEADER_HEIGHT + 8);
       candidates.push({ y, elapsed: t });
     }
 
-    // Also add ticks at the first and last layout items for context
-    if (layout.length > 0) {
-      candidates.push({ y: layout[0].y, elapsed: layout[0].elapsed });
-      if (layout.length > 1) {
-        const last = layout[layout.length - 1];
-        candidates.push({ y: last.y, elapsed: last.elapsed });
-      }
+    // Add ticks at each interaction's actual start position
+    for (const item of layout) {
+      if (item.height === 0) continue;
+      candidates.push({ y: item.y, elapsed: item.elapsed });
     }
 
     // Sort by elapsed (guarantees monotonic time), then by Y
@@ -1299,27 +1325,50 @@
     if (defsFg.empty()) defsFg = svgFg.append('defs');
     defsFg.selectAll('.connector-marker').remove();
 
-    // Fork diamond marker
-    defsFg.append('marker')
-      .attr('class', 'connector-marker')
-      .attr('id', 'fork-diamond')
-      .attr('viewBox', '0 0 8 8')
-      .attr('refX', 4).attr('refY', 4)
-      .attr('markerWidth', 5).attr('markerHeight', 5)
-      .append('path')
-      .attr('d', 'M4,0.5 L7.5,4 L4,7.5 L0.5,4 Z')
-      .attr('fill', 'var(--accent)');
+    // Create per-color arrowhead markers so each agent's arrows match its color
+    const usedColors = new Set();
+    for (const c of connectors) {
+      if (c.type === 'fork' || c.type === 'merge') usedColors.add(c.color);
+    }
+    const colorToMarkerId = new Map();
+    let markerIdx = 0;
+    for (const color of usedColors) {
+      const forkId = `fork-arrow-${markerIdx}`;
+      const mergeId = `merge-arrow-${markerIdx}`;
+      colorToMarkerId.set(color, { fork: forkId, merge: mergeId });
 
-    // Merge circle marker
-    defsFg.append('marker')
-      .attr('class', 'connector-marker')
-      .attr('id', 'merge-dot')
-      .attr('viewBox', '0 0 8 8')
-      .attr('refX', 4).attr('refY', 4)
-      .attr('markerWidth', 5).attr('markerHeight', 5)
-      .append('circle')
-      .attr('cx', 4).attr('cy', 4).attr('r', 3)
-      .attr('fill', 'var(--accent)').attr('opacity', 0.8);
+      defsFg.append('marker')
+        .attr('class', 'connector-marker')
+        .attr('id', forkId)
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 9).attr('refY', 5)
+        .attr('markerWidth', 7).attr('markerHeight', 7)
+        .attr('orient', 'auto')
+        .append('path')
+        .attr('d', 'M1,1 L9,5 L1,9')
+        .attr('fill', 'none')
+        .attr('stroke', color)
+        .attr('stroke-width', 2)
+        .attr('stroke-linejoin', 'round')
+        .attr('stroke-linecap', 'round');
+
+      defsFg.append('marker')
+        .attr('class', 'connector-marker')
+        .attr('id', mergeId)
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 9).attr('refY', 5)
+        .attr('markerWidth', 7).attr('markerHeight', 7)
+        .attr('orient', 'auto')
+        .append('path')
+        .attr('d', 'M1,1 L9,5 L1,9')
+        .attr('fill', 'none')
+        .attr('stroke', color)
+        .attr('stroke-width', 2)
+        .attr('stroke-linejoin', 'round')
+        .attr('stroke-linecap', 'round');
+
+      markerIdx++;
+    }
 
     for (const c of connectors) {
       if (c.type === 'bgRect') {
@@ -1337,6 +1386,7 @@
           .attr('stroke-width', 2.5)
           .attr('stroke-opacity', 0.35);
       } else if (c.type === 'fork') {
+        const markers = colorToMarkerId.get(c.color);
         gFg.append('path')
           .attr('class', 'connector-path connector-fork')
           .attr('d', c.path)
@@ -1345,9 +1395,10 @@
           .attr('stroke-linecap', 'round')
           .attr('fill', 'none')
           .attr('opacity', c.opacity)
-          .attr('marker-start', 'url(#fork-diamond)')
+          .attr('marker-end', markers ? `url(#${markers.fork})` : null)
           .attr('data-agent-id', c.agentId || '');
       } else if (c.type === 'merge') {
+        const markers = colorToMarkerId.get(c.color);
         gFg.append('path')
           .attr('class', 'connector-path connector-merge')
           .attr('d', c.path)
@@ -1356,7 +1407,7 @@
           .attr('stroke-linecap', 'round')
           .attr('fill', 'none')
           .attr('opacity', c.opacity)
-          .attr('marker-end', 'url(#merge-dot)')
+          .attr('marker-end', markers ? `url(#${markers.merge})` : null)
           .attr('data-agent-id', c.agentId || '');
       }
     }
@@ -1435,6 +1486,7 @@
     const colWidth = wl.computeColumnWidth(totalColumns);
 
     wl.buildFoldedHooksMap(filtered);
+    wl.buildClampGroups(filtered, columnFor);
 
     const aside = document.getElementById('timeline');
     if (aside) {
@@ -1528,6 +1580,7 @@
     for (const item of layout) {
       const interaction = item.interaction;
       if (wl.isFoldedHook(interaction.id)) continue;
+      if (wl.isClampedHook(interaction.id)) continue;
       let el;
 
       if (interaction.isMcp) {
@@ -1654,6 +1707,11 @@
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
       agentId = null;
     }
+    // SubagentStop with unknown agent_id: don't allocate a new column
+    if (interaction.isHook && interaction.hookEvent === 'SubagentStop'
+        && agentId && !ds.activeColumns.has(agentId) && !ds.historicalColumns.has(agentId)) {
+      agentId = null;
+    }
 
     let col = 0;
     if (agentId) {
@@ -1675,6 +1733,17 @@
     if (col >= ds.totalColumns || ds.activeColumns.size > 0 || col > 0) {
       renderTimelineParallel();
       return;
+    }
+
+    // Clamp candidates: re-render so they collapse into the anchor turn
+    if (interaction.isHook && /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure)$/i.test(interaction.hookEvent)
+        && interaction.toolName !== 'Agent') {
+      const lastItem = ds.layout[ds.layout.length - 1];
+      if (lastItem && !lastItem.interaction.isHook && !lastItem.interaction.isMcp
+          && interaction.timestamp - (lastItem.interaction.timestamp + (lastItem.interaction.timing?.duration || 0)) <= 5000) {
+        renderTimelineParallel();
+        return;
+      }
     }
 
     // Sequential compact stacking for single-column appends
@@ -2098,7 +2167,7 @@
   function appendHookEntryToTimeline(interaction, idx) {
     const hookEvent = interaction.hookEvent || 'Hook';
     const toolName = interaction.toolName || '';
-    const arrow = /post/i.test(hookEvent) ? '←' : '→';
+    const arrow = /Stop|End$|Remove|Completed/i.test(hookEvent) ? '◼' : '▸';
     const subagent = findHookSubagent(interaction);
 
     const agentLabel = subagent ? getSubagentLabel(subagent) : '';
@@ -2137,10 +2206,14 @@
     el.className = 'timeline-entry turn-entry hook-call-entry';
     el.dataset.id = interaction.id;
 
+    const subType = interaction.subagent?.agentType;
+    const isSubagentHook = /SubagentStart|SubagentStop/i.test(hookEvent);
+    const hookNameLabel = isSubagentHook && subType ? subType : toolName;
+
     el.innerHTML = `
       <span class="hook-arrow">${arrow}</span>
       <span class="hook-label">${escHtml(hookEvent)}</span>
-      <span class="hook-tool-name">${escHtml(toolName)}</span>
+      <span class="hook-tool-name">${escHtml(hookNameLabel)}</span>
     `;
 
     el.addEventListener('click', (e) => {
@@ -2468,6 +2541,14 @@
     }
   }
 
+  function autoExpandSmallJsonBlocks(container) {
+    container.querySelectorAll('.jt-root').forEach(root => {
+      const script = root.querySelector('script[type="application/json"]');
+      if (script && script.textContent.split('\n').length <= 50)
+        root.querySelectorAll('details.jt-node').forEach(d => d.open = true);
+    });
+  }
+
   function renderMcpCallDetail(interaction) {
     const req = interaction.request || {};
     const resp = interaction.response || {};
@@ -2512,6 +2593,7 @@
     }
 
     detailContent.innerHTML = html;
+    autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
   }
 
@@ -2547,6 +2629,7 @@
     html += jsonBlock(req);
 
     detailContent.innerHTML = html;
+    autoExpandSmallJsonBlocks(detailContent);
   }
 
   function renderTurnDetail(interaction) {
@@ -2691,7 +2774,7 @@
     html += `</div>`;
 
     detailContent.innerHTML = html;
-    detailContent.querySelectorAll('details.jt-node').forEach(d => d.open = true);
+    autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
   }
 
@@ -2756,6 +2839,7 @@
     }
 
     detailContent.innerHTML = html;
+    autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
 
     const link = detailContent.querySelector('.turn-link');

@@ -8,12 +8,10 @@
     MIN_ENTRY_HEIGHT: 52,
     TOOL_HEIGHT: 24,
     MIN_GAP: 6,
-    TIME_SCALE: 0.04,
     HEADER_HEIGHT: 30,
     ZIGZAG_MIN_CUT: 10000,
   };
 
-  const GAP_COLLAPSE_THRESHOLD = 30000;
   const GAP_COLLAPSE_HEIGHT = 28;
 
   let _extractToolCalls = null;
@@ -21,6 +19,9 @@
 
   let _foldedHookIds = new Set();
   let _foldedHookParentInfo = new Map();
+
+  let _clampedHookIds = new Set();
+  let _clampedHookParentInfo = new Map();
 
   function init(deps) {
     _extractToolCalls = deps.extractToolCalls;
@@ -163,6 +164,55 @@
     return { foldedIds, hookParentInfo };
   }
 
+  // --- Clamped hooks: collapse rapid PreToolUse/PostToolUse/PostToolBatch into anchor LLM turn ---
+
+  function buildClampGroups(interactions, columnFor) {
+    const CLAMP_WINDOW = 5000;
+    const CLAMP_EVENTS = /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure)$/i;
+
+    for (const interaction of interactions) {
+      if (interaction._clampedHooks) delete interaction._clampedHooks;
+    }
+
+    const clampedIds = new Set();
+    const clampParentInfo = new Map();
+
+    for (let i = 0; i < interactions.length; i++) {
+      const anchor = interactions[i];
+      if (anchor.isHook || anchor.isMcp || !isStandardLlm(anchor)) continue;
+      const tools = extractToolCalls(anchor);
+      if (tools.length === 0) continue;
+
+      const anchorCol = columnFor.get(anchor.id) || 0;
+      const anchorEndTs = anchor.timestamp + (anchor.timing?.duration || 0);
+      const group = [];
+
+      for (let j = i + 1; j < interactions.length; j++) {
+        const candidate = interactions[j];
+        if (!candidate.isHook) break;
+        if (_foldedHookIds.has(candidate.id)) continue;
+        if (!CLAMP_EVENTS.test(candidate.hookEvent)) break;
+        if (candidate.toolName === 'Agent') continue;
+        const candCol = columnFor.get(candidate.id) || 0;
+        if (candCol !== anchorCol) continue;
+        if (candidate.timestamp - anchorEndTs > CLAMP_WINDOW) break;
+        group.push(candidate);
+      }
+
+      if (group.length === 0) continue;
+
+      anchor._clampedHooks = group;
+      for (let k = 0; k < group.length; k++) {
+        clampedIds.add(group[k].id);
+        clampParentInfo.set(group[k].id, { parentId: anchor.id, hookIndex: k });
+      }
+    }
+
+    _clampedHookIds = clampedIds;
+    _clampedHookParentInfo = clampParentInfo;
+    return { clampedIds, clampParentInfo };
+  }
+
   // --- Column assignment ---
 
   function buildColumnAssignment(interactions, registerSubagentFn) {
@@ -181,36 +231,111 @@
     let currentRegion = null;
 
     // Pre-scan: find the last interaction index for each agentId.
-    // This determines when each agent's column can be freed — NOT PostToolUse
-    // hooks, which fire at launch time (~40ms after PreToolUse), not completion.
+    // Checks subagent.agentId on enriched interactions AND hookAgentId on
+    // SubagentStart/SubagentStop hooks (which carry agent_id directly).
     const agentLastIdx = new Map();
     for (let i = 0; i < interactions.length; i++) {
-      const aid = interactions[i].subagent?.agentId;
+      const aid = interactions[i].subagent?.agentId
+        || (interactions[i].isHook && interactions[i].hookAgentId) || null;
       if (aid) agentLastIdx.set(aid, i);
     }
 
     // Pre-scan: collect PostToolUse/Agent hooks for segment matching after the main loop.
-    // These hooks have agentId=null (they belong to the parent orchestrator),
-    // so we match them to segments by description.
     const postAgentHooks = [];
+    // Pre-scan: collect SubagentStop hooks for segment matching (merge arrows).
+    const subagentStopHooks = [];
     for (let i = 0; i < interactions.length; i++) {
       const int = interactions[i];
       if (int.isHook && /PostToolUse/i.test(int.hookEvent) && int.toolName === 'Agent') {
         postAgentHooks.push({ id: int.id, idx: i, toolUseId: int.toolUseId, description: int.request?.tool_input?.description });
       }
+      if (int.isHook && int.hookEvent === 'SubagentStop' && int.subagent?.agentId) {
+        subagentStopHooks.push({ id: int.id, idx: i, agentId: int.subagent.agentId });
+      }
+    }
+
+    // Pre-scan: detect Agent tool calls in LLM turns to enable eager column
+    // creation before JSONL enrichment arrives.  Builds a mapping from
+    // description → agentId for cases where SubagentStart hooks or enriched
+    // child interactions provide the real ID, and falls back to a synthetic
+    // ID ("pending-<toolUseId>") otherwise.
+    const descToAgentId = new Map();
+    for (let i = 0; i < interactions.length; i++) {
+      const int = interactions[i];
+      if (int.subagent?.agentId && int.subagent.description) {
+        descToAgentId.set(int.subagent.description, int.subagent.agentId);
+      }
+    }
+    const agentToolCalls = [];
+    for (let i = 0; i < interactions.length; i++) {
+      const int = interactions[i];
+      if (int.isHook || int.isMcp) continue;
+      const tools = extractToolCalls(int);
+      for (const tc of tools) {
+        if (tc.name !== 'Agent' || !tc.id) continue;
+        const desc = tc.input?.description || null;
+        const realId = desc ? descToAgentId.get(desc) : null;
+        const agentId = realId || ('pending-' + tc.id);
+        if (!agentLastIdx.has(agentId) && desc) {
+          agentLastIdx.set(agentId, i);
+        }
+        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, isSynthetic: !realId });
+      }
+    }
+    const toolUseToEagerAgent = new Map();
+    for (const atc of agentToolCalls) {
+      toolUseToEagerAgent.set(atc.toolUseId, atc);
     }
 
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
       let agentId = null;
       if (interaction.isHook) {
-        agentId = interaction.subagent?.agentId || resolveHookAgentId(interaction, interactions.slice(0, idx));
+        agentId = interaction.subagent?.agentId || interaction.hookAgentId
+          || resolveHookAgentId(interaction, interactions.slice(0, idx));
       } else {
         agentId = interaction.subagent?.agentId || null;
       }
 
       if (interaction.isHook && interaction.hookEvent && /PreToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
         pendingPreHooks.push({ id: interaction.id, toolUseId: interaction.toolUseId, description: interaction.request?.tool_input?.description });
+      }
+
+      // Eager column creation: when this LLM turn contains Agent tool calls
+      // but no enrichment has arrived yet, create columns from the pre-scanned
+      // agentToolCalls mapping so subagent lanes appear immediately.
+      if (!interaction.isHook && !interaction.isMcp && !agentId) {
+        const tools = extractToolCalls(interaction);
+        for (const tc of tools) {
+          if (tc.name !== 'Agent' || !tc.id) continue;
+          const eager = toolUseToEagerAgent.get(tc.id);
+          if (!eager) continue;
+          const eagerAid = eager.agentId;
+          if (activeColumns.has(eagerAid) || historicalColumns.has(eagerAid)) continue;
+          const alloc = allocateColumn(freeColumns, activeColumns, nextColumn);
+          nextColumn = alloc.nextColumn;
+          activeColumns.set(eagerAid, alloc.col);
+          historicalColumns.set(eagerAid, alloc.col);
+          const synSub = { agentId: eagerAid, agentType: 'agent', description: eager.description };
+          if (registerSubagentFn) registerSubagentFn(synSub);
+          columnAgents.set(alloc.col, synSub);
+          let startHookId = null;
+          if (eager.description && pendingPreHooks.length > 0) {
+            const mi = pendingPreHooks.findIndex(ph => ph.description === eager.description);
+            if (mi >= 0) { startHookId = pendingPreHooks[mi].id; pendingPreHooks.splice(mi, 1); }
+          }
+          if (!startHookId && pendingPreHooks.length === 1) {
+            startHookId = pendingPreHooks[0].id; pendingPreHooks.splice(0, 1);
+          }
+          columnSegments.push({ col: alloc.col, agentId: eagerAid, subagent: synSub, startIdx: idx, endHookId: null, startHookId });
+          activeSegments.set(eagerAid, columnSegments[columnSegments.length - 1]);
+        }
+      }
+
+      // SubagentStop must never open a new column — only close existing ones
+      if (interaction.isHook && interaction.hookEvent === 'SubagentStop'
+          && agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
+        agentId = null;
       }
 
       if (agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
@@ -244,9 +369,14 @@
       const resolvedCol = agentId
         ? (activeColumns.get(agentId) || historicalColumns.get(agentId) || 0)
         : 0;
-      if (resolvedCol > 0 && interaction.subagent && !columnAgents.has(resolvedCol)) {
-        if (registerSubagentFn) registerSubagentFn(interaction.subagent);
-        columnAgents.set(resolvedCol, interaction.subagent);
+      if (resolvedCol > 0 && interaction.subagent) {
+        const existing = columnAgents.get(resolvedCol);
+        if (!existing || (existing.agentType === 'agent' && interaction.subagent.agentType && interaction.subagent.agentType !== 'agent')) {
+          if (registerSubagentFn) registerSubagentFn(interaction.subagent);
+          columnAgents.set(resolvedCol, interaction.subagent);
+          const seg = activeSegments.get(agentId);
+          if (seg) seg.subagent = interaction.subagent;
+        }
       }
       // PostToolUse/Agent hooks always go to column 0 (main thread)
       const assignedCol = (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent')
@@ -278,6 +408,20 @@
       }
     }
     if (currentRegion) parallelRegions.push(currentRegion);
+
+    // Match remaining PreToolUse/Agent hooks to segments that missed them during
+    // eager column creation (PreToolUse hooks arrive after the LLM turn that spawned them).
+    for (const ph of pendingPreHooks) {
+      const eager = toolUseToEagerAgent.get(ph.toolUseId);
+      if (eager) {
+        const seg = columnSegments.find(s => s.agentId === eager.agentId && !s.startHookId);
+        if (seg) { seg.startHookId = ph.id; continue; }
+      }
+      if (ph.description) {
+        const seg = columnSegments.find(s => !s.startHookId && s.subagent?.description === ph.description);
+        if (seg) seg.startHookId = ph.id;
+      }
+    }
 
     // Match PostToolUse/Agent hooks to segments by description for merge arrows.
     // These hooks fire at launch time and have agentId=null, so we match by
@@ -327,6 +471,18 @@
       }
     }
 
+    // Match SubagentStop hooks to segments by agentId for merge arrows.
+    for (const sh of subagentStopHooks) {
+      for (const seg of columnSegments) {
+        if (seg.endHookId) continue;
+        if (seg.agentId === sh.agentId) {
+          seg.endHookId = sh.id;
+          postHookClosedCol.set(sh.id, seg.col);
+          break;
+        }
+      }
+    }
+
     return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments, depthAt };
   }
 
@@ -338,7 +494,8 @@
     if (interaction.isMcp) return 42;
     const tools = extractToolCalls(interaction);
     const foldedCount = interaction._foldedPreHooks?.length || 0;
-    return D3_CONST.MIN_ENTRY_HEIGHT + (tools.length + foldedCount) * D3_CONST.TOOL_HEIGHT;
+    const clampedCount = interaction._clampedHooks?.length || 0;
+    return D3_CONST.MIN_ENTRY_HEIGHT + (tools.length + foldedCount + clampedCount) * D3_CONST.TOOL_HEIGHT;
   }
 
   // --- Column width ---
@@ -349,7 +506,7 @@
 
   // --- Main layout pass ---
 
-  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt) {
+  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, _depthAt) {
     const C = D3_CONST;
     const layout = [];
     const breaks = [];
@@ -358,156 +515,52 @@
     let globalBottom = C.HEADER_HEIGHT + 8;
     const availWidth = computeColumnWidth(totalColumns);
 
-    const idxRegion = new Array(interactions.length).fill(null);
-    for (const r of (parallelRegions || [])) {
-      for (let i = r.startIdx; i <= r.endIdx; i++) idxRegion[i] = r;
-    }
-
-    // Per-region: gap compression and minimum viable time scale
-    const regionCache = new Map();
-    for (const region of (parallelRegions || [])) {
-      const regionElapsed = [];
-      for (let i = region.startIdx; i <= region.endIdx; i++) {
-        regionElapsed.push(interactions[i].timestamp - sessionStart);
-      }
-      const sorted = [...new Set(regionElapsed)].sort((a, b) => a - b);
-
-      let cumShift = 0;
-      const shifts = [];
-      const regionBreaks = [];
-      for (let i = 1; i < sorted.length; i++) {
-        const gap = sorted[i] - sorted[i - 1];
-        if (gap > GAP_COLLAPSE_THRESHOLD) {
-          cumShift += gap - GAP_COLLAPSE_THRESHOLD * 0.1;
-          regionBreaks.push({ before: sorted[i - 1], after: sorted[i] });
-        }
-        shifts.push({ elapsed: sorted[i], shift: cumShift });
-      }
-      const compressElapsed = (elapsed) => {
-        let s = 0;
-        for (const { elapsed: e, shift } of shifts) {
-          if (e <= elapsed) s = shift; else break;
-        }
-        return elapsed - s;
-      };
-
-      // Scale: from items with 2+ concurrent threads
-      const byCols = new Map();
-      for (let i = region.startIdx; i <= region.endIdx; i++) {
-        if (depthAt && depthAt[i] < 2) continue;
-        const col = columnFor.get(interactions[i].id) || 0;
-        if (!byCols.has(col)) byCols.set(col, []);
-        byCols.get(col).push({
-          height: computeNodeHeight(interactions[i]),
-          compElapsed: compressElapsed(interactions[i].timestamp - sessionStart)
-        });
-      }
-      let maxScale = 0.005;
-      for (const [, nodes] of byCols) {
-        for (let i = 0; i < nodes.length - 1; i++) {
-          const dt = nodes[i + 1].compElapsed - nodes[i].compElapsed;
-          if (dt > 0) {
-            const needed = (nodes[i].height + C.MIN_GAP) / dt;
-            if (needed > maxScale) maxScale = needed;
-          }
-        }
-      }
-
-      regionCache.set(region, {
-        scale: Math.min(maxScale, C.TIME_SCALE),
-        compressElapsed,
-        regionBreaks,
-        startElapsed: region.startTime - sessionStart
-      });
-    }
-
-    // Main layout pass
     let prevElapsed = null;
-    let activeRegion = null;
-    let regionStartY = 0;
 
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
       const elapsed = interaction.timestamp - sessionStart;
-      if (_foldedHookIds.has(interaction.id)) {
+
+      if (_foldedHookIds.has(interaction.id) || _clampedHookIds.has(interaction.id)) {
         layout.push({ id: interaction.id, x: 0, y: 0, width: 0, height: 0, col: 0, interaction, elapsed, idx });
         continue;
       }
+
       const col = columnFor.get(interaction.id) || 0;
       const height = computeNodeHeight(interaction);
       const x = C.RULER_WIDTH + col * (availWidth + C.COLUMN_GAP);
-      const region = idxRegion[idx];
-      let y;
 
-      if (region) {
-        if (activeRegion !== region) {
-          if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
-            const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
-            breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
-            globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
-          }
-          activeRegion = region;
-          regionStartY = globalBottom + C.MIN_GAP;
-        }
-
-        if (col === 0) {
-          const colBottom = colBottoms.get(0) || globalBottom;
-          y = colBottom + C.MIN_GAP;
-          const closedCol = postHookClosedCol && postHookClosedCol.get(interaction.id);
-          if (closedCol != null && colBottoms.has(closedCol)) {
-            y = Math.max(y, colBottoms.get(closedCol) + C.MIN_GAP);
-          }
-        } else if (depthAt && depthAt[idx] >= 2) {
-          const rs = regionCache.get(region);
-          const compE = rs.compressElapsed(elapsed);
-          const compStart = rs.compressElapsed(rs.startElapsed);
-          const timeY = regionStartY + (compE - compStart) * rs.scale;
-
-          y = colBottoms.has(col)
-            ? Math.max(timeY, colBottoms.get(col) + C.MIN_GAP)
-            : timeY;
-        } else {
-          y = (colBottoms.get(col) || globalBottom) + C.MIN_GAP;
-        }
-      } else {
-        if (activeRegion) activeRegion = null;
-
-        if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
-          const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
-          breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
-          globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
-        }
-
-        if (col === 0) {
-          let maxBottom = globalBottom;
-          for (const b of colBottoms.values()) {
-            if (b > maxBottom) maxBottom = b;
-          }
-          y = maxBottom + C.MIN_GAP;
-        } else {
-          const colBottom = colBottoms.get(col) || globalBottom;
-          y = colBottom + C.MIN_GAP;
+      // Gap compression: zigzag break for long pauses
+      if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
+        const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
+        breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
+        globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
+        for (const [k, v] of colBottoms) {
+          if (v < globalBottom) colBottoms.set(k, globalBottom);
         }
       }
 
-      // Extend column bottom by actual runtime duration
-      let entryBottom = y + height;
-      if (region && col > 0 && interaction.timing?.duration > 0) {
-        const rs = regionCache.get(region);
-        const endElapsed = elapsed + interaction.timing.duration;
-        const compEndE = rs.compressElapsed(endElapsed);
-        const compStart = rs.compressElapsed(rs.startElapsed);
-        const timeEndY = regionStartY + (compEndE - compStart) * rs.scale;
-        entryBottom = Math.max(entryBottom, timeEndY);
+      // Sequential placement: respect both global timestamp order and column bottom
+      const colBottom = colBottoms.get(col) || globalBottom;
+      let y = Math.max(globalBottom, colBottom) + C.MIN_GAP;
+
+      // For merge-point hooks (PostToolUse/Agent), also respect the closed column bottom
+      if (postHookClosedCol) {
+        const closedCol = postHookClosedCol.get(interaction.id);
+        if (closedCol != null && colBottoms.has(closedCol)) {
+          y = Math.max(y, colBottoms.get(closedCol) + C.MIN_GAP);
+        }
       }
+
+      const entryBottom = y + height;
       layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed, idx, timeBottom: entryBottom });
       colBottoms.set(col, entryBottom);
       if (entryBottom > globalBottom) globalBottom = entryBottom;
       prevElapsed = elapsed;
     }
 
-    // Monotonic elapsed→Y interpolation
-    const yPoints = layout.map(item => ({ elapsed: item.elapsed, y: item.y }));
+    // Monotonic elapsed→Y interpolation for ruler and connectors
+    const yPoints = layout.filter(item => item.height > 0).map(item => ({ elapsed: item.elapsed, y: item.y }));
     for (let i = 1; i < yPoints.length; i++) {
       if (yPoints[i].y < yPoints[i - 1].y) yPoints[i].y = yPoints[i - 1].y;
     }
@@ -524,17 +577,6 @@
         }
       }
       return yPoints[yPoints.length - 1].y;
-    }
-
-    // Breaks from parallel-region internal gaps
-    for (const region of (parallelRegions || [])) {
-      const rs = regionCache.get(region);
-      for (const br of rs.regionBreaks) {
-        if (br.after - br.before <= C.ZIGZAG_MIN_CUT) continue;
-        const yBefore = elapsedToY(br.before);
-        const yAfter = elapsedToY(br.after);
-        breaks.push({ y: (yBefore + yAfter) / 2, elapsedBefore: br.before, elapsedAfter: br.after });
-      }
     }
 
     let finalBottom = C.HEADER_HEIGHT + 8;
@@ -560,7 +602,7 @@
       if (!colEntries.has(item.col)) colEntries.set(item.col, []);
       colEntries.get(item.col).push(item);
     }
-    const mainEntries = (colEntries.get(0) || []).filter(item => !_foldedHookIds.has(item.id));
+    const mainEntries = (colEntries.get(0) || []).filter(item => !_foldedHookIds.has(item.id) && !_clampedHookIds.has(item.id));
 
     const hookEntryById = new Map();
     for (const me of mainEntries) hookEntryById.set(me.id, me);
@@ -611,10 +653,13 @@
           }
         }
 
-        const cpX = (bgLeft - forkOriginX) * 0.6;
+        // Fork: arc upward, ending at center of subagent top border
+        const forkTargetX = bgLeft + (colWidth + 8) / 2;
+        const forkBow = Math.max(20, Math.abs(forkTargetX - forkOriginX) * 0.2);
+        const forkTopY = Math.min(forkOriginY, bgTop) - forkBow;
         connectors.push({
           type: 'fork', col: seg.col,
-          path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
+          path: `M${forkOriginX},${forkOriginY} C${forkOriginX},${forkTopY} ${forkTargetX},${forkTopY} ${forkTargetX},${bgTop}`,
           color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
         });
 
@@ -635,10 +680,12 @@
         }
         if (mergeTargetY != null) {
           const bgCenterX = bgLeft + (colWidth + 8) / 2;
-          const mCpX = (bgCenterX - mergeTargetX) * 0.6;
+          // Merge: arc downward (control points below both endpoints)
+          const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
+          const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
           connectors.push({
             type: 'merge', col: seg.col,
-            path: `M${bgCenterX},${bgBottom} C${bgCenterX - mCpX},${bgBottom} ${mergeTargetX + mCpX},${mergeTargetY} ${mergeTargetX},${mergeTargetY}`,
+            path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
             color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
           });
         }
@@ -678,10 +725,12 @@
             break;
           }
         }
-        const cpX = (bgLeft - forkOriginX) * 0.6;
+        const legacyTargetX = bgLeft + (colWidth + 8) / 2;
+        const legacyBow = Math.max(20, Math.abs(legacyTargetX - forkOriginX) * 0.2);
+        const legacyTopY = Math.min(forkOriginY, bgTop) - legacyBow;
         connectors.push({
           type: 'fork', col,
-          path: `M${forkOriginX},${forkOriginY} C${forkOriginX + cpX},${forkOriginY} ${bgLeft - cpX},${bgTop} ${bgLeft},${bgTop}`,
+          path: `M${forkOriginX},${forkOriginY} C${forkOriginX},${legacyTopY} ${legacyTargetX},${legacyTopY} ${legacyTargetX},${bgTop}`,
           color, opacity: 0.6, strokeWidth: 2.5, agentId: agent?.agentId,
         });
       }
@@ -700,6 +749,14 @@
     return _foldedHookParentInfo.get(id);
   }
 
+  function isClampedHook(id) {
+    return _clampedHookIds.has(id);
+  }
+
+  function getClampedHookParentInfo(id) {
+    return _clampedHookParentInfo.get(id);
+  }
+
   window.wideLayout = {
     init,
     D3_CONST,
@@ -707,6 +764,7 @@
     resolveClosedAgentId,
     allocateColumn,
     buildFoldedHooksMap,
+    buildClampGroups,
     buildColumnAssignment,
     computeNodeHeight,
     computeColumnWidth,
@@ -714,5 +772,7 @@
     computeConnectorData,
     isFoldedHook,
     getFoldedHookParentInfo,
+    isClampedHook,
+    getClampedHookParentInfo,
   };
 })();
