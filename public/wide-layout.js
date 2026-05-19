@@ -185,15 +185,43 @@
 
       const anchorCol = columnFor.get(anchor.id) || 0;
       const anchorEndTs = anchor.timestamp + (anchor.timing?.duration || 0);
+      const toolUseIds = new Set(tools.map(tc => tc.id).filter(Boolean));
       const group = [];
 
+      // Backward scan: hooks delivered before this turn but belonging to it (by toolUseId)
+      // In parallel columns, entries from other columns are interleaved — only
+      // break on same-column boundaries so clamping works independently per column.
+      for (let j = i - 1; j >= 0; j--) {
+        const candidate = interactions[j];
+        const candCol = columnFor.get(candidate.id) || 0;
+        if (!candidate.isHook) {
+          if (candCol === anchorCol) break;
+          continue;
+        }
+        if (!CLAMP_EVENTS.test(candidate.hookEvent)) continue;
+        if (_foldedHookIds.has(candidate.id) || clampedIds.has(candidate.id)) continue;
+        if (candidate.toolName === 'Agent') continue;
+        if (candCol !== anchorCol) continue;
+        if (!candidate.toolUseId || !toolUseIds.has(candidate.toolUseId)) continue;
+        group.unshift(candidate);
+      }
+
+      // Forward scan: hooks after this turn within the clamp window
+      // Same column-aware logic: skip entries from other columns so interleaved
+      // parallel interactions don't break the scan.
       for (let j = i + 1; j < interactions.length; j++) {
         const candidate = interactions[j];
-        if (!candidate.isHook) break;
-        if (_foldedHookIds.has(candidate.id)) continue;
-        if (!CLAMP_EVENTS.test(candidate.hookEvent)) break;
-        if (candidate.toolName === 'Agent') continue;
         const candCol = columnFor.get(candidate.id) || 0;
+        if (!candidate.isHook) {
+          if (candCol === anchorCol) break;
+          continue;
+        }
+        if (_foldedHookIds.has(candidate.id)) continue;
+        if (!CLAMP_EVENTS.test(candidate.hookEvent)) {
+          if (candCol === anchorCol) break;
+          continue;
+        }
+        if (candidate.toolName === 'Agent') continue;
         if (candCol !== anchorCol) continue;
         if (candidate.timestamp - anchorEndTs > CLAMP_WINDOW) break;
         group.push(candidate);

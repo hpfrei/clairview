@@ -260,7 +260,7 @@ Interactions are saved to \`interactions/{sessionId}/\` as JSON. You can resume 
 
 ## CLI
 
-Multi-tab Claude Code terminal in the browser. Each tab is an independent \`claude -p\` process with its own working directory and model routing.
+Multi-tab Claude Code terminal in the browser. Each tab is an independent \`claude -p\` process with its own working directory and model routing. Paste images from clipboard or drag-drop any file directly into a session — files are uploaded and available to Claude instantly.
 
 \`\`\`svg
 <svg viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" style="max-width:720px;font-family:system-ui,sans-serif">
