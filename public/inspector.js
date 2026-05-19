@@ -1091,7 +1091,7 @@
 
     if (interaction._clampedHooks) {
       const hooks = interaction._clampedHooks;
-      if (hooks.length > 3) {
+      if (hooks.length > 2) {
         const clampGroup = document.createElement('div');
         clampGroup.className = 'clamped-hooks-group collapsed';
 

@@ -495,7 +495,7 @@
     const tools = extractToolCalls(interaction);
     const foldedCount = interaction._foldedPreHooks?.length || 0;
     const clampedCount = interaction._clampedHooks?.length || 0;
-    const clampedRows = clampedCount > 3 ? 1 : clampedCount;
+    const clampedRows = clampedCount > 2 ? 1 : clampedCount;
     const clampedPad = clampedCount > 0 ? 4 : 0;
     return D3_CONST.MIN_ENTRY_HEIGHT + (tools.length + foldedCount + clampedRows) * D3_CONST.TOOL_HEIGHT + clampedPad;
   }
