@@ -20,7 +20,7 @@ I built this because I wanted to see what Claude Code actually sends to the LLM 
 
 <div align="center">
 
-https://github.com/hpfrei/vistaclair/releases/download/v1.3.2/vistaclair.mp4
+https://github.com/user-attachments/assets/3d82bb12-87e1-4e20-aa98-52d4f3512062
 
 <img src="docs/poster.png" alt="vistaclair demo" width="880">
 
