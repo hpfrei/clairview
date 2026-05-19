@@ -4,7 +4,7 @@
 
 # vistaclair
 
-**A control room and transparent proxy for Claude Code.**
+**Agent inspector, control room, and transparent proxy for Claude Code.**
 
 [![npm](https://img.shields.io/npm/v/vistaclair)](https://www.npmjs.com/package/vistaclair)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -20,7 +20,9 @@ I built this because I wanted to see what Claude Code actually sends to the LLM 
 
 <div align="center">
 
-https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
+https://github.com/hpfrei/vistaclair/releases/download/v1.3.2/vistaclair.mp4
+
+<img src="docs/poster.png" alt="vistaclair demo" width="880">
 
 </div>
 
@@ -32,7 +34,7 @@ https://github.com/user-attachments/assets/b2bee30c-6d4b-42e7-9c2f-473453bb3350
 
 ```bash
 npm install -g vistaclair
-npm start
+vistaclair
 ```
 
 Or clone:
@@ -72,7 +74,7 @@ Open **http://localhost:3457** and log in with the auth token printed to the con
 
 **Inspector** — Full request/response capture across all sessions. System prompts, message history, tool definitions, tool call inputs/outputs (JSON tree), thinking blocks, SSE event stream, cURL export. Token breakdown (input, output, cache read/create, reasoning) and cost tracking per turn, per group, per session. Subagent tracking with color-coded parallel swimlane view. Hook events nested under the turns that triggered them. All interactions saved to disk as JSON.
 
-**CLI** — Multi-tab Claude Code terminal in the browser. Per-session model routing, directory spawning, session save/resume. Paste images from clipboard and drag-drop any file directly into a session. AskUserQuestion appears inline — answer from any browser and Claude continues.
+**CLI** — Multi-tab Claude Code terminal in the browser. Per-session model routing, directory spawning, session save/resume. **Paste screenshots from clipboard or drag-drop files directly into a session** — works over a tunnel from any device. AskUserQuestion appears inline — answer from any browser and Claude continues.
 
 **Provider routing** — Route through Anthropic, OpenAI, Gemini, DeepSeek, Kimi, or Ollama. 40+ models pre-configured. The proxy translates Anthropic Messages API to the target format transparently.
 
@@ -83,6 +85,8 @@ Open **http://localhost:3457** and log in with the auth token printed to the con
 **File manager** — Browse, preview, and manage files on the remote machine. Monaco editor, multi-select, integrated shell.
 
 **Skills, agents, hooks** — Create and edit `.claude/` skills, agents, and hooks from the dashboard.
+
+**[External API](VISTACLAIR_CONNECT.md)** — REST and WebSocket interface for programmatic access.
 
 ---
 
