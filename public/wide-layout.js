@@ -352,9 +352,6 @@
             const mi = pendingPreHooks.findIndex(ph => ph.description === eager.description);
             if (mi >= 0) { startHookId = pendingPreHooks[mi].id; pendingPreHooks.splice(mi, 1); }
           }
-          if (!startHookId && pendingPreHooks.length === 1) {
-            startHookId = pendingPreHooks[0].id; pendingPreHooks.splice(0, 1);
-          }
           columnSegments.push({ col: alloc.col, agentId: eagerAid, subagent: synSub, startIdx: idx, endHookId: null, startHookId });
           activeSegments.set(eagerAid, columnSegments[columnSegments.length - 1]);
         }
@@ -384,10 +381,6 @@
             startHookId = pendingPreHooks[matchIdx].id;
             pendingPreHooks.splice(matchIdx, 1);
           }
-        }
-        if (!startHookId && pendingPreHooks.length === 1) {
-          startHookId = pendingPreHooks[0].id;
-          pendingPreHooks.splice(0, 1);
         }
         const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null, startHookId };
         columnSegments.push(seg);

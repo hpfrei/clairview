@@ -368,9 +368,57 @@ function filterResponseHeaders(headers) {
   return out;
 }
 
+function _truncateImageData(data) {
+  return typeof data === 'string' && data.length > 200
+    ? data.slice(0, 100) + '...[truncated]'
+    : data;
+}
+
+function _truncateImageBlock(block) {
+  if (block.type === 'image' && block.source?.data) {
+    return { ...block, source: { ...block.source, data: _truncateImageData(block.source.data) } };
+  }
+  return block;
+}
+
+function _sanitizeContentBlocks(blocks) {
+  if (!Array.isArray(blocks)) return blocks;
+  let changed = false;
+  const out = blocks.map(block => {
+    const tb = _truncateImageBlock(block);
+    if (tb !== block) { changed = true; return tb; }
+    if (block.type === 'tool_result' && Array.isArray(block.content)) {
+      let innerChanged = false;
+      const innerOut = block.content.map(inner => {
+        const ti = _truncateImageBlock(inner);
+        if (ti !== inner) innerChanged = true;
+        return ti;
+      });
+      if (innerChanged) { changed = true; return { ...block, content: innerOut }; }
+    }
+    return block;
+  });
+  return changed ? out : blocks;
+}
+
+function _truncateHookToolResponse(tr) {
+  if (!tr || typeof tr !== 'object') return tr;
+  if (tr.type === 'image' && tr.file?.base64) {
+    return { ...tr, file: { ...tr.file, base64: _truncateImageData(tr.file.base64) } };
+  }
+  if (Array.isArray(tr)) {
+    let changed = false;
+    const out = tr.map(item => {
+      const t = _truncateHookToolResponse(item);
+      if (t !== item) changed = true;
+      return t;
+    });
+    return changed ? out : tr;
+  }
+  return tr;
+}
+
 function sanitizeForDashboard(interaction) {
-  // Only deep-clone messages (which may contain base64 image data to truncate).
-  // Other fields are passed by shallow copy to avoid expensive serialization of large sseEvents arrays.
   const clone = { ...interaction };
   clone.response = { ...interaction.response };
   clone.timing = { ...interaction.timing };
@@ -380,18 +428,21 @@ function sanitizeForDashboard(interaction) {
     if (interaction.request.messages) {
       clone.request.messages = interaction.request.messages.map(msg => {
         if (!Array.isArray(msg.content)) return msg;
-        const hasImage = msg.content.some(b => b.type === 'image' && b.source?.data);
-        if (!hasImage) return msg;
-        return {
-          ...msg,
-          content: msg.content.map(block => {
-            if (block.type === 'image' && block.source?.data) {
-              return { ...block, source: { ...block.source, data: block.source.data.slice(0, 100) + '...[truncated]' } };
-            }
-            return block;
-          }),
-        };
+        const sanitized = _sanitizeContentBlocks(msg.content);
+        return sanitized !== msg.content ? { ...msg, content: sanitized } : msg;
       });
+    }
+    if (interaction.isHook) {
+      if (interaction.request.tool_response) {
+        clone.request.tool_response = _truncateHookToolResponse(interaction.request.tool_response);
+        clone.response = { ...clone.response, body: clone.request.tool_response };
+      }
+      if (Array.isArray(interaction.request.tool_calls)) {
+        clone.request.tool_calls = interaction.request.tool_calls.map(tc => {
+          if (!tc.tool_response) return tc;
+          return { ...tc, tool_response: _truncateHookToolResponse(tc.tool_response) };
+        });
+      }
     }
   }
   if (interaction.requestHeaders) {

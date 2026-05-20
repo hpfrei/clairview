@@ -264,7 +264,7 @@ dashboardApp.get('/login', (req, res) => {
 
 dashboardApp.post('/login', authLimiter, (req, res) => {
   if (safeEqual(req.body.token, AUTH_TOKEN)) {
-    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
+    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/`);
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
@@ -274,7 +274,7 @@ dashboardApp.post('/login', authLimiter, (req, res) => {
 dashboardApp.get('/login/auto', authLimiter, (req, res) => {
   if (!isLoopback(req)) return res.redirect('/login');
   if (safeEqual(req.query.token, AUTH_TOKEN)) {
-    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
+    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/`);
     return res.redirect('/');
   }
   res.redirect('/login');
@@ -365,6 +365,8 @@ dashboardApp.get('/api/ping', (req, res) => res.json({ ok: true }));
 
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
+  // OAuth callbacks must be exempt — SameSite=Lax cookies aren't sent on cross-site redirects from Google
+  if (/^\/apps\/[^/]+\/auth\/google\/callback/.test(req.path)) return next();
   // Allow internal requests from MCP tools (localhost + internal header)
   if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
   const token = getTokenFromCookies(req.headers.cookie);

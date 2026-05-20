@@ -10,6 +10,52 @@ const PROJECT_ROOT = DATA_HOME;
 
 const SCROLLBACK_CHUNK_SIZE = 16 * 1024;
 
+function summarizeForInit(interaction) {
+  const s = { ...interaction };
+  if (s.request) {
+    s.request = { ...s.request };
+    if (s.request.messages) {
+      const msgs = s.request.messages;
+      const last = msgs[msgs.length - 1];
+      let hasText = false;
+      if (last) {
+        if (typeof last.content === 'string') hasText = true;
+        else if (Array.isArray(last.content)) {
+          hasText = last.content.length === 0 || last.content[last.content.length - 1]?.type === 'text';
+        }
+      }
+      s.request._messageCount = msgs.length;
+      s.request._lastMessage = last ? { role: last.role, hasText } : null;
+      delete s.request.messages;
+    }
+    if (s.request.tools) {
+      s.request._toolCount = s.request.tools.length;
+      delete s.request.tools;
+    }
+    if (s.request.system) {
+      s.request._systemChars = typeof s.request.system === 'string'
+        ? s.request.system.length
+        : JSON.stringify(s.request.system).length;
+      delete s.request.system;
+    }
+    if (interaction.isHook) {
+      if (s.request.tool_response !== undefined) {
+        s.request._toolResponseChars = JSON.stringify(s.request.tool_response).length;
+        delete s.request.tool_response;
+      }
+      if (Array.isArray(s.request.tool_calls)) {
+        s.request.tool_calls = s.request.tool_calls.map(tc => {
+          if (!tc.tool_response) return tc;
+          return { ...tc, tool_response: undefined, _toolResponseChars: JSON.stringify(tc.tool_response).length };
+        });
+      }
+      if (s.response) s.response = { ...s.response, body: undefined };
+    }
+  }
+  s._summary = true;
+  return s;
+}
+
 function sendScrollbackChunked(ws, tabId, data) {
   if (data.length <= SCROLLBACK_CHUNK_SIZE) {
     if (ws.readyState === WebSocket.OPEN) {
@@ -39,11 +85,10 @@ class DashboardBroadcaster {
     this._pluginHandlers = [];
 
     this.wss.on('connection', (ws) => {
-      // Send history on connect — strip sseEvents for fast init; loaded on demand
       const interactions = this.store.getAll().map(i => {
         const s = sanitizeForDashboard(i);
         if (s.response) s.response = { ...s.response, sseEvents: undefined };
-        return s;
+        return summarizeForInit(s);
       });
       ws.send(JSON.stringify({ type: 'init', interactions }));
 
@@ -103,7 +148,7 @@ class DashboardBroadcaster {
               const interactions = loaded.map(i => {
                 const s = sanitizeForDashboard(i);
                 if (s.response) s.response = { ...s.response, sseEvents: undefined };
-                return s;
+                return summarizeForInit(s);
               });
               ws.send(JSON.stringify({
                 type: 'inspector:sessionLoaded',
@@ -116,12 +161,19 @@ class DashboardBroadcaster {
             const all = this.store.getAllFromDisk().map(i => {
               const s = sanitizeForDashboard(i);
               if (s.response) s.response = { ...s.response, sseEvents: undefined };
-              return s;
+              return summarizeForInit(s);
             });
             ws.send(JSON.stringify({ type: 'inspector:allLoaded', interactions: all }));
           } else if (msg.type === 'inspector:setSensitiveHeaders') {
             createProxyRouter._showSensitiveHeaders = !!msg.value;
             this.broadcast({ type: 'inspector:sensitiveHeaders', value: !!msg.value });
+          } else if (msg.type === 'interaction:getDetail') {
+            const interaction = this.store.get(msg.id);
+            if (interaction) {
+              const s = sanitizeForDashboard(interaction);
+              if (s.response) s.response = { ...s.response, sseEvents: undefined };
+              ws.send(JSON.stringify({ type: 'interaction:detail', id: msg.id, interaction: s }));
+            }
           } else if (msg.type === 'interaction:getSseEvents') {
             const interaction = this.store.get(msg.id);
             if (interaction) {

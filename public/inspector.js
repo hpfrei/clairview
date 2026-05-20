@@ -528,7 +528,11 @@
 
   function isNewUserTurn(interaction) {
     if ((interaction.endpoint || '/v1/messages') !== '/v1/messages') return false;
-    const msgs = interaction.request?.messages;
+    const req = interaction.request;
+    if (req?._lastMessage) {
+      return req._lastMessage.role === 'user' && req._lastMessage.hasText;
+    }
+    const msgs = req?.messages;
     if (!msgs || msgs.length === 0) return false;
     const last = msgs[msgs.length - 1];
     if (last.role !== 'user') return false;
@@ -1902,8 +1906,8 @@
 
   function _footerBadgeStats(interaction) {
     const req = interaction.request || {};
-    const msgCount = req.messages?.length || 0;
-    const toolCount = req.tools?.length || 0;
+    const msgCount = req._messageCount ?? req.messages?.length ?? 0;
+    const toolCount = req._toolCount ?? req.tools?.length ?? 0;
     return { msgCount, toolCount };
   }
 
@@ -2536,6 +2540,7 @@
   }
 
   const _pendingSseRequests = new Set();
+  const _pendingDetailRequests = new Set();
 
   function select(sel, { userClick = false } = {}) {
     state.selection = sel;
@@ -2556,6 +2561,11 @@
       const interaction = state.interactions.find(i => i.id === sel.id);
       if (!interaction) return;
 
+      if (interaction._summary && !_pendingDetailRequests.has(interaction.id)) {
+        _pendingDetailRequests.add(interaction.id);
+        sendWs({ type: 'interaction:getDetail', id: interaction.id });
+      }
+
       // Lazy-load sseEvents for completed streaming interactions
       if (interaction.isStreaming && !interaction.response?.sseEvents?.length && !_pendingSseRequests.has(interaction.id)) {
         _pendingSseRequests.add(interaction.id);
@@ -2574,6 +2584,11 @@
 
       const interaction = state.interactions.find(i => i.id === sel.interactionId);
       if (!interaction) return;
+
+      if (interaction._summary && !_pendingDetailRequests.has(interaction.id)) {
+        _pendingDetailRequests.add(interaction.id);
+        sendWs({ type: 'interaction:getDetail', id: interaction.id });
+      }
 
       if (interaction.isStreaming && !interaction.response?.sseEvents?.length && !_pendingSseRequests.has(interaction.id)) {
         _pendingSseRequests.add(interaction.id);
@@ -2668,6 +2683,9 @@
       } else {
         html += jsonBlock(req.tool_response);
       }
+    } else if (req._toolResponseChars) {
+      html += '<div class="section-title">Tool Response</div>';
+      html += `<div class="json-block" style="opacity:0.5">Loading... ${charGauge(req._toolResponseChars)}</div>`;
     }
 
     html += '<div class="section-title">Raw Hook Data</div>';
@@ -2725,6 +2743,11 @@
         <summary>System Prompt ${charGauge(charLen)}</summary>
         ${jsonBlock(req.system)}</pre>
       </details>`;
+    } else if (req._systemChars) {
+      html += `<details>
+        <summary>System Prompt ${charGauge(req._systemChars)}</summary>
+        <div class="json-block" style="opacity:0.5">Loading...</div>
+      </details>`;
     }
 
     if (req.thinking) {
@@ -2740,6 +2763,11 @@
         <summary>Messages ${req.messages.length} ${charGauge(msgChars)}</summary>
         <div class="json-block">${renderMessages(req.messages)}</div>
       </details>`;
+    } else if (req._messageCount > 0) {
+      html += `<details>
+        <summary>Messages ${req._messageCount}</summary>
+        <div class="json-block" style="opacity:0.5">Loading...</div>
+      </details>`;
     }
 
     if (req.tools?.length > 0) {
@@ -2747,6 +2775,11 @@
       html += `<details>
         <summary>Tools ${req.tools.length} ${charGauge(toolChars)}</summary>
         <div class="json-block">${renderTools(req.tools)}</div>
+      </details>`;
+    } else if (req._toolCount > 0) {
+      html += `<details>
+        <summary>Tools ${req._toolCount}</summary>
+        <div class="json-block" style="opacity:0.5">Loading...</div>
       </details>`;
     }
 
@@ -3341,6 +3374,22 @@
         markInteractionError(msg.interactionId, msg.error);
         updateInspectorBusy();
         break;
+
+      case 'interaction:detail': {
+        _pendingDetailRequests.delete(msg.id);
+        const dIdx = state.interactions.findIndex(i => i.id === msg.id);
+        if (dIdx >= 0 && msg.interaction) {
+          const localEvents = state.interactions[dIdx].response?.sseEvents;
+          const localSubagent = state.interactions[dIdx].subagent;
+          state.interactions[dIdx] = { ...msg.interaction };
+          if (localEvents?.length) state.interactions[dIdx].response.sseEvents = localEvents;
+          if (localSubagent && !state.interactions[dIdx].subagent) state.interactions[dIdx].subagent = localSubagent;
+          if (state.selection?.id === msg.id || state.selection?.interactionId === msg.id) {
+            select(state.selection);
+          }
+        }
+        break;
+      }
 
       case 'interaction:sseEvents': {
         _pendingSseRequests.delete(msg.id);
