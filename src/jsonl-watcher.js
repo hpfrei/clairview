@@ -110,10 +110,13 @@ class JsonlWatcher {
       fs.closeSync(fd);
       fd = null;
 
-      this._fileOffsets.set(filePath, stat.size);
-
       const text = buf.toString('utf-8');
-      const lines = text.split('\n');
+      const lastNl = text.lastIndexOf('\n');
+      if (lastNl < 0) return; // no complete line yet — retry next poll
+
+      this._fileOffsets.set(filePath, offset + Buffer.byteLength(text.slice(0, lastNl + 1), 'utf-8'));
+
+      const lines = text.slice(0, lastNl).split('\n');
       for (const line of lines) {
         if (!line.trim()) continue;
         try {

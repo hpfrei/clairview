@@ -1751,6 +1751,9 @@
       agentId = interaction.subagent?.agentId || wl.resolveHookAgentId(interaction, state.interactions);
     } else {
       agentId = interaction.subagent?.agentId || null;
+      if (!agentId && !interaction.isMcp && ds.activeColumns.size === 1) {
+        for (const [aid] of ds.activeColumns) agentId = aid;
+      }
     }
     // PostToolUse/Agent hooks go to column 0
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {

@@ -253,6 +253,7 @@
     const postHookClosedCol = new Map();
     const columnSegments = [];
     const activeSegments = new Map();
+    const startToolUseToSeg = new Map();
     const pendingPreHooks = [];
     const depthAt = new Array(interactions.length);
     let nextColumn = 1;
@@ -323,6 +324,16 @@
           || resolveHookAgentId(interaction, interactions.slice(0, idx));
       } else {
         agentId = interaction.subagent?.agentId || null;
+        // Fallback: when exactly one subagent is active and this LLM turn has no
+        // enrichment, assign it to that agent. The main thread doesn't produce LLM
+        // turns while subagents are running (it blocks on tool results).
+        if (!agentId && !interaction.isMcp && activeColumns.size === 1) {
+          for (const [aid, col] of activeColumns) {
+            agentId = aid;
+            const agentSub = columnAgents.get(col);
+            if (agentSub) interaction.subagent = { ...agentSub };
+          }
+        }
       }
 
       if (interaction.isHook && interaction.hookEvent && /PreToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
@@ -348,12 +359,19 @@
           if (registerSubagentFn) registerSubagentFn(synSub);
           columnAgents.set(alloc.col, synSub);
           let startHookId = null;
+          let startToolUseId = null;
           if (eager.description && pendingPreHooks.length > 0) {
             const mi = pendingPreHooks.findIndex(ph => ph.description === eager.description);
-            if (mi >= 0) { startHookId = pendingPreHooks[mi].id; pendingPreHooks.splice(mi, 1); }
+            if (mi >= 0) {
+              startHookId = pendingPreHooks[mi].id;
+              startToolUseId = pendingPreHooks[mi].toolUseId;
+              pendingPreHooks.splice(mi, 1);
+            }
           }
-          columnSegments.push({ col: alloc.col, agentId: eagerAid, subagent: synSub, startIdx: idx, endHookId: null, startHookId });
-          activeSegments.set(eagerAid, columnSegments[columnSegments.length - 1]);
+          const seg_ = { col: alloc.col, agentId: eagerAid, subagent: synSub, startIdx: idx, endHookId: null, startHookId };
+          columnSegments.push(seg_);
+          activeSegments.set(eagerAid, seg_);
+          if (startToolUseId) startToolUseToSeg.set(startToolUseId, seg_);
         }
       }
 
@@ -374,16 +392,19 @@
           columnAgents.set(col, interaction.subagent);
         }
         let startHookId = null;
+        let startToolUseId2 = null;
         const subDesc = interaction.subagent?.description;
         if (subDesc && pendingPreHooks.length > 0) {
           const matchIdx = pendingPreHooks.findIndex(ph => ph.description === subDesc);
           if (matchIdx >= 0) {
             startHookId = pendingPreHooks[matchIdx].id;
+            startToolUseId2 = pendingPreHooks[matchIdx].toolUseId;
             pendingPreHooks.splice(matchIdx, 1);
           }
         }
         const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null, startHookId };
         columnSegments.push(seg);
+        if (startToolUseId2) startToolUseToSeg.set(startToolUseId2, seg);
         activeSegments.set(agentId, seg);
       }
 
@@ -436,20 +457,28 @@
       const eager = toolUseToEagerAgent.get(ph.toolUseId);
       if (eager) {
         const seg = columnSegments.find(s => s.agentId === eager.agentId && !s.startHookId);
-        if (seg) { seg.startHookId = ph.id; continue; }
+        if (seg) { seg.startHookId = ph.id; startToolUseToSeg.set(ph.toolUseId, seg); continue; }
       }
       if (ph.description) {
         const seg = columnSegments.find(s => !s.startHookId && s.subagent?.description === ph.description);
-        if (seg) seg.startHookId = ph.id;
+        if (seg) { seg.startHookId = ph.id; startToolUseToSeg.set(ph.toolUseId, seg); }
       }
     }
 
-    // Match PostToolUse/Agent hooks to segments by description for merge arrows.
-    // These hooks fire at launch time and have agentId=null, so we match by
-    // the description field (e.g. "Sleep 1 second") against segment subagent descriptions.
+    // Match PostToolUse/Agent hooks to segments for merge arrows.
+    // Best signal: toolUseId links the Post hook to the same segment as its Pre hook.
+    // Fallback: description matching (fragile with duplicate descriptions).
     for (const ph of postAgentHooks) {
       let matched = false;
-      if (ph.description) {
+      if (ph.toolUseId && startToolUseToSeg.has(ph.toolUseId)) {
+        const seg = startToolUseToSeg.get(ph.toolUseId);
+        if (seg && !seg.endHookId) {
+          seg.endHookId = ph.id;
+          postHookClosedCol.set(ph.id, seg.col);
+          matched = true;
+        }
+      }
+      if (!matched && ph.description) {
         for (const seg of columnSegments) {
           if (seg.endHookId) continue;
           if (seg.subagent?.description === ph.description) {
