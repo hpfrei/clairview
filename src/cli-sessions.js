@@ -184,6 +184,11 @@ class CliSessionManager {
     if (session) session.write(data);
   }
 
+  writeWhenReady(tabId, data) {
+    const session = this.sessions.get(tabId);
+    if (session) session.writeWhenReady(data);
+  }
+
   resize(tabId, cols, rows) {
     const session = this.sessions.get(tabId);
     if (session) session.resize(cols, rows);

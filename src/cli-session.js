@@ -188,6 +188,20 @@ class CliSession {
     if (this.pty) this.pty.write(data);
   }
 
+  writeWhenReady(data, timeoutMs = 15000) {
+    if (!this.pty) return;
+    const check = () => this._scrollback && this._scrollback.includes('>');
+    if (check()) { this.pty.write(data); return; }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      if (!this.pty) { clearInterval(interval); return; }
+      if (check() || Date.now() - start > timeoutMs) {
+        clearInterval(interval);
+        if (this.pty) this.pty.write(data);
+      }
+    }, 300);
+  }
+
   resize(cols, rows) {
     if (this.pty) this.pty.resize(cols, rows);
   }
