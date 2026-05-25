@@ -728,7 +728,7 @@
       }
       case 'cli:spawned': {
         let tab = tabs.get(msg.tabId);
-        if (!tab && msg.tabId.startsWith('app-')) {
+        if (!tab && msg.tabId.startsWith('app-') && !msg.hidden) {
           tab = createTab(msg.tabId);
           switchTab(msg.tabId);
           if (typeof switchView === 'function') switchView('claude');

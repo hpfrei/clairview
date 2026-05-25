@@ -145,7 +145,14 @@ class JsonlWatcher {
         this._pendingByAgent.set(agentId, pending);
       }
       if (!pending.some(p => p.requestId === record.requestId)) {
-        pending.push({ requestId: record.requestId, isSidechain: record.isSidechain || false });
+        pending.push({
+          requestId: record.requestId,
+          isSidechain: record.isSidechain || false,
+          parentUuid: record.parentUuid || null,
+          uuid: record.uuid || null,
+          messageId: record.message?.id || null,
+          cwd: record.cwd || null,
+        });
       }
       return;
     }
@@ -157,6 +164,10 @@ class JsonlWatcher {
       agentType: meta?.agentType || record.attributionAgent || null,
       description: meta?.description || null,
       isSidechain: record.isSidechain || false,
+      parentUuid: record.parentUuid || null,
+      uuid: record.uuid || null,
+      messageId: record.message?.id || null,
+      cwd: record.cwd || null,
     };
 
     this.onEnrichment(record.requestId, enrichment);
@@ -175,14 +186,18 @@ class JsonlWatcher {
       const pending = this._pendingByAgent.get(agentId);
       if (pending) {
         this._pendingByAgent.delete(agentId);
-        for (const { requestId, isSidechain } of pending) {
-          if (this._seenRequestIds.has(requestId)) continue;
-          this._seenRequestIds.add(requestId);
-          this.onEnrichment(requestId, {
+        for (const p of pending) {
+          if (this._seenRequestIds.has(p.requestId)) continue;
+          this._seenRequestIds.add(p.requestId);
+          this.onEnrichment(p.requestId, {
             agentId,
             agentType: data.agentType || null,
             description: data.description || null,
-            isSidechain,
+            isSidechain: p.isSidechain,
+            parentUuid: p.parentUuid || null,
+            uuid: p.uuid || null,
+            messageId: p.messageId || null,
+            cwd: p.cwd || null,
           });
         }
       }

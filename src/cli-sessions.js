@@ -39,6 +39,7 @@ class CliSessionManager {
     this.store = store;
     this.opts = opts;
     this.sessions = new Map();
+    this._exitCallbacks = new Map();
   }
 
   _createSession(tabId) {
@@ -73,8 +74,17 @@ class CliSessionManager {
     if (session?.sessId && session.cwd) {
       this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     }
+    const cb = this._exitCallbacks.get(tabId);
+    if (cb) {
+      this._exitCallbacks.delete(tabId);
+      try { cb(tabId); } catch (e) { console.error('Session exit callback error:', e); }
+    }
     this.sessions.delete(tabId);
     this.broadcastTabs();
+  }
+
+  onExit(tabId, callback) {
+    this._exitCallbacks.set(tabId, callback);
   }
 
   saveAllToHistory() {
@@ -184,9 +194,9 @@ class CliSessionManager {
     if (session) session.write(data);
   }
 
-  writeWhenReady(tabId, data) {
+  writeWhenReady(tabId, data, delayMs) {
     const session = this.sessions.get(tabId);
-    if (session) session.writeWhenReady(data);
+    if (session) session.writeWhenReady(data, undefined, delayMs);
   }
 
   resize(tabId, cols, rows) {
@@ -223,6 +233,7 @@ class CliSessionManager {
   list() {
     const tabs = [];
     for (const [tabId, session] of this.sessions) {
+      if (session.hidden) continue;
       tabs.push({
         tabId,
         instanceId: session.instanceId,
@@ -275,6 +286,22 @@ class CliSessionManager {
       }
     }
     return null;
+  }
+
+  launchSession(tabId, { cwd, cols, rows, title, settings, prompt, autoSubmit, hidden, spawnOpts } = {}) {
+    const session = this.getOrCreate(tabId);
+    if (title) session.title = title;
+    if (hidden) session.hidden = true;
+    if (settings) this.updateSettings(tabId, settings);
+    this.spawn(tabId, cwd, cols || 80, rows || 24, spawnOpts);
+    this.broadcastTabs();
+    if (prompt) {
+      this.writeWhenReady(tabId, prompt);
+      if (autoSubmit) {
+        this.writeWhenReady(tabId, '\r', 200);
+      }
+    }
+    return session;
   }
 
   broadcastTabs() {

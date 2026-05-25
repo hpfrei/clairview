@@ -104,6 +104,14 @@ git clone https://github.com/hpfrei/vistaclair.git && cd vistaclair
 npm install && npm start  # open localhost:3457
 \`\`\`
 
+Use Claude through the proxy — run this in any terminal:
+
+\`\`\`bash
+ANTHROPIC_BASE_URL=http://localhost:3456 claude
+\`\`\`
+
+All traffic flows through vistaclair and appears in the Inspector. Works with interactive sessions, \`claude -p\`, and IDE integrations.
+
 Remote access — tunnel the dashboard port and use from any device:
 
 \`\`\`bash
@@ -557,6 +565,12 @@ Handlers have access to Node.js built-ins (via \`import()\`), the dashboard WebS
 Point any Claude Code instance at vistaclair and its traffic appears in the Inspector.
 
 ## Method 1 — Transparent Proxy
+
+\`\`\`bash
+ANTHROPIC_BASE_URL=http://localhost:3456 claude
+\`\`\`
+
+Or non-interactive:
 
 \`\`\`bash
 ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"

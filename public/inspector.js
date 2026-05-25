@@ -80,6 +80,7 @@
 
   // --- Streaming text block merge state ---
   let _streamBlockMap = new Map();   // index -> { bodyEl, needsSeparator }
+  let _streamThinkingTokens = new Map();
   let _lastStreamTextBodyEl = null;
   let _pendingMarkdownBodyEl = null;
 
@@ -630,6 +631,7 @@
       if (statusVal) { statusVal.textContent = '200'; statusVal.className = 'info-value status-ok'; }
       if (data?.message?.usage) updateUsageDisplay(data.message.usage, interaction.pricing);
       _streamBlockMap = new Map();
+      _streamThinkingTokens = new Map();
       _lastStreamTextBodyEl = null;
       _pendingMarkdownBodyEl = null;
     }
@@ -675,6 +677,7 @@
 
         const header = document.createElement('div');
         header.className = 'content-block-header';
+        header.id = `block-header-${data.index}`;
         header.textContent = block.type === 'thinking' ? 'Thinking' : block.type;
 
         const body = document.createElement('div');
@@ -697,6 +700,15 @@
         if (!bodyEl) return;
         bodyEl.appendChild(document.createTextNode(delta.thinking || ''));
         bodyEl.scrollTop = bodyEl.scrollHeight;
+        if (delta.estimated_tokens) {
+          const total = (_streamThinkingTokens.get(data.index) || 0) + delta.estimated_tokens;
+          _streamThinkingTokens.set(data.index, total);
+          const headerEl = document.getElementById(`block-header-${data.index}`);
+          if (headerEl) {
+            const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+            headerEl.innerHTML = `Thinking <span class="thinking-tokens">${fmt(total)} tokens</span>`;
+          }
+        }
       } else if (delta.type === 'text_delta') {
         const entry = _streamBlockMap.get(data.index);
         const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
@@ -2816,7 +2828,10 @@
     html += `<div id="response-blocks">`;
 
     const stdLlmResp = isStandardLlm(interaction);
-    if (interaction.isStreaming && resp.sseEvents?.length > 0) {
+    const _isLive = interaction.status === 'pending' || interaction.status === 'streaming';
+    if (_isLive) {
+      // Leave empty — replay via appendSSEToDetail after DOM insertion
+    } else if (interaction.isStreaming && resp.sseEvents?.length > 0) {
       html += renderAccumulatedBlocks(resp.sseEvents);
     } else if (resp.body) {
       if (!stdLlmResp) {
@@ -2845,18 +2860,31 @@
 
     html += `</div>`;
 
-    html += `<details id="raw-sse-details"${resp.sseEvents?.length > 0 ? '' : ' hidden'}>
-      <summary>Raw SSE Events (<span id="raw-sse-count">${resp.sseEvents?.length || 0}</span>)</summary>
-      <pre class="json-block" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
-        `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
-      ).join('\n') : ''}</pre>
-    </details>`;
+    if (_isLive) {
+      html += `<details id="raw-sse-details" hidden>
+        <summary>Raw SSE Events (<span id="raw-sse-count">0</span>)</summary>
+        <pre class="json-block" id="raw-sse-pre"></pre>
+      </details>`;
+    } else {
+      html += `<details id="raw-sse-details"${resp.sseEvents?.length > 0 ? '' : ' hidden'}>
+        <summary>Raw SSE Events (<span id="raw-sse-count">${resp.sseEvents?.length || 0}</span>)</summary>
+        <pre class="json-block" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
+          `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
+        ).join('\n') : ''}</pre>
+      </details>`;
+    }
 
     html += `</div>`;
 
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
+
+    if (_isLive && interaction.response?.sseEvents?.length > 0) {
+      for (const event of interaction.response.sseEvents) {
+        appendSSEToDetail(event, interaction);
+      }
+    }
   }
 
   function renderToolDetail(interaction, toolIndex) {
@@ -2963,7 +2991,10 @@
       } else if (event.eventType === 'content_block_delta' && currentBlock) {
         const delta = event.data?.delta;
         if (delta?.type === 'text_delta') currentBlock.text += delta.text || '';
-        else if (delta?.type === 'thinking_delta') currentBlock.text += delta.thinking || '';
+        else if (delta?.type === 'thinking_delta') {
+          currentBlock.text += delta.thinking || '';
+          if (delta.estimated_tokens) currentBlock.estimatedTokens = (currentBlock.estimatedTokens || 0) + delta.estimated_tokens;
+        }
         else if (delta?.type === 'input_json_delta') currentBlock.text += delta.partial_json || '';
       } else if (event.eventType === 'content_block_stop') {
         currentBlock = null;
@@ -2973,8 +3004,10 @@
     const mergedBlocks = mergeConsecutiveTextBlocks(blocks);
     return mergedBlocks.map(b => {
       if (b.type === 'thinking') {
+        const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+        const tkn = b.estimatedTokens ? ` <span class="thinking-tokens">${fmt(b.estimatedTokens)} tokens</span>` : '';
         return `<div class="content-block">
-          <div class="content-block-header">Thinking</div>
+          <div class="content-block-header">Thinking${tkn}</div>
           <div class="content-block-body thinking">${escHtml(b.text)}</div>
         </div>`;
       } else if (b.type === 'text') {
@@ -3009,8 +3042,10 @@
       return `<div class="content-block-body markdown-body" data-md-pending="${escHtml(block.text || '')}">${escHtml(block.text || '')}</div>`;
     }
     if (block.type === 'thinking') {
+      const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+      const tkn = block.estimated_tokens ? ` <span class="thinking-tokens">${fmt(block.estimated_tokens)} tokens</span>` : '';
       return `<div class="content-block">
-        <div class="content-block-header">Thinking</div>
+        <div class="content-block-header">Thinking${tkn}</div>
         <div class="content-block-body thinking">${escHtml(block.thinking || '')}</div>
       </div>`;
     }

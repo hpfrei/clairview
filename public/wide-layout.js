@@ -316,6 +316,19 @@
       toolUseToEagerAgent.set(atc.toolUseId, atc);
     }
 
+    // Extend agentLastIdx using PostToolUse/Agent hooks so columns stay
+    // open until the agent actually returns (not just until the last
+    // enriched turn, which can be too early with partial enrichment).
+    for (const ph of postAgentHooks) {
+      if (!ph.toolUseId) continue;
+      const eager = toolUseToEagerAgent.get(ph.toolUseId);
+      if (!eager) continue;
+      const current = agentLastIdx.get(eager.agentId);
+      if (current !== undefined && ph.idx > current) {
+        agentLastIdx.set(eager.agentId, ph.idx);
+      }
+    }
+
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
       let agentId = null;
@@ -381,6 +394,35 @@
         agentId = null;
       }
 
+      // SubagentStart: reconcile with a pending eager column so we don't
+      // create a second column before JSONL enrichment links the two IDs.
+      if (interaction.isHook && interaction.hookEvent === 'SubagentStart'
+          && agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
+        let pendingKey = null, pendingCount = 0;
+        for (const [aid] of activeColumns) {
+          if (typeof aid === 'string' && aid.startsWith('pending-')) { pendingKey = aid; pendingCount++; }
+        }
+        if (pendingCount === 1 && pendingKey) {
+          const col = activeColumns.get(pendingKey);
+          activeColumns.delete(pendingKey);
+          activeColumns.set(agentId, col);
+          historicalColumns.delete(pendingKey);
+          historicalColumns.set(agentId, col);
+          if (interaction.subagent) {
+            if (registerSubagentFn) registerSubagentFn(interaction.subagent);
+            columnAgents.set(col, interaction.subagent);
+          }
+          const seg = activeSegments.get(pendingKey);
+          if (seg) {
+            activeSegments.delete(pendingKey);
+            seg.agentId = agentId;
+            if (interaction.subagent) seg.subagent = interaction.subagent;
+            activeSegments.set(agentId, seg);
+          }
+          agentLastIdx.delete(pendingKey);
+        }
+      }
+
       if (agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
         const alloc = allocateColumn(freeColumns, activeColumns, nextColumn);
         const col = alloc.col;
@@ -427,11 +469,42 @@
 
       // Free columns when we pass the agent's last interaction (not on PostToolUse hooks)
       if (agentId && activeColumns.has(agentId) && agentLastIdx.get(agentId) === idx) {
-        const closedCol = activeColumns.get(agentId);
-        const seg = activeSegments.get(agentId);
-        if (seg) activeSegments.delete(agentId);
-        freeColumns.push(closedCol);
-        activeColumns.delete(agentId);
+        let shouldClose = true;
+        // When only one subagent is active, scan ahead for unenriched turns
+        // that likely belong to the same agent (the main thread blocks on
+        // tool results while a subagent is running, so any LLM turn during
+        // this window is a subagent turn with missing enrichment).
+        if (activeColumns.size === 1) {
+          for (let j = idx + 1; j < interactions.length; j++) {
+            const next = interactions[j];
+            if (next.isHook || next.isMcp) continue;
+            if (next.subagent?.agentId) break;
+            agentLastIdx.set(agentId, j);
+            shouldClose = false;
+            break;
+          }
+        }
+        if (shouldClose) {
+          const closedCol = activeColumns.get(agentId);
+          const seg = activeSegments.get(agentId);
+          if (seg) activeSegments.delete(agentId);
+          freeColumns.push(closedCol);
+          activeColumns.delete(agentId);
+        }
+      }
+
+      // Explicit close: PostToolUse/Agent hooks signal the agent returned
+      if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent)
+          && interaction.toolName === 'Agent' && interaction.toolUseId) {
+        const eager = toolUseToEagerAgent.get(interaction.toolUseId);
+        if (eager && activeColumns.has(eager.agentId)) {
+          const closingId = eager.agentId;
+          const closedCol = activeColumns.get(closingId);
+          const seg = activeSegments.get(closingId);
+          if (seg) activeSegments.delete(closingId);
+          freeColumns.push(closedCol);
+          activeColumns.delete(closingId);
+        }
       }
 
       depthAt[idx] = activeColumns.size;
@@ -715,31 +788,45 @@
           color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
         });
 
-        // Merge arrow: from bgBottom to the matching PostToolUse/Agent hook
-        let mergeTargetY = null;
-        let mergeTargetX = D3_CONST.RULER_WIDTH + colWidth / 2;
-        if (hookEntry) {
-          mergeTargetY = hookEntry.y + hookEntry.height / 2;
-          mergeTargetX = hookEntry.x + hookEntry.width / 2;
-        } else {
-          for (const me of mainEntries) {
-            if (me.y >= bgBottom - 4) {
-              mergeTargetY = me.y + me.height / 2;
-              mergeTargetX = me.x + me.width / 2;
-              break;
+        // Merge arrow: only when the segment actually ended (has endHookId)
+        if (seg.endHookId) {
+          let mergeTargetY = null;
+          let mergeTargetX = D3_CONST.RULER_WIDTH + colWidth / 2;
+          if (hookEntry) {
+            mergeTargetY = hookEntry.y + hookEntry.height / 2;
+            mergeTargetX = hookEntry.x + hookEntry.width / 2;
+          } else if (_foldedHookIds.has(seg.endHookId)) {
+            const info = _foldedHookParentInfo.get(seg.endHookId);
+            if (info) {
+              const parentItem = layoutById.get(info.parentId);
+              if (parentItem) {
+                const tools = extractToolCalls(parentItem.interaction);
+                mergeTargetY = parentItem.y + D3_CONST.MIN_ENTRY_HEIGHT
+                  + tools.length * D3_CONST.TOOL_HEIGHT
+                  + info.hookIndex * D3_CONST.TOOL_HEIGHT
+                  + D3_CONST.TOOL_HEIGHT / 2;
+                mergeTargetX = parentItem.x + parentItem.width / 2;
+              }
+            }
+          } else {
+            for (const me of mainEntries) {
+              if (me.y >= bgBottom - 4) {
+                mergeTargetY = me.y + me.height / 2;
+                mergeTargetX = me.x + me.width / 2;
+                break;
+              }
             }
           }
-        }
-        if (mergeTargetY != null) {
-          const bgCenterX = bgLeft + (colWidth + 8) / 2;
-          // Merge: arc downward (control points below both endpoints)
-          const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
-          const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
-          connectors.push({
-            type: 'merge', col: seg.col,
-            path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
-            color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
-          });
+          if (mergeTargetY != null) {
+            const bgCenterX = bgLeft + (colWidth + 8) / 2;
+            const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
+            const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
+            connectors.push({
+              type: 'merge', col: seg.col,
+              path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
+              color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
+            });
+          }
         }
 
         connectors.push({

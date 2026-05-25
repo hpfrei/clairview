@@ -47,10 +47,11 @@ cd vistaclair && npm install && npm start
 Open **http://localhost:3457** and log in with the auth token printed to the console.
 
 > [!TIP]
-> Inspect an external Claude Code session:
+> **Use Claude through the proxy** — run this in any terminal to route all traffic through vistaclair:
 > ```bash
-> ANTHROPIC_BASE_URL=http://localhost:3456 claude -p "your prompt"
+> ANTHROPIC_BASE_URL=http://localhost:3456 claude
 > ```
+> Works with interactive sessions, `claude -p "prompt"`, and IDE integrations. Traffic appears in the Inspector.
 
 > [!TIP]
 > Custom port: `npm start -- 8080` or `DASHBOARD_PORT=8080 npm start`

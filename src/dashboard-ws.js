@@ -356,7 +356,17 @@ class DashboardBroadcaster {
                 const session = this.cliSessionManager.getOrCreate(msg.tabId);
                 session.spawnShell(msg.cwd, msg.cols || 80, msg.rows || 24);
               } else {
+                if (msg.hidden) {
+                  const session = this.cliSessionManager.getOrCreate(msg.tabId);
+                  session.hidden = true;
+                }
                 this.cliSessionManager.spawn(msg.tabId, msg.cwd, msg.cols || 80, msg.rows || 24, { resumeSessionId: msg.resumeSessionId || undefined, isolated: msg.isolated === true, autoMemory: msg.autoMemory === true });
+                if (msg.prompt) {
+                  this.cliSessionManager.writeWhenReady(msg.tabId, msg.prompt);
+                  if (msg.autoSubmit) {
+                    this.cliSessionManager.writeWhenReady(msg.tabId, '\r', 200);
+                  }
+                }
               }
             }
           } else if (msg.type === 'cli:input') {
