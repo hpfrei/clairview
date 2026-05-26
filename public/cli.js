@@ -12,6 +12,7 @@
   let _firstTabSync = true;
   const _respawnQueue = [];
   const _scrollbackLoaded = new Set();
+  const _pendingRemoval = new Map();
 
   function _saveOpenTabs() {
     const entries = [];
@@ -722,11 +723,14 @@
           tab.status = 'exited';
           tab.terminal.write('\r\n\x1b[90m[Process exited' + (msg.exitCode != null ? ' with code ' + msg.exitCode : '') + ']\x1b[0m\r\n');
           renderTabStrip();
-          setTimeout(() => removeTab(msg.tabId), 1500);
+          const timer = setTimeout(() => { _pendingRemoval.delete(msg.tabId); removeTab(msg.tabId); }, 1500);
+          _pendingRemoval.set(msg.tabId, timer);
         }
         break;
       }
       case 'cli:spawned': {
+        const pendingTimer = _pendingRemoval.get(msg.tabId);
+        if (pendingTimer) { clearTimeout(pendingTimer); _pendingRemoval.delete(msg.tabId); }
         let tab = tabs.get(msg.tabId);
         if (!tab && msg.tabId.startsWith('app-') && !msg.hidden) {
           tab = createTab(msg.tabId);

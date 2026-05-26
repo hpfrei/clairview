@@ -79,15 +79,17 @@ class CliSession {
       });
     }
 
-    const args = ['--dangerously-skip-permissions', ...buildCliArgs(this.settings)];
+    const safetyNote = `IMPORTANT: A Vistaclair control-room server is running from ${PROJECT_ROOT}. Never restart, stop, kill, or interfere with this server process or its ports. Do not run commands like "npm restart", "kill", "pkill", or "lsof ... | kill" targeting it.`;
+    const mergedSettings = { ...this.settings };
+    mergedSettings.appendSystemPrompt = mergedSettings.appendSystemPrompt
+      ? mergedSettings.appendSystemPrompt + '\n\n' + safetyNote
+      : safetyNote;
+    const args = ['--dangerously-skip-permissions', ...buildCliArgs(mergedSettings)];
     if (resumeSessionId) {
       args.push('--resume', resumeSessionId);
     } else {
       args.push('--session-id', this.sessId);
     }
-
-    // Safety: tell Claude never to restart this server
-    args.push('--append-system-prompt', `IMPORTANT: A Vistaclair control-room server is running from ${PROJECT_ROOT}. Never restart, stop, kill, or interfere with this server process or its ports. Do not run commands like "npm restart", "kill", "pkill", or "lsof ... | kill" targeting it.`);
 
     // MCP config injection
     this._cleanupMcpConfig();
@@ -200,7 +202,7 @@ class CliSession {
         this.pty.write(data);
       }
     };
-    const check = () => this._scrollback && this._scrollback.includes('>');
+    const check = () => this._scrollback && this._scrollback.includes('❯');
     if (check()) { doWrite(); return; }
     const start = Date.now();
     const interval = setInterval(() => {
