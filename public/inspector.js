@@ -84,6 +84,11 @@
   let _lastStreamTextBodyEl = null;
   let _pendingMarkdownBodyEl = null;
 
+  // --- Split mode: show parallel streaming interactions side by side ---
+  let _splitMode = false;
+  const _splitPanes = new Map();          // interactionId -> { pane, streamState }
+  const _splitInteractions = new Set();
+
   function flushPendingMarkdown() {
     if (_pendingMarkdownBodyEl) {
       cancelRenderDebounce(_pendingMarkdownBodyEl);
@@ -617,60 +622,91 @@
       }
     }
 
+    // Route SSE to detail panel
     const sel = state.selection;
-    if (sel?.type === 'turn' && sel.id === interactionId) {
+    if (_splitMode && _splitInteractions.has(interactionId)) {
       appendSSEToDetail(event, interaction);
+    } else if (sel?.type === 'turn' && sel.id === interactionId) {
+      if (event.eventType === 'message_start' && !_splitMode) {
+        _trySplitMode(interactionId);
+      }
+      if (_splitMode && _splitInteractions.has(interactionId)) {
+        appendSSEToDetail(event, interaction);
+      } else {
+        appendSSEToDetail(event, interaction);
+      }
+    } else if (!_splitMode && event.eventType === 'message_start'
+               && (interaction.status === 'streaming' || interaction.status === 'pending')) {
+      if (_trySplitMode(interactionId)) {
+        appendSSEToDetail(event, interaction);
+      }
     }
   }
 
-  function appendSSEToDetail(event, interaction) {
+  function _getStreamState(interactionId) {
+    if (_splitMode && interactionId) {
+      const pane = _splitPanes.get(interactionId);
+      if (pane) return pane.streamState;
+    }
+    return { blockMap: _streamBlockMap, thinkingTokens: _streamThinkingTokens,
+             lastTextBody: () => _lastStreamTextBodyEl, setLastTextBody: v => { _lastStreamTextBodyEl = v; },
+             pendingMd: () => _pendingMarkdownBodyEl, setPendingMd: v => { _pendingMarkdownBodyEl = v; } };
+  }
+
+  function _scopeFind(scope, id) {
+    if (scope && scope !== document) return scope.querySelector(`#${CSS.escape(id)}`);
+    return document.getElementById(id);
+  }
+
+  function appendSSEToDetail(event, interaction, scope) {
     const { eventType, data } = event;
+    scope = scope || (_splitMode && _splitPanes.has(interaction.id) ? _splitPanes.get(interaction.id).pane : null) || document;
+    const ss = _getStreamState(interaction.id);
+    const blockMap = ss.blockMap;
+    const thinkingTokens = ss.thinkingTokens;
 
     if (eventType === 'message_start') {
-      const statusVal = document.getElementById('resp-status');
+      const statusVal = _scopeFind(scope, 'resp-status');
       if (statusVal) { statusVal.textContent = '200'; statusVal.className = 'info-value status-ok'; }
-      if (data?.message?.usage) updateUsageDisplay(data.message.usage, interaction.pricing);
-      _streamBlockMap = new Map();
-      _streamThinkingTokens = new Map();
-      _lastStreamTextBodyEl = null;
-      _pendingMarkdownBodyEl = null;
+      if (data?.message?.usage) {
+        if (scope === document) updateUsageDisplay(data.message.usage, interaction.pricing);
+      }
+      blockMap.clear();
+      thinkingTokens.clear();
+      ss.setLastTextBody(null);
+      ss.setPendingMd(null);
     }
 
     if (eventType === 'content_block_start') {
       const block = data?.content_block;
       if (!block) return;
-      const container = document.getElementById('response-blocks');
+      const container = _scopeFind(scope, 'response-blocks');
       if (!container) return;
 
-      // Flush pending markdown when a non-text block arrives
       if (block.type !== 'text') {
-        flushPendingMarkdown();
-        _lastStreamTextBodyEl = null;
+        _flushPendingMarkdownFor(ss);
+        ss.setLastTextBody(null);
       }
 
-      // Merge consecutive text blocks: reuse previous text block's body
-      if (block.type === 'text' && _lastStreamTextBodyEl) {
-        _streamBlockMap.set(data.index, { bodyEl: _lastStreamTextBodyEl, needsSeparator: true });
+      if (block.type === 'text' && ss.lastTextBody()) {
+        blockMap.set(data.index, { bodyEl: ss.lastTextBody(), needsSeparator: true });
         return;
       }
 
       if (block.type === 'text') {
-        // Text blocks: just the body, no container/header
         const body = document.createElement('div');
         body.className = 'content-block-body';
         body.id = `block-body-${data.index}`;
-        _lastStreamTextBodyEl = body;
-        _streamBlockMap.set(data.index, { bodyEl: body, needsSeparator: false });
+        ss.setLastTextBody(body);
+        blockMap.set(data.index, { bodyEl: body, needsSeparator: false });
         container.appendChild(body);
       } else if (block.type === 'tool_use') {
-        // Tool use blocks: just the body, no container/header
         const body = document.createElement('div');
         body.className = 'content-block-body tool-use';
         body.id = `block-body-${data.index}`;
         body.innerHTML = `<div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div><div class="json-block jt-root" id="tool-input-${data.index}"></div>`;
         container.appendChild(body);
       } else {
-        // Other blocks (thinking, etc.): keep container/header
         const blockEl = document.createElement('div');
         blockEl.className = 'content-block';
         blockEl.id = `block-${data.index}`;
@@ -696,22 +732,22 @@
       if (!delta) return;
 
       if (delta.type === 'thinking_delta') {
-        const bodyEl = document.getElementById(`block-body-${data.index}`);
+        const bodyEl = _scopeFind(scope, `block-body-${data.index}`);
         if (!bodyEl) return;
         bodyEl.appendChild(document.createTextNode(delta.thinking || ''));
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        if (_liveMode) bodyEl.scrollTop = bodyEl.scrollHeight;
         if (delta.estimated_tokens) {
-          const total = (_streamThinkingTokens.get(data.index) || 0) + delta.estimated_tokens;
-          _streamThinkingTokens.set(data.index, total);
-          const headerEl = document.getElementById(`block-header-${data.index}`);
+          const total = (thinkingTokens.get(data.index) || 0) + delta.estimated_tokens;
+          thinkingTokens.set(data.index, total);
+          const headerEl = _scopeFind(scope, `block-header-${data.index}`);
           if (headerEl) {
             const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
             headerEl.innerHTML = `Thinking <span class="thinking-tokens">${fmt(total)} tokens</span>`;
           }
         }
       } else if (delta.type === 'text_delta') {
-        const entry = _streamBlockMap.get(data.index);
-        const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
+        const entry = blockMap.get(data.index);
+        const bodyEl = entry?.bodyEl || _scopeFind(scope, `block-body-${data.index}`);
         if (!bodyEl) return;
         if (entry?.needsSeparator) {
           bodyEl._rawText = (bodyEl._rawText || '') + '\n';
@@ -720,24 +756,23 @@
         bodyEl._rawText = (bodyEl._rawText || '') + (delta.text || '');
         bodyEl.classList.add('markdown-body');
         renderMarkdownDebounced(bodyEl._rawText, bodyEl);
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        if (_liveMode) bodyEl.scrollTop = bodyEl.scrollHeight;
       } else if (delta.type === 'input_json_delta') {
-        const inputEl = document.getElementById(`tool-input-${data.index}`);
+        const inputEl = _scopeFind(scope, `tool-input-${data.index}`);
         if (inputEl) inputEl.appendChild(document.createTextNode(delta.partial_json || ''));
       }
     }
 
     if (eventType === 'content_block_stop') {
-      const inputEl = document.getElementById(`tool-input-${data.index}`);
+      const inputEl = _scopeFind(scope, `tool-input-${data.index}`);
       if (inputEl) {
         try {
           const parsed = JSON.parse(inputEl.textContent);
           inputEl.innerHTML = renderJSON(parsed);
         } catch {}
       }
-      // Immediate markdown render for completed text blocks; still defer for possible merge
-      const entry = _streamBlockMap.get(data.index);
-      const bodyEl = entry?.bodyEl || document.getElementById(`block-body-${data.index}`);
+      const entry = blockMap.get(data.index);
+      const bodyEl = entry?.bodyEl || _scopeFind(scope, `block-body-${data.index}`);
       if (bodyEl && !bodyEl.classList.contains('tool-use') && !bodyEl.classList.contains('thinking')) {
         cancelRenderDebounce(bodyEl);
         const rawText = bodyEl._rawText || bodyEl.textContent;
@@ -745,52 +780,203 @@
           bodyEl.classList.add('markdown-body');
           renderMarkdown(rawText, bodyEl);
         }
-        _pendingMarkdownBodyEl = bodyEl;
+        ss.setPendingMd(bodyEl);
       }
     }
 
     if (eventType === 'message_delta') {
       if (data?.usage) {
         interaction.usage = { ...interaction.usage, ...data.usage };
-        updateUsageDisplay(interaction.usage, interaction.pricing);
+        if (scope === document) updateUsageDisplay(interaction.usage, interaction.pricing);
         updateTurnTokens(interaction);
       }
       if (interaction.timing) {
         interaction.timing.duration = Date.now() - interaction.timing.startedAt;
-        const durationEl = document.getElementById('resp-duration');
+        const durationEl = _scopeFind(scope, 'resp-duration');
         if (durationEl) durationEl.textContent = formatDuration(interaction.timing.duration);
       }
     }
 
     if (eventType === 'message_stop') {
-      flushPendingMarkdown();
-      _lastStreamTextBodyEl = null;
+      _flushPendingMarkdownFor(ss);
+      ss.setLastTextBody(null);
       if (interaction.timing) {
-        const durationEl = document.getElementById('resp-duration');
+        const durationEl = _scopeFind(scope, 'resp-duration');
         if (durationEl) durationEl.textContent = formatDuration(interaction.timing.duration);
       }
       updateTurnBadge(interaction.id, 'complete');
       updateStats();
     }
 
-    // --- Live-update response char gauge ---
-    const _gaugeEl = document.getElementById('resp-char-gauge');
+    const _gaugeEl = _scopeFind(scope, 'resp-char-gauge');
     if (_gaugeEl && interaction._respChars) {
       _gaugeEl.innerHTML = charGauge(interaction._respChars);
     }
 
-    // --- Live-update Raw SSE Events section ---
-    const _sseDetails = document.getElementById('raw-sse-details');
+    const _sseDetails = _scopeFind(scope, 'raw-sse-details');
     if (_sseDetails) {
       _sseDetails.hidden = false;
-      const _sseCount = document.getElementById('raw-sse-count');
+      const _sseCount = _scopeFind(scope, 'raw-sse-count');
       if (_sseCount) _sseCount.textContent = interaction.response.sseEvents.length;
-      const _ssePre = document.getElementById('raw-sse-pre');
+      const _ssePre = _scopeFind(scope, 'raw-sse-pre');
       if (_ssePre) {
         const _evtHtml = `<span class="json-key">event:</span> ${escHtml(event.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof event.data === 'string' ? event.data : JSON.stringify(event.data))}\n`;
         _ssePre.insertAdjacentHTML('beforeend', '\n' + _evtHtml);
       }
     }
+  }
+
+  function _flushPendingMarkdownFor(ss) {
+    const el = ss.pendingMd();
+    if (el) {
+      cancelRenderDebounce(el);
+      const rawText = el._rawText || el.textContent;
+      if (rawText) {
+        el.classList.add('markdown-body');
+        renderMarkdown(rawText, el);
+      }
+      ss.setPendingMd(null);
+    }
+  }
+
+  // --- Split mode: parallel streaming detail panes ---
+
+  function _findParallelStreamers(interactionId) {
+    if (!_d3State) return [];
+    const col = _d3State.columnFor.get(interactionId);
+    if (col == null) return [];
+    return state.interactions.filter(i =>
+      i.id !== interactionId
+      && (i.status === 'streaming' || i.status === 'pending')
+      && !i.isHook && !i.isMcp
+      && _d3State.columnFor.has(i.id)
+      && _d3State.columnFor.get(i.id) !== col
+    );
+  }
+
+  function _makePaneStreamState() {
+    const st = {
+      blockMap: new Map(),
+      thinkingTokens: new Map(),
+      _lastTextBody: null,
+      _pendingMd: null,
+      lastTextBody: () => st._lastTextBody,
+      setLastTextBody: v => { st._lastTextBody = v; },
+      pendingMd: () => st._pendingMd,
+      setPendingMd: v => { st._pendingMd = v; },
+    };
+    return st;
+  }
+
+  function _renderSplitPaneContent(interaction) {
+    const req = interaction.request || {};
+    const resp = interaction.response || {};
+    const timing = interaction.timing || {};
+    const model = req.model || 'unknown';
+    const shortModel = model.replace('claude-', '').split('-202')[0];
+    const statusOk = resp.status >= 200 && resp.status < 300;
+    const respChars = interaction._respChars || 0;
+
+    let html = '';
+    html += `<div class="detail-panel response-panel">`;
+    html += `<div class="section-title">Response <span id="resp-char-gauge">${respChars ? charGauge(respChars) : ''}</span></div>`;
+    html += `<div class="info-grid">
+      <span class="info-label">Status</span><span class="info-value ${statusOk ? 'status-ok' : 'status-err'}" id="resp-status">${resp.status || '--'}</span>
+      <span class="info-label">TTFB</span><span class="info-value" id="resp-ttfb">${timing.ttfb ? formatDuration(timing.ttfb) : '--'}</span>
+      <span class="info-label">Duration</span><span class="info-value" id="resp-duration">${timing.duration ? formatDuration(timing.duration) : '--'}</span>
+    </div>`;
+    html += `<div id="response-blocks"></div>`;
+    html += `</div>`;
+    return html;
+  }
+
+  function _buildSplitPane(interaction) {
+    const pane = document.createElement('div');
+    pane.className = 'detail-split-pane';
+    pane.dataset.splitId = interaction.id;
+
+    const sa = interaction.subagent;
+    const label = sa ? (getSubagentLabel(sa) || sa.agentType || 'Agent') : 'Main';
+    const color = sa?.agentId ? getSubagentColor(sa) : 'var(--accent)';
+    const model = (interaction.request?.model || 'unknown').replace('claude-', '').split('-202')[0];
+
+    const header = document.createElement('div');
+    header.className = 'split-pane-header';
+    header.style.borderBottomColor = color;
+    header.style.color = color;
+    header.innerHTML = `${escHtml(label)} <span style="color:var(--text-dim);font-weight:400">${escHtml(model)}</span>`;
+    pane.appendChild(header);
+
+    const content = document.createElement('div');
+    content.innerHTML = _renderSplitPaneContent(interaction);
+    pane.appendChild(content);
+
+    return pane;
+  }
+
+  function enterSplitMode(interactions) {
+    _splitMode = true;
+    _splitPanes.clear();
+    _splitInteractions.clear();
+
+    emptyState.classList.add('hidden');
+    detailContent.classList.remove('hidden');
+    detailContent.classList.add('split-active');
+    detailContent.innerHTML = '';
+
+    for (const interaction of interactions) {
+      _splitInteractions.add(interaction.id);
+      const pane = _buildSplitPane(interaction);
+      const streamState = _makePaneStreamState();
+      _splitPanes.set(interaction.id, { pane, streamState });
+      detailContent.appendChild(pane);
+
+      if (interaction.response?.sseEvents?.length > 0) {
+        for (const evt of interaction.response.sseEvents) {
+          appendSSEToDetail(evt, interaction, pane);
+        }
+      }
+    }
+  }
+
+  function addSplitPane(interaction) {
+    if (_splitInteractions.has(interaction.id)) return;
+    _splitInteractions.add(interaction.id);
+    const pane = _buildSplitPane(interaction);
+    const streamState = _makePaneStreamState();
+    _splitPanes.set(interaction.id, { pane, streamState });
+    detailContent.appendChild(pane);
+
+    if (interaction.response?.sseEvents?.length > 0) {
+      for (const evt of interaction.response.sseEvents) {
+        appendSSEToDetail(evt, interaction, pane);
+      }
+    }
+  }
+
+  function exitSplitMode() {
+    _splitMode = false;
+    _splitPanes.clear();
+    _splitInteractions.clear();
+    detailContent.classList.remove('split-active');
+  }
+
+  function _trySplitMode(interactionId) {
+    const parallel = _findParallelStreamers(interactionId);
+    if (parallel.length === 0) return false;
+
+    const current = state.interactions.find(i => i.id === interactionId);
+    if (!current) return false;
+
+    const allStreamers = [current, ...parallel];
+    if (_splitMode) {
+      for (const i of allStreamers) {
+        if (!_splitInteractions.has(i.id)) addSplitPane(i);
+      }
+    } else {
+      enterSplitMode(allStreamers);
+    }
+    return true;
   }
 
   // --- Interaction update ---
@@ -858,7 +1044,7 @@
   let _lastRenderedAgentId = null;
 
   // --- Timeline view mode toggle (single column vs parallel columns) ---
-  let _timelineMode = localStorage.getItem('timelineMode') || 'single';
+  let _timelineMode = 'parallel';
 
   let _allHistoryLoaded = false;
 
@@ -868,19 +1054,14 @@
     const toggle = document.createElement('div');
     toggle.className = 'timeline-view-toggle';
 
-    // Single button that swaps between narrow ↔ wide
-    const narrowSvg = `<svg width="12" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="3" y="1" width="8" height="10" rx="1.5"/><line x1="5" y1="4" x2="9" y2="4"/><line x1="5" y1="6.5" x2="9" y2="6.5"/><line x1="5" y1="9" x2="8" y2="9"/></svg>`;
-    const wideSvg = `<svg width="12" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1" y="1" width="12" height="10" rx="1.5"/><line x1="5" y1="1" x2="5" y2="11"/><line x1="9" y1="1" x2="9" y2="11"/></svg>`;
     const allSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 2h8v8H2z"/><line x1="2" y1="5" x2="10" y2="5"/><line x1="2" y1="8" x2="10" y2="8"/></svg>`;
 
     const liveOnSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,6.5 5,9.5 10,3"/></svg>`;
     const liveOffSvg = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="3" y1="3" x2="9" y2="9"/><line x1="9" y1="3" x2="3" y2="9"/></svg>`;
     function liveButtonContent(on) { return (on ? liveOnSvg : liveOffSvg) + `<span class="tl-toggle-label">live</span>`; }
 
-    const isWide = _timelineMode === 'parallel';
     toggle.innerHTML = `
       <button class="tl-toggle-btn tl-live-btn${_liveMode ? ' active' : ''}" title="${_liveMode ? 'Live mode on' : 'Live mode off'}">${liveButtonContent(_liveMode)}</button>
-      <button class="tl-toggle-btn tl-view-toggle${isWide ? ' active' : ''}" title="${isWide ? 'Switch to narrow view' : 'Switch to wide view'}">${isWide ? wideSvg : narrowSvg}<span class="tl-toggle-label">${isWide ? 'wide' : 'narrow'}</span></button>
       <button class="tl-toggle-btn tl-load-all-btn${_allHistoryLoaded ? ' active' : ''}" title="Load full history from disk">${allSvg}</button>
     `;
     const liveBtn = toggle.querySelector('.tl-live-btn');
@@ -892,18 +1073,6 @@
       liveBtn.title = _liveMode ? 'Live mode on' : 'Live mode off';
       if (_liveMode) selectLastAndFollow();
     });
-    const viewBtn = toggle.querySelector('.tl-view-toggle');
-    viewBtn.addEventListener('click', () => {
-      _timelineMode = _timelineMode === 'single' ? 'parallel' : 'single';
-      localStorage.setItem('timelineMode', _timelineMode);
-      const nowWide = _timelineMode === 'parallel';
-      viewBtn.innerHTML = (nowWide ? wideSvg : narrowSvg) + `<span class="tl-toggle-label">${nowWide ? 'wide' : 'narrow'}</span>`;
-      viewBtn.classList.toggle('active', nowWide);
-      viewBtn.title = nowWide ? 'Switch to narrow view' : 'Switch to wide view';
-      const aside = document.getElementById('timeline');
-      if (aside) aside.classList.toggle('parallel-mode', nowWide);
-      renderTimelineActive();
-    });
     toggle.querySelector('.tl-load-all-btn').addEventListener('click', (e) => {
       if (_allHistoryLoaded) return;
       e.currentTarget.style.opacity = '0.5';
@@ -911,48 +1080,11 @@
     });
     header.appendChild(toggle);
     const aside = document.getElementById('timeline');
-    if (aside) aside.classList.toggle('parallel-mode', _timelineMode === 'parallel');
+    if (aside) aside.classList.add('parallel-mode');
   }
 
   function renderTimelineActive() {
-    if (_timelineMode === 'parallel') renderTimelineParallel();
-    else renderTimeline();
-  }
-
-  function renderTimeline() {
-    const savedScroll = _liveMode ? null : timelineList.scrollTop;
-    timelineList.innerHTML = '';
-    resetSubagentRegistry();
-    _lastRenderedAgentId = null;
-    let turnNum = 0;
-    const subagentTurnCounts = new Map();
-    state.interactions.forEach((interaction) => {
-      // Apply instance filter
-      if (activeInstanceTab === 'all') {
-        // "Others" — exclude interactions that belong to a known instance tab (but include dir-spawned)
-        if (interaction.instanceId && knownInstances.has(interaction.instanceId)) return;
-      } else if (interaction.instanceId !== activeInstanceTab) return;
-      if (!interaction.isMcp && !interaction.isHook) {
-        if (!isStandardLlm(interaction)) {
-          appendTurnToTimeline(interaction, undefined, false);
-        } else {
-          const agentId = interaction.subagent?.agentId;
-          if (agentId) {
-            const n = (subagentTurnCounts.get(agentId) || 0) + 1;
-            subagentTurnCounts.set(agentId, n);
-            appendTurnToTimeline(interaction, n, true);
-          } else {
-            turnNum++;
-            appendTurnToTimeline(interaction, turnNum, false);
-          }
-        }
-      } else {
-        appendTurnToTimeline(interaction);
-      }
-    });
-    updateUserTurnTotals();
-    if (_liveMode) scrollTimelineToBottom();
-    else if (savedScroll != null) timelineList.scrollTop = savedScroll;
+    renderTimelineParallel();
   }
 
   // === D3 PARALLEL TIMELINE (multi-column swimlane with SVG connectors) ===
@@ -987,7 +1119,7 @@
       const ep = interaction.endpoint.replace('/v1/messages/', '');
       const statusClass = badgeClass(interaction.status);
       el.innerHTML = `
-        <span class="endpoint-label">${escHtml(ep)}</span>
+        <span class="endpoint-label" title="${escHtml(ep)}">${escHtml(ep)}</span>
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
         <span class="entry-tokens" data-tokenlabel="${interaction.id}">${compactTokens(interaction.usage)}</span>
       `;
@@ -1095,7 +1227,7 @@
           <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'PreToolUse')}</span>
           <span class="tool-entry-tag tag-hook">hook</span>
           ${agentTag}
-          <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
+          <span class="tool-entry-summary" title="${escHtml(hookInt.toolName || '')}">${escHtml(hookInt.toolName || '')}</span>
         `;
         hookEl.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1106,8 +1238,44 @@
     }
 
     if (interaction._clampedHooks) {
-      const hooks = interaction._clampedHooks;
-      if (hooks.length > 2) {
+      const clamped = interaction._clampedHooks;
+      const hookCount = clamped.filter(c => c.isHook).length;
+      const otherCount = clamped.length - hookCount;
+      const summaryLabel = otherCount === 0
+        ? `${clamped.length} hooks`
+        : hookCount === 0
+          ? `${clamped.length} items`
+          : `${hookCount} hooks + ${otherCount}`;
+
+      function buildClampedEntryEl(entry) {
+        const el = document.createElement('div');
+        el.dataset.id = entry.id;
+        if (entry.isHook) {
+          el.className = 'timeline-entry tool-entry clamped-hook-entry';
+          const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(entry.hookEvent) ? '◼' : '▸';
+          el.innerHTML = `
+            <span class="tool-connector hook-connector"></span>
+            <span class="hook-arrow">${arrow}</span>
+            <span class="tool-entry-name hook-entry-name">${escHtml(entry.hookEvent || 'Hook')}</span>
+            <span class="tool-entry-summary" title="${escHtml(entry.toolName || '')}">${escHtml(entry.toolName || '')}</span>
+          `;
+        } else {
+          el.className = 'timeline-entry tool-entry clamped-hook-entry clamped-endpoint-entry';
+          const ep = (entry.endpoint || '').replace('/v1/messages/', '');
+          el.innerHTML = `
+            <span class="tool-connector hook-connector"></span>
+            <span class="endpoint-label" title="${escHtml(ep)}">${escHtml(ep)}</span>
+            <span class="entry-tokens" data-tokenlabel="${entry.id}">${compactTokens(entry.usage)}</span>
+          `;
+        }
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          select({ type: 'turn', id: entry.id }, { userClick: true });
+        });
+        return el;
+      }
+
+      if (clamped.length > 2) {
         const clampGroup = document.createElement('div');
         clampGroup.className = 'clamped-hooks-group collapsed';
 
@@ -1116,7 +1284,7 @@
         summaryEl.innerHTML = `
           <span class="tool-connector hook-connector"></span>
           <span class="hook-arrow clamped-chevron">▸</span>
-          <span class="hook-entry-name">${hooks.length} hooks</span>
+          <span class="hook-entry-name">${summaryLabel}</span>
         `;
         summaryEl.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1124,49 +1292,17 @@
           clampGroup.classList.toggle('collapsed');
           const groupEl = summaryEl.closest('.turn-group');
           if (groupEl) {
-            const delta = (hooks.length - 1) * 24;
+            const delta = (clamped.length - 1) * 24;
             const h = parseFloat(groupEl.style.height) || 0;
             groupEl.style.height = (wasCollapsed ? h + delta : h - delta) + 'px';
           }
         });
         clampGroup.appendChild(summaryEl);
 
-        for (const hookInt of hooks) {
-          const hookEl = document.createElement('div');
-          hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
-          hookEl.dataset.id = hookInt.id;
-          const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
-          hookEl.innerHTML = `
-            <span class="tool-connector hook-connector"></span>
-            <span class="hook-arrow">${arrow}</span>
-            <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
-            <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
-          `;
-          hookEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            select({ type: 'turn', id: hookInt.id }, { userClick: true });
-          });
-          clampGroup.appendChild(hookEl);
-        }
+        for (const entry of clamped) clampGroup.appendChild(buildClampedEntryEl(entry));
         toolsContainer.appendChild(clampGroup);
       } else {
-        for (const hookInt of hooks) {
-          const hookEl = document.createElement('div');
-          hookEl.className = 'timeline-entry tool-entry clamped-hook-entry';
-          hookEl.dataset.id = hookInt.id;
-          const arrow = /Stop|End$|Remove|Completed|PostToolBatch/i.test(hookInt.hookEvent) ? '◼' : '▸';
-          hookEl.innerHTML = `
-            <span class="tool-connector hook-connector"></span>
-            <span class="hook-arrow">${arrow}</span>
-            <span class="tool-entry-name hook-entry-name">${escHtml(hookInt.hookEvent || 'Hook')}</span>
-            <span class="tool-entry-summary">${escHtml(hookInt.toolName || '')}</span>
-          `;
-          hookEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            select({ type: 'turn', id: hookInt.id }, { userClick: true });
-          });
-          toolsContainer.appendChild(hookEl);
-        }
+        for (const entry of clamped) toolsContainer.appendChild(buildClampedEntryEl(entry));
       }
     }
 
@@ -1204,7 +1340,7 @@
     el.innerHTML = `
       <span class="hook-arrow">${arrow}</span>
       <span class="hook-label">${escHtml(hookEvent)}</span>
-      <span class="hook-tool-name">${escHtml(nameLabel)}</span>
+      <span class="hook-tool-name" title="${escHtml(nameLabel)}">${escHtml(nameLabel)}</span>
     `;
 
     el.addEventListener('click', (e) => {
@@ -1235,7 +1371,7 @@
         <span class="entry-num mcp-label">MCP</span>
         <span class="entry-badge ${isError ? 'error' : 'complete'}">${isError ? 'error' : 'ok'}</span>
       </div>
-      <div class="entry-model mcp-tool-name">${escHtml(toolName)}</div>
+      <div class="entry-model mcp-tool-name" title="${escHtml(toolName)}">${escHtml(toolName)}</div>
       <div class="entry-meta">
         <span class="mcp-source-tag mcp-src-${source}">${source}</span>
         <span>${durationHtml}</span>
@@ -1552,11 +1688,10 @@
     const aside = document.getElementById('timeline');
     if (aside) {
       const neededWidth = D3_CONST.RULER_WIDTH + totalColumns * colWidth + (totalColumns - 1) * D3_CONST.COLUMN_GAP + 24;
-      aside.style.minWidth = neededWidth + 'px';
+      aside.style.minWidth = '';
       const userW = window.__timelineUserWidth;
-      if (!userW || neededWidth > userW) {
+      if (!userW) {
         aside.style.width = neededWidth + 'px';
-        window.__timelineUserWidth = null;
       }
     }
 
@@ -1800,10 +1935,13 @@
     }
 
     // Clamp candidates: re-render so they collapse into the anchor turn
-    if (interaction.isHook && /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure|TaskCreated|TaskCompleted)$/i.test(interaction.hookEvent)
-        && interaction.toolName !== 'Agent') {
+    const isClampCandidate = (interaction.isHook && /^(PreToolUse|PostToolUse|PostToolBatch|PostToolUseFailure|TaskCreated|TaskCompleted)$/i.test(interaction.hookEvent)
+        && interaction.toolName !== 'Agent')
+      || (!interaction.isHook && !interaction.isMcp && !isStandardLlm(interaction));
+    if (isClampCandidate) {
       const lastItem = ds.layout[ds.layout.length - 1];
       if (lastItem && !lastItem.interaction.isHook && !lastItem.interaction.isMcp
+          && isStandardLlm(lastItem.interaction)
           && interaction.timestamp - (lastItem.interaction.timestamp + (lastItem.interaction.timing?.duration || 0)) <= 5000) {
         renderTimelineParallel();
         return;
@@ -2076,7 +2214,7 @@
       const ep = interaction.endpoint.replace('/v1/messages/', '');
       const statusClass = badgeClass(interaction.status);
       el.innerHTML = `
-        <span class="endpoint-label">${escHtml(ep)}</span>
+        <span class="endpoint-label" title="${escHtml(ep)}">${escHtml(ep)}</span>
         <span class="entry-badge ${statusClass}" data-badge="${interaction.id}">${interaction.status || 'pending'}</span>
         <span class="entry-tokens" data-tokenlabel="${interaction.id}">${compactTokens(interaction.usage)}</span>
       `;
@@ -2200,7 +2338,7 @@
         <span class="entry-num mcp-label">MCP</span>
         <span class="entry-badge ${isError ? 'error' : 'complete'}">${isError ? 'error' : 'ok'}</span>
       </div>
-      <div class="entry-model mcp-tool-name">${escHtml(toolName)}</div>
+      <div class="entry-model mcp-tool-name" title="${escHtml(toolName)}">${escHtml(toolName)}</div>
       <div class="entry-meta">
         <span class="mcp-source-tag mcp-src-${source}">${source}</span>
         <span>${durationHtml}</span>
@@ -2251,7 +2389,7 @@
         <span class="tool-entry-name hook-entry-name">${escHtml(hookEvent)}</span>
         <span class="tool-entry-tag tag-hook">hook</span>
         ${agentTag}
-        <span class="tool-entry-summary">${escHtml(toolName)}</span>
+        <span class="tool-entry-summary" title="${escHtml(toolName)}">${escHtml(toolName)}</span>
       `;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2340,7 +2478,7 @@
       <span class="tool-entry-name" data-tool-name="${interactionId}-${toolIdx}">${escHtml(displayName)}</span>
       ${isSkill ? '<span class="tool-entry-tag tag-sk">skill</span>' : ''}
       ${agentTag}
-      <span class="tool-entry-summary" data-tool-summary="${interactionId}-${toolIdx}">${escHtml(summary)}</span>
+      <span class="tool-entry-summary" title="${escHtml(summary)}" data-tool-summary="${interactionId}-${toolIdx}">${escHtml(summary)}</span>
     `;
     toolEl.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2587,6 +2725,11 @@
         sendWs({ type: 'interaction:getSseEvents', id: interaction.id });
       }
 
+      if (_splitMode) {
+        if (_splitInteractions.has(sel.id)) return;
+        exitSplitMode();
+      }
+
       emptyState.classList.add('hidden');
       detailContent.classList.remove('hidden');
       renderTurnDetail(interaction);
@@ -2609,6 +2752,8 @@
         _pendingSseRequests.add(interaction.id);
         sendWs({ type: 'interaction:getSseEvents', id: interaction.id });
       }
+
+      if (_splitMode) exitSplitMode();
 
       emptyState.classList.add('hidden');
       detailContent.classList.remove('hidden');

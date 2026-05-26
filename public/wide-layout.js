@@ -120,6 +120,7 @@
 
   function allocateColumn(freeColumns, activeColumns, nextColumnRef) {
     const activeCols = new Set(activeColumns.values());
+    freeColumns.sort((a, b) => b - a);
     while (freeColumns.length > 0) {
       const col = freeColumns.pop();
       if (!activeCols.has(col)) return { col, nextColumn: nextColumnRef };
@@ -188,13 +189,20 @@
       const toolUseIds = new Set(tools.map(tc => tc.id).filter(Boolean));
       const group = [];
 
-      // Backward scan: hooks delivered before this turn but belonging to it (by toolUseId)
+      // Backward scan: hooks delivered before this turn but belonging to it (by toolUseId).
+      // Non-standard LLM entries (count_tokens) are also clampable.
       // In parallel columns, entries from other columns are interleaved — only
       // break on same-column boundaries so clamping works independently per column.
       for (let j = i - 1; j >= 0; j--) {
         const candidate = interactions[j];
         const candCol = columnFor.get(candidate.id) || 0;
         if (!candidate.isHook) {
+          if (!candidate.isMcp && !isStandardLlm(candidate)) {
+            if (candCol !== anchorCol) continue;
+            if (clampedIds.has(candidate.id)) continue;
+            group.unshift(candidate);
+            continue;
+          }
           if (candCol === anchorCol) break;
           continue;
         }
@@ -206,13 +214,20 @@
         group.unshift(candidate);
       }
 
-      // Forward scan: hooks after this turn within the clamp window
+      // Forward scan: hooks after this turn within the clamp window.
+      // Non-standard LLM entries (count_tokens) are also clampable.
       // Same column-aware logic: skip entries from other columns so interleaved
       // parallel interactions don't break the scan.
       for (let j = i + 1; j < interactions.length; j++) {
         const candidate = interactions[j];
         const candCol = columnFor.get(candidate.id) || 0;
         if (!candidate.isHook) {
+          if (!candidate.isMcp && !isStandardLlm(candidate)) {
+            if (candCol !== anchorCol) continue;
+            if (candidate.timestamp - anchorEndTs > CLAMP_WINDOW) break;
+            group.push(candidate);
+            continue;
+          }
           if (candCol === anchorCol) break;
           continue;
         }
@@ -308,7 +323,7 @@
         if (!agentLastIdx.has(agentId) && desc) {
           agentLastIdx.set(agentId, i);
         }
-        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, isSynthetic: !realId });
+        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, isSynthetic: !realId, subagentType: tc.input?.subagent_type || null });
       }
     }
     const toolUseToEagerAgent = new Map();
@@ -368,7 +383,7 @@
           nextColumn = alloc.nextColumn;
           activeColumns.set(eagerAid, alloc.col);
           historicalColumns.set(eagerAid, alloc.col);
-          const synSub = { agentId: eagerAid, agentType: 'agent', description: eager.description };
+          const synSub = { agentId: eagerAid, agentType: eager.subagentType || 'agent', description: eager.description };
           if (registerSubagentFn) registerSubagentFn(synSub);
           columnAgents.set(alloc.col, synSub);
           let startHookId = null;

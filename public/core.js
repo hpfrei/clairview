@@ -45,6 +45,139 @@ function escHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// --- File path linkification ---
+const _FILE_PATH_RE = /(\/(?:home|tmp|var|etc|usr|opt|mnt|root|srv|proc|nix|snap)[^\s"'<>),;:\]]*\.[a-zA-Z0-9]{1,10})/g;
+const _TEXT_EXTS = new Set([
+  'txt','md','mdx','json','js','mjs','cjs','jsx','ts','tsx','css','scss','less',
+  'html','htm','xml','csv','yaml','yml','toml','ini','sh','bash','zsh',
+  'py','rb','go','rs','java','c','cpp','h','hpp','cs','php','swift','kt','scala',
+  'sql','r','lua','pl','pm','ex','exs','erl','hs','ml','clj','dart','v','zig',
+  'dockerfile','makefile','cmake','gitignore','gitattributes','editorconfig',
+  'env','log','cfg','conf','properties','lock','vue','svelte','astro',
+  'graphql','gql','proto','tf','hcl','nix','bat','ps1','fish','jsonl',
+]);
+const _MONACO_LANGS = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  json: 'json', jsonl: 'json', html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
+  xml: 'xml', md: 'markdown', mdx: 'markdown',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+  java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp', cs: 'csharp',
+  php: 'php', swift: 'swift', kt: 'kotlin', scala: 'scala',
+  sql: 'sql', sh: 'shell', bash: 'shell', zsh: 'shell',
+  yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
+  dockerfile: 'dockerfile', graphql: 'graphql', gql: 'graphql',
+  r: 'r', lua: 'lua', pl: 'perl', dart: 'dart', bat: 'bat', ps1: 'powershell',
+};
+
+function linkifyFilePaths(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const p = node.parentElement;
+      if (!p) return NodeFilter.FILTER_REJECT;
+      if (p.closest('pre, a, .file-link')) return NodeFilter.FILTER_REJECT;
+      _FILE_PATH_RE.lastIndex = 0;
+      return _FILE_PATH_RE.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    }
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    _FILE_PATH_RE.lastIndex = 0;
+    const text = node.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    while ((m = _FILE_PATH_RE.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = document.createElement('a');
+      a.className = 'file-link';
+      a.textContent = m[1];
+      a.href = '#';
+      a.dataset.filepath = m[1];
+      a.addEventListener('click', _onFilePathClick);
+      frag.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function _onFilePathClick(e) {
+  e.preventDefault();
+  const fp = e.currentTarget.dataset.filepath;
+  const ext = (fp.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
+  if (_TEXT_EXTS.has(ext)) {
+    openFileViewer(fp);
+  } else {
+    window.open('/api/raw-file?path=' + encodeURIComponent(fp), '_blank');
+  }
+}
+
+let _monacoReadyCore = false;
+let _monacoReadyPromiseCore = null;
+function _ensureMonaco() {
+  if (_monacoReadyCore) return Promise.resolve();
+  if (_monacoReadyPromiseCore) return _monacoReadyPromiseCore;
+  _monacoReadyPromiseCore = new Promise(resolve => {
+    if (typeof window.require === 'undefined' || !window.require.config) { resolve(); return; }
+    window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+    window.require(['vs/editor/editor.main'], () => { _monacoReadyCore = true; resolve(); });
+  });
+  return _monacoReadyPromiseCore;
+}
+
+async function openFileViewer(filePath) {
+  document.querySelector('.file-viewer-modal')?.remove();
+  const ext = (filePath.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
+  const modal = document.createElement('div');
+  modal.className = 'file-viewer-modal';
+  modal.innerHTML = `<div class="file-viewer-content">
+    <div class="file-viewer-header">
+      <span class="file-viewer-path">${escHtml(filePath)}</span>
+      <button class="file-viewer-close">&times;</button>
+    </div>
+    <div class="file-viewer-body"><div style="padding:12px;color:var(--text-dim);font-size:12px">Loading...</div></div>
+  </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  modal.querySelector('.file-viewer-close').addEventListener('click', close);
+  const esc = e => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } };
+  document.addEventListener('keydown', esc);
+  try {
+    const resp = await fetch('/api/raw-file?path=' + encodeURIComponent(filePath));
+    if (!resp.ok) throw new Error('Failed to load');
+    const text = await resp.text();
+    const body = modal.querySelector('.file-viewer-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const editorDiv = document.createElement('div');
+    editorDiv.style.cssText = 'width:100%;height:100%;';
+    body.appendChild(editorDiv);
+    await _ensureMonaco();
+    const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'vs' : 'vs-dark';
+    monaco.editor.create(editorDiv, {
+      value: text,
+      language: _MONACO_LANGS[ext] || 'plaintext',
+      theme,
+      readOnly: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      automaticLayout: true,
+      fontSize: 12,
+      fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+      wordWrap: 'on',
+      renderLineHighlight: 'none',
+      overviewRulerLanes: 0,
+      scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+    });
+  } catch {
+    const body = modal.querySelector('.file-viewer-body');
+    if (body) body.innerHTML = '<div style="padding:12px;color:#e55;font-size:12px">Failed to load file</div>';
+  }
+}
+
 // --- Markdown rendering (with HTML/SVG pass-through and MathJax) ---
 function renderMarkdown(text, targetEl) {
   if (!text) { targetEl.innerHTML = ''; return; }
@@ -95,6 +228,8 @@ function renderMarkdown(text, targetEl) {
       });
     });
   });
+
+  linkifyFilePaths(targetEl);
 
   // Typeset math if MathJax is available
   if (window.MathJax?.typesetPromise) {
