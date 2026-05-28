@@ -4,7 +4,6 @@ const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
 const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, PACKAGE_ROOT } = require('./utils');
-const JsonlWatcher = require('./jsonl-watcher');
 
 const PROJECT_ROOT = PACKAGE_ROOT;
 
@@ -28,7 +27,6 @@ class CliSession {
     this.settings = { ...DEFAULT_SETTINGS };
     this.status = 'idle';
     this._mcpConfigFile = null;
-    this._jsonlWatcher = null;
     this._scrollback = '';
     this._authToken = opts.authToken || '';
     this._dashboardPort = opts.dashboardPort || 3457;
@@ -132,7 +130,6 @@ class CliSession {
       this.status = 'exited';
       this.pty = null;
       this.broadcaster.broadcast({ type: 'cli:exit', tabId: this.tabId, exitCode });
-      setTimeout(() => this._stopJsonlWatcher(), 5000);
     });
 
     this.broadcaster.broadcast({
@@ -232,7 +229,6 @@ class CliSession {
     }
     this.status = 'idle';
     this._cleanupMcpConfig();
-    this._stopJsonlWatcher();
   }
 
   getScrollback() {
@@ -245,39 +241,6 @@ class CliSession {
 
   getSettings() {
     return { ...this.settings };
-  }
-
-  ensureJsonlWatcher(transcriptPath) {
-    if (this._jsonlWatcher) return;
-
-    this._jsonlWatcher = new JsonlWatcher(transcriptPath, (requestId, enrichment) => {
-      const interaction = this.store.findByRequestId(requestId);
-      if (interaction) {
-        const { enrichedHooks } = this.store.enrichInteraction(interaction.id, enrichment);
-        this.broadcaster.broadcast({
-          type: 'interaction:enriched',
-          interactionId: interaction.id,
-          subagent: enrichment,
-        });
-        for (const hook of enrichedHooks) {
-          this.broadcaster.broadcast({
-            type: 'interaction:enriched',
-            interactionId: hook.id,
-            subagent: enrichment,
-          });
-        }
-      } else {
-        this.store.pendingEnrichments.set(requestId, { data: enrichment, ts: Date.now() });
-      }
-    });
-    this._jsonlWatcher.start();
-  }
-
-  _stopJsonlWatcher() {
-    if (this._jsonlWatcher) {
-      this._jsonlWatcher.stop();
-      this._jsonlWatcher = null;
-    }
   }
 
   _cleanupMcpConfig() {

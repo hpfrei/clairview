@@ -1165,9 +1165,6 @@ function handleMessage(msg) {
       window.rulesModule?.handleMessage(msg);
       break;
 
-    // Claude process count
-    case 'claude:count':
-      break;
 
     // Claude instance lifecycle
     case 'claude:instances':

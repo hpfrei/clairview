@@ -83,10 +83,6 @@ class CliSessionManager {
     this.broadcastTabs();
   }
 
-  onExit(tabId, callback) {
-    this._exitCallbacks.set(tabId, callback);
-  }
-
   saveAllToHistory() {
     for (const [, session] of this.sessions) {
       if (session?.sessId && session.cwd) {
@@ -138,10 +134,6 @@ class CliSessionManager {
     }
   }
 
-  getSavedSession(id) {
-    return this._loadHistory().find(s => s.id === id) || null;
-  }
-
   deleteSavedSession(id) {
     const history = this._loadHistory();
     const entry = history.find(s => s.id === id);
@@ -178,15 +170,6 @@ class CliSessionManager {
     // Persist immediately so session survives ungraceful server death
     this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     this.broadcastTabs();
-  }
-
-  notifyTranscriptPath(instanceId, sessId, transcriptPath) {
-    for (const session of this.sessions.values()) {
-      if (session.instanceId === instanceId) {
-        session.ensureJsonlWatcher(transcriptPath);
-        return;
-      }
-    }
   }
 
   write(tabId, data) {
@@ -274,11 +257,6 @@ class CliSessionManager {
     return false;
   }
 
-  getSettings(tabId) {
-    const session = this.sessions.get(tabId);
-    return session ? session.getSettings() : null;
-  }
-
   getSettingsByInstanceId(instanceId) {
     for (const session of this.sessions.values()) {
       if (session.instanceId === instanceId) {
@@ -288,20 +266,32 @@ class CliSessionManager {
     return null;
   }
 
-  launchSession(tabId, { cwd, cols, rows, title, settings, prompt, autoSubmit, hidden, spawnOpts } = {}) {
+  launchSession(tabId, opts = {}) {
     const session = this.getOrCreate(tabId);
-    if (title) session.title = title;
-    if (hidden) session.hidden = true;
-    if (settings) this.updateSettings(tabId, settings);
-    this.spawn(tabId, cwd, cols || 80, rows || 24, spawnOpts);
-    this.broadcastTabs();
-    if (prompt) {
-      this.writeWhenReady(tabId, prompt);
-      if (autoSubmit) {
-        this.writeWhenReady(tabId, '\r', 200);
+    if (opts.title !== undefined) session.title = opts.title;
+    if (opts.settings) session.updateSettings(opts.settings);
+    if (opts.hidden != null) session.hidden = opts.hidden;
+
+    let resumeSessionId;
+    if (opts.spawnOpts?.resume) {
+      if (session.sessId) {
+        resumeSessionId = session.sessId;
+      } else if (opts.cwd) {
+        const history = this._loadHistory();
+        const match = history.find(h => h.cwd === opts.cwd);
+        if (match) resumeSessionId = match.id;
       }
     }
-    return session;
+
+    this.spawn(tabId, opts.cwd, opts.cols, opts.rows, { resumeSessionId });
+
+    if (opts.prompt && opts.autoSubmit) {
+      session.writeWhenReady(opts.prompt + '\n');
+    }
+  }
+
+  onExit(tabId, callback) {
+    this._exitCallbacks.set(tabId, callback);
   }
 
   broadcastTabs() {

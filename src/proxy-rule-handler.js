@@ -35,9 +35,10 @@ async function handleMessage(ws, msg, bc) {
         send({ type: 'rule:generating' });
         try {
           const result = await generateProxyRule(msg.description.trim());
-          caps.addProxyRule(PROJECT_ROOT, result.id, result.name, result.slug, result.source);
+          const finalName = msg.name?.trim() || result.name;
+          caps.addProxyRule(PROJECT_ROOT, result.id, finalName, result.slug, result.source);
           bc.broadcast({ type: 'rule:list', rules: caps.listProxyRules(PROJECT_ROOT) });
-          bc.broadcast({ type: 'rule:generated', rule: { id: result.id, name: result.name, slug: result.slug, enabled: true } });
+          bc.broadcast({ type: 'rule:generated', rule: { id: result.id, name: finalName, slug: result.slug, enabled: true } });
         } catch (err) {
           send({ type: 'rule:error', error: `Rule creation failed: ${err.message}` });
         }

@@ -77,4 +77,4 @@ function getRegistered(projectDir) {
   return Object.keys(servers);
 }
 
-module.exports = { register, unregister, getRegistered, resolveConfigPath };
+module.exports = { register, unregister };

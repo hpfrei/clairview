@@ -52,69 +52,6 @@
     return null;
   }
 
-  function resolveClosedAgentId(hookInteraction, interactions, hookIdx, activeColumns) {
-    const responseAgentId = hookInteraction.response?.body?.agentId
-      || hookInteraction.request?.tool_response?.agentId;
-    if (responseAgentId && activeColumns.has(responseAgentId)) {
-      return responseAgentId;
-    }
-
-    if (hookInteraction.subagent?.agentId && activeColumns.has(hookInteraction.subagent.agentId)) {
-      const candidateId = hookInteraction.subagent.agentId;
-      let isLikelyChild = true;
-      for (let j = hookIdx - 1; j >= 0; j--) {
-        const prev = interactions[j];
-        if (prev.isHook || prev.isMcp) continue;
-        if (prev.subagent?.agentId === candidateId) {
-          const tools = extractToolCalls(prev);
-          if (tools.some(tc => tc.name === 'Agent' && tc.id === hookInteraction.toolUseId)) {
-            isLikelyChild = false;
-          }
-          break;
-        }
-      }
-      if (isLikelyChild) return candidateId;
-    }
-
-    const hookDesc = hookInteraction.request?.tool_input?.description;
-    if (hookDesc) {
-      for (let j = hookIdx - 1; j >= 0; j--) {
-        const prev = interactions[j];
-        const aid = prev.subagent?.agentId;
-        if (aid && activeColumns.has(aid) && prev.subagent?.description === hookDesc) {
-          return aid;
-        }
-      }
-    }
-
-    if (hookInteraction.toolUseId) {
-      for (let j = hookIdx - 1; j >= 0; j--) {
-        const prev = interactions[j];
-        if (prev.isHook || prev.isMcp) continue;
-        const tools = extractToolCalls(prev);
-        const matchedTool = tools.find(tc => tc.id === hookInteraction.toolUseId);
-        if (matchedTool) {
-          const toolDesc = matchedTool.input?.description;
-          if (toolDesc) {
-            for (const [aid] of activeColumns) {
-              for (let k = j + 1; k < hookIdx; k++) {
-                const child = interactions[k];
-                if (child.subagent?.agentId === aid && child.subagent?.description === toolDesc) {
-                  return aid;
-                }
-              }
-            }
-          }
-          break;
-        }
-      }
-    }
-
-    if (activeColumns.size === 1) {
-      for (const [agentId] of activeColumns) return agentId;
-    }
-    return null;
-  }
 
   // --- Column allocation ---
 
@@ -256,9 +193,39 @@
     return { clampedIds, clampParentInfo };
   }
 
+  // --- Server-tool detection (WebSearch responses, etc.) ---
+
+  function hasServerToolContent(interaction) {
+    const body = interaction.response?.body;
+    if (body?.content) {
+      for (const block of body.content) {
+        if (block.type === 'server_tool_use' || block.type === 'web_search_tool_result') return true;
+      }
+    }
+    const sseEvents = interaction.response?.sseEvents;
+    if (sseEvents?.length) {
+      for (const evt of sseEvents) {
+        if (evt.eventType === 'content_block_start') {
+          const t = evt.data?.content_block?.type;
+          if (t === 'server_tool_use' || t === 'web_search_tool_result') return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // --- Column assignment ---
 
   function buildColumnAssignment(interactions, registerSubagentFn) {
+    // Clear inferred subagent assignments from previous renders so they don't
+    // pollute the agentLastIdx pre-scan or hook resolution on re-render.
+    for (const interaction of interactions) {
+      if (interaction._subagentInferred) {
+        delete interaction.subagent;
+        delete interaction._subagentInferred;
+      }
+    }
+
     const columnFor = new Map();
     const activeColumns = new Map();
     const historicalColumns = new Map();
@@ -298,18 +265,6 @@
       }
     }
 
-    // Pre-scan: detect Agent tool calls in LLM turns to enable eager column
-    // creation before JSONL enrichment arrives.  Builds a mapping from
-    // description → agentId for cases where SubagentStart hooks or enriched
-    // child interactions provide the real ID, and falls back to a synthetic
-    // ID ("pending-<toolUseId>") otherwise.
-    const descToAgentId = new Map();
-    for (let i = 0; i < interactions.length; i++) {
-      const int = interactions[i];
-      if (int.subagent?.agentId && int.subagent.description) {
-        descToAgentId.set(int.subagent.description, int.subagent.agentId);
-      }
-    }
     const agentToolCalls = [];
     for (let i = 0; i < interactions.length; i++) {
       const int = interactions[i];
@@ -318,12 +273,11 @@
       for (const tc of tools) {
         if (tc.name !== 'Agent' || !tc.id) continue;
         const desc = tc.input?.description || null;
-        const realId = desc ? descToAgentId.get(desc) : null;
-        const agentId = realId || ('pending-' + tc.id);
+        const agentId = 'pending-' + tc.id;
         if (!agentLastIdx.has(agentId) && desc) {
           agentLastIdx.set(agentId, i);
         }
-        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, isSynthetic: !realId, subagentType: tc.input?.subagent_type || null });
+        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, subagentType: tc.input?.subagent_type || null });
       }
     }
     const toolUseToEagerAgent = new Map();
@@ -353,13 +307,19 @@
       } else {
         agentId = interaction.subagent?.agentId || null;
         // Fallback: when exactly one subagent is active and this LLM turn has no
-        // enrichment, assign it to that agent. The main thread doesn't produce LLM
-        // turns while subagents are running (it blocks on tool results).
-        if (!agentId && !interaction.isMcp && activeColumns.size === 1) {
+        // enrichment, assign it to that agent — but only if this looks like an
+        // actual subagent turn, not a main-thread auxiliary call:
+        //  - non-standard LLM turns (count_tokens) stay on main
+        //  - WebSearch/server-tool responses stay on main
+        if (!agentId && !interaction.isMcp && activeColumns.size === 1
+            && isStandardLlm(interaction) && !hasServerToolContent(interaction)) {
           for (const [aid, col] of activeColumns) {
             agentId = aid;
             const agentSub = columnAgents.get(col);
-            if (agentSub) interaction.subagent = { ...agentSub };
+            if (agentSub) {
+              interaction.subagent = { ...agentSub };
+              interaction._subagentInferred = true;
+            }
           }
         }
       }
@@ -414,8 +374,15 @@
       if (interaction.isHook && interaction.hookEvent === 'SubagentStart'
           && agentId && !activeColumns.has(agentId) && !historicalColumns.has(agentId)) {
         let pendingKey = null, pendingCount = 0;
-        for (const [aid] of activeColumns) {
-          if (typeof aid === 'string' && aid.startsWith('pending-')) { pendingKey = aid; pendingCount++; }
+        const startToolUseId = interaction.subagent?.toolUseId;
+        if (startToolUseId) {
+          const exactKey = 'pending-' + startToolUseId;
+          if (activeColumns.has(exactKey)) { pendingKey = exactKey; pendingCount = 1; }
+        }
+        if (!pendingKey) {
+          for (const [aid] of activeColumns) {
+            if (typeof aid === 'string' && aid.startsWith('pending-')) { pendingKey = aid; pendingCount++; }
+          }
         }
         if (pendingCount === 1 && pendingKey) {
           const col = activeColumns.get(pendingKey);
@@ -450,14 +417,19 @@
         }
         let startHookId = null;
         let startToolUseId2 = null;
-        const subDesc = interaction.subagent?.description;
-        if (subDesc && pendingPreHooks.length > 0) {
-          const matchIdx = pendingPreHooks.findIndex(ph => ph.description === subDesc);
+        const subToolUseId = interaction.subagent?.toolUseId;
+        if (subToolUseId && pendingPreHooks.length > 0) {
+          const matchIdx = pendingPreHooks.findIndex(ph => ph.toolUseId === subToolUseId);
           if (matchIdx >= 0) {
             startHookId = pendingPreHooks[matchIdx].id;
             startToolUseId2 = pendingPreHooks[matchIdx].toolUseId;
             pendingPreHooks.splice(matchIdx, 1);
           }
+        }
+        if (!startHookId && pendingPreHooks.length === 1) {
+          startHookId = pendingPreHooks[0].id;
+          startToolUseId2 = pendingPreHooks[0].toolUseId;
+          pendingPreHooks.splice(0, 1);
         }
         const seg = { col, agentId, subagent: interaction.subagent, startIdx: idx, endHookId: null, startHookId };
         columnSegments.push(seg);
@@ -482,35 +454,19 @@
         ? 0 : resolvedCol;
       columnFor.set(interaction.id, assignedCol);
 
-      // Free columns when we pass the agent's last interaction (not on PostToolUse hooks)
+      // Free columns when we pass the agent's last interaction
       if (agentId && activeColumns.has(agentId) && agentLastIdx.get(agentId) === idx) {
-        let shouldClose = true;
-        // When only one subagent is active, scan ahead for unenriched turns
-        // that likely belong to the same agent (the main thread blocks on
-        // tool results while a subagent is running, so any LLM turn during
-        // this window is a subagent turn with missing enrichment).
-        if (activeColumns.size === 1) {
-          for (let j = idx + 1; j < interactions.length; j++) {
-            const next = interactions[j];
-            if (next.isHook || next.isMcp) continue;
-            if (next.subagent?.agentId) break;
-            agentLastIdx.set(agentId, j);
-            shouldClose = false;
-            break;
-          }
-        }
-        if (shouldClose) {
-          const closedCol = activeColumns.get(agentId);
-          const seg = activeSegments.get(agentId);
-          if (seg) activeSegments.delete(agentId);
-          freeColumns.push(closedCol);
-          activeColumns.delete(agentId);
-        }
+        const closedCol = activeColumns.get(agentId);
+        const seg = activeSegments.get(agentId);
+        if (seg) activeSegments.delete(agentId);
+        freeColumns.push(closedCol);
+        activeColumns.delete(agentId);
       }
 
       // Explicit close: PostToolUse/Agent hooks signal the agent returned
       if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent)
           && interaction.toolName === 'Agent' && interaction.toolUseId) {
+        let closed = false;
         const eager = toolUseToEagerAgent.get(interaction.toolUseId);
         if (eager && activeColumns.has(eager.agentId)) {
           const closingId = eager.agentId;
@@ -519,6 +475,17 @@
           if (seg) activeSegments.delete(closingId);
           freeColumns.push(closedCol);
           activeColumns.delete(closingId);
+          closed = true;
+        }
+        if (!closed) {
+          const respAgentId = interaction.response?.body?.agentId;
+          if (respAgentId && activeColumns.has(respAgentId)) {
+            const closedCol = activeColumns.get(respAgentId);
+            const seg = activeSegments.get(respAgentId);
+            if (seg) activeSegments.delete(respAgentId);
+            freeColumns.push(closedCol);
+            activeColumns.delete(respAgentId);
+          }
         }
       }
 
@@ -566,40 +533,6 @@
           matched = true;
         }
       }
-      if (!matched && ph.description) {
-        for (const seg of columnSegments) {
-          if (seg.endHookId) continue;
-          if (seg.subagent?.description === ph.description) {
-            seg.endHookId = ph.id;
-            postHookClosedCol.set(ph.id, seg.col);
-            matched = true;
-            break;
-          }
-        }
-      }
-      if (!matched && ph.toolUseId) {
-        for (let j = ph.idx - 1; j >= 0; j--) {
-          const prev = interactions[j];
-          if (prev.isHook || prev.isMcp) continue;
-          const tools = extractToolCalls(prev);
-          const matchedTool = tools.find(tc => tc.id === ph.toolUseId);
-          if (matchedTool) {
-            const toolDesc = matchedTool.input?.description;
-            if (toolDesc) {
-              for (const seg of columnSegments) {
-                if (seg.endHookId) continue;
-                if (seg.subagent?.description === toolDesc) {
-                  seg.endHookId = ph.id;
-                  postHookClosedCol.set(ph.id, seg.col);
-                  matched = true;
-                  break;
-                }
-              }
-            }
-            break;
-          }
-        }
-      }
       if (!matched) {
         const unclosed = columnSegments.filter(s => !s.endHookId);
         if (unclosed.length === 1) {
@@ -619,6 +552,60 @@
           break;
         }
       }
+    }
+
+    // Compact columns: remove columns that have no events assigned to them.
+    // Column 0 (main thread) is always kept.
+    const usedCols = new Set([0]);
+    for (const col of columnFor.values()) usedCols.add(col);
+    const sortedUsed = [...usedCols].sort((a, b) => a - b);
+
+    if (sortedUsed.length < nextColumn) {
+      const colRemap = new Map();
+      for (let i = 0; i < sortedUsed.length; i++) colRemap.set(sortedUsed[i], i);
+
+      for (const [id, col] of columnFor) columnFor.set(id, colRemap.get(col) ?? col);
+
+      const remappedAgents = new Map();
+      for (const [col, agent] of columnAgents) {
+        const nc = colRemap.get(col);
+        if (nc !== undefined) remappedAgents.set(nc, agent);
+      }
+      columnAgents.clear();
+      for (const [k, v] of remappedAgents) columnAgents.set(k, v);
+
+      const keptSegs = [];
+      for (const seg of columnSegments) {
+        const nc = colRemap.get(seg.col);
+        if (nc !== undefined) { seg.col = nc; keptSegs.push(seg); }
+      }
+      columnSegments.length = 0;
+      columnSegments.push(...keptSegs);
+
+      const remappedPost = new Map();
+      for (const [id, col] of postHookClosedCol) remappedPost.set(id, colRemap.get(col) ?? col);
+      postHookClosedCol.clear();
+      for (const [k, v] of remappedPost) postHookClosedCol.set(k, v);
+
+      const remappedActive = new Map();
+      for (const [aid, col] of activeColumns) {
+        const nc = colRemap.get(col);
+        if (nc !== undefined) remappedActive.set(aid, nc);
+      }
+      activeColumns.clear();
+      for (const [k, v] of remappedActive) activeColumns.set(k, v);
+
+      const remappedHist = new Map();
+      for (const [aid, col] of historicalColumns) {
+        const nc = colRemap.get(col);
+        if (nc !== undefined) remappedHist.set(aid, nc);
+      }
+      historicalColumns.clear();
+      for (const [k, v] of remappedHist) historicalColumns.set(k, v);
+
+      freeColumns.length = 0;
+
+      nextColumn = sortedUsed.length;
     }
 
     return { columnFor, totalColumns: nextColumn, columnAgents, activeColumns, historicalColumns, freeColumns, nextColumn, parallelRegions, postHookClosedCol, columnSegments, depthAt };
@@ -915,7 +902,6 @@
     init,
     D3_CONST,
     resolveHookAgentId,
-    resolveClosedAgentId,
     allocateColumn,
     buildFoldedHooksMap,
     buildClampGroups,

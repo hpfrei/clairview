@@ -304,50 +304,6 @@ body.nav-loading .view-nav {
 .home-section.active { display: block; }
 .home-section .markdown-body { max-width: none; }
 
-.api-token-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.api-token-label {
-  font-weight: 600;
-  color: var(--text-dim);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-.api-token-value {
-  flex: 1;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 12px;
-  color: var(--accent);
-  background: var(--bg);
-  padding: 4px 8px;
-  border-radius: 3px;
-  user-select: all;
-  overflow-x: auto;
-}
-.api-token-copy {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 4px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 11px;
-  white-space: nowrap;
-}
-.api-token-copy:hover {
-  background: var(--bg-hover);
-}
-
 .header-actions {
   display: flex;
   align-items: center;
@@ -980,9 +936,42 @@ section#detail {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 section#detail:has(.split-active) {
   overflow: hidden;
+}
+
+/* --- Focus mode: detail panel takes over full width --- */
+.inspector-body.focus-active aside#timeline,
+.inspector-body.focus-active #timeline-resizer {
+  display: none;
+}
+.detail-focus-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 0;
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+}
+.detail-focus-btn:hover {
+  opacity: 1;
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+.detail-focus-btn.focus-active svg {
+  transform: rotate(45deg);
+}
+section#detail:has(#empty-state:not(.hidden)) .detail-focus-btn {
+  display: none;
 }
 
 #empty-state {
@@ -1035,6 +1024,8 @@ section#detail:has(.split-active) {
 #detail-content {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 #detail-content.split-active {
@@ -1051,6 +1042,15 @@ section#detail:has(.split-active) {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  transition: flex 0.3s ease-out, opacity 0.3s ease-out, border-right-width 0.3s ease-out;
+}
+.detail-split-pane.split-pane-collapsing {
+  flex: 0 0 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  min-width: 0;
+  padding: 0;
+  border-right-width: 0;
 }
 .detail-split-pane:last-child {
   border-right: none;
@@ -1085,6 +1085,7 @@ section#detail:has(.split-active) {
   border-bottom: 4px solid var(--border);
   background: var(--request-panel-bg);
   position: relative;
+  flex-shrink: 0;
 }
 
 /* cURL export button */
@@ -1164,6 +1165,53 @@ section#detail:has(.split-active) {
 
 .response-panel {
   background: var(--response-panel-bg);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#response-blocks {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+#response-blocks > .content-block {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#response-blocks > .content-block > .content-block-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+#raw-sse-details {
+  flex-shrink: 0;
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  background: var(--response-panel-bg);
+}
+#raw-sse-details summary {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+#raw-sse-details summary:hover {
+  color: var(--accent);
+}
+#raw-sse-details[open] #raw-sse-pre {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px;
 }
 
 .section-title {
@@ -4464,6 +4512,41 @@ footer {
   background: transparent; color: var(--text-dim); cursor: pointer; font-family: inherit;
 }
 .rule-restore-btn:hover { color: var(--text); border-color: var(--text); }
+
+/* New Rule modal */
+.rule-create-modal { max-width: 520px; gap: 10px; }
+.rule-create-title { font-weight: 700; font-size: 16px; color: var(--text); }
+.rule-create-help { font-size: 12px; color: var(--text-dim); line-height: 1.55; }
+.rule-create-help strong { color: var(--text); }
+.rule-create-label { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 4px; }
+.rule-create-optional { font-weight: 400; color: var(--text-dim); }
+.rule-create-required { color: var(--red, #c44); }
+.rule-create-input,
+.rule-create-textarea {
+  width: 100%; box-sizing: border-box;
+  padding: 7px 10px;
+  font-family: inherit; font-size: 13px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 5px;
+  resize: vertical;
+}
+.rule-create-input:focus,
+.rule-create-textarea:focus { outline: none; border-color: var(--accent); }
+.rule-create-example-hint { font-size: 11px; color: var(--text-dim); font-style: italic; }
+.rule-create-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.rule-create-cancel {
+  padding: 7px 18px; background: transparent; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 6px;
+  font-family: inherit; font-size: 13px; cursor: pointer;
+}
+.rule-create-cancel:hover { color: var(--text); border-color: var(--text-dim); }
+.rule-create-submit {
+  padding: 7px 20px; background: var(--accent); color: var(--bg);
+  border: none; border-radius: 6px;
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.rule-create-submit:hover { opacity: 0.9; }
+.rule-create-submit:disabled { opacity: 0.4; cursor: default; }
 
 /* ============================================================
    DIRECTORY BROWSER VIEW

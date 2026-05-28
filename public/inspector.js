@@ -84,6 +84,9 @@
   let _lastStreamTextBodyEl = null;
   let _pendingMarkdownBodyEl = null;
 
+  // --- Focus mode: detail panel takes over full width ---
+  let _focusMode = false;
+
   // --- Split mode: show parallel streaming interactions side by side ---
   let _splitMode = false;
   const _splitPanes = new Map();          // interactionId -> { pane, streamState }
@@ -641,6 +644,10 @@
         appendSSEToDetail(event, interaction);
       }
     }
+
+    if (event.eventType === 'message_stop' && _splitMode && _splitInteractions.has(interactionId)) {
+      _removeSplitPane(interactionId);
+    }
   }
 
   function _getStreamState(interactionId) {
@@ -843,14 +850,10 @@
 
   function _findParallelStreamers(interactionId) {
     if (!_d3State) return [];
-    const col = _d3State.columnFor.get(interactionId);
-    if (col == null) return [];
     return state.interactions.filter(i =>
       i.id !== interactionId
       && (i.status === 'streaming' || i.status === 'pending')
       && !i.isHook && !i.isMcp
-      && _d3State.columnFor.has(i.id)
-      && _d3State.columnFor.get(i.id) !== col
     );
   }
 
@@ -896,7 +899,7 @@
     pane.dataset.splitId = interaction.id;
 
     const sa = interaction.subagent;
-    const label = sa ? (getSubagentLabel(sa) || sa.agentType || 'Agent') : 'Main';
+    const label = sa ? (getSubagentLabel(sa) || sa.agentType || 'Agent') : 'Main Thread';
     const color = sa?.agentId ? getSubagentColor(sa) : 'var(--accent)';
     const model = (interaction.request?.model || 'unknown').replace('claude-', '').split('-202')[0];
 
@@ -961,6 +964,27 @@
     detailContent.classList.remove('split-active');
   }
 
+  function _removeSplitPane(interactionId) {
+    if (!_splitMode || !_splitInteractions.has(interactionId)) return;
+    const entry = _splitPanes.get(interactionId);
+    if (!entry) return;
+
+    entry.pane.classList.add('split-pane-collapsing');
+    setTimeout(() => {
+      if (entry.pane.parentNode) entry.pane.remove();
+      _splitPanes.delete(interactionId);
+      _splitInteractions.delete(interactionId);
+
+      if (_splitInteractions.size <= 1) {
+        const remainingId = _splitInteractions.values().next().value;
+        exitSplitMode();
+        if (remainingId) {
+          select({ type: 'turn', id: remainingId });
+        }
+      }
+    }, 300);
+  }
+
   function _trySplitMode(interactionId) {
     const parallel = _findParallelStreamers(interactionId);
     if (parallel.length === 0) return false;
@@ -977,6 +1001,35 @@
       enterSplitMode(allStreamers);
     }
     return true;
+  }
+
+  // --- Focus mode ---
+
+  function enterFocusMode() {
+    _focusMode = true;
+    const body = document.querySelector('.inspector-body');
+    if (body) body.classList.add('focus-active');
+    const btn = document.getElementById('detail-focus-btn');
+    if (btn) {
+      btn.classList.add('focus-active');
+      btn.title = 'Exit focus mode (Esc)';
+    }
+  }
+
+  function exitFocusMode() {
+    _focusMode = false;
+    const body = document.querySelector('.inspector-body');
+    if (body) body.classList.remove('focus-active');
+    const btn = document.getElementById('detail-focus-btn');
+    if (btn) {
+      btn.classList.remove('focus-active');
+      btn.title = 'Toggle focus mode (F)';
+    }
+  }
+
+  function toggleFocusMode() {
+    if (_focusMode) exitFocusMode();
+    else enterFocusMode();
   }
 
   // --- Interaction update ---
@@ -1010,6 +1063,11 @@
       if (durationEl && updated.timing?.duration) durationEl.textContent = formatDuration(updated.timing.duration);
       if (updated.usage) updateUsageDisplay(updated.usage, updated.pricing);
     }
+
+    const uStatus = updated.status || 'complete';
+    if ((uStatus === 'complete' || uStatus === 'error') && _splitMode && _splitInteractions.has(updated.id)) {
+      _removeSplitPane(updated.id);
+    }
   }
 
   function markInteractionError(id, error) {
@@ -1020,6 +1078,9 @@
       interaction.response.error = error;
     }
     updateTurnBadge(id, 'error');
+    if (_splitMode && _splitInteractions.has(id)) {
+      _removeSplitPane(id);
+    }
   }
 
   // ============================================================
@@ -1870,7 +1931,7 @@
     if (!_d3ResizeObserver) {
       _d3ResizeObserver = new ResizeObserver(() => {
         if (_timelineMode !== 'parallel' || !_d3State) return;
-        if (window.__timelineDragging) return;
+        if (window.__timelineDragging || _focusMode) return;
         _d3ResizeDebounce = _d3ResizeDebounce || requestAnimationFrame(() => {
           _d3ResizeDebounce = null;
           renderTimelineParallel();
@@ -2692,6 +2753,27 @@
     scrollTimelineToBottom();
   }
 
+  // --- Focus mode button + keyboard shortcuts ---
+  const _focusBtn = document.getElementById('detail-focus-btn');
+  if (_focusBtn) _focusBtn.addEventListener('click', toggleFocusMode);
+
+  document.addEventListener('keydown', (e) => {
+    const dashboardEl = document.getElementById('view-dashboard');
+    if (!dashboardEl || dashboardEl.classList.contains('hidden')) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+    if (e.key === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      toggleFocusMode();
+      return;
+    }
+    if (e.key === 'Escape' && _focusMode) {
+      e.preventDefault();
+      exitFocusMode();
+      return;
+    }
+  });
+
   // --- Arrow key navigation between LLM turns (when not in live mode) ---
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
@@ -2745,9 +2827,20 @@
       const interaction = state.interactions.find(i => i.id === sel.id);
       if (!interaction) return;
 
-      if (interaction._summary && !_pendingDetailRequests.has(interaction.id)) {
-        _pendingDetailRequests.add(interaction.id);
-        sendWs({ type: 'interaction:getDetail', id: interaction.id });
+      if (interaction._summary) {
+        if (!_pendingDetailRequests.has(interaction.id)) {
+          _pendingDetailRequests.add(interaction.id);
+          sendWs({ type: 'interaction:getDetail', id: interaction.id });
+        }
+        // Retry once after 3s if still pending (handles dropped messages)
+        const retryId = interaction.id;
+        setTimeout(() => {
+          const cur = state.interactions.find(i => i.id === retryId);
+          if (cur?._summary && !_pendingDetailRequests.has(retryId)) {
+            _pendingDetailRequests.add(retryId);
+            sendWs({ type: 'interaction:getDetail', id: retryId });
+          }
+        }, 3000);
       }
 
       // Lazy-load sseEvents for completed streaming interactions
@@ -2774,9 +2867,19 @@
       const interaction = state.interactions.find(i => i.id === sel.interactionId);
       if (!interaction) return;
 
-      if (interaction._summary && !_pendingDetailRequests.has(interaction.id)) {
-        _pendingDetailRequests.add(interaction.id);
-        sendWs({ type: 'interaction:getDetail', id: interaction.id });
+      if (interaction._summary) {
+        if (!_pendingDetailRequests.has(interaction.id)) {
+          _pendingDetailRequests.add(interaction.id);
+          sendWs({ type: 'interaction:getDetail', id: interaction.id });
+        }
+        const retryId2 = interaction.id;
+        setTimeout(() => {
+          const cur = state.interactions.find(i => i.id === retryId2);
+          if (cur?._summary && !_pendingDetailRequests.has(retryId2)) {
+            _pendingDetailRequests.add(retryId2);
+            sendWs({ type: 'interaction:getDetail', id: retryId2 });
+          }
+        }, 3000);
       }
 
       if (interaction.isStreaming && !interaction.response?.sseEvents?.length && !_pendingSseRequests.has(interaction.id)) {
@@ -2935,7 +3038,7 @@
         ${jsonBlock(req.system)}</pre>
       </details>`;
     } else if (req._systemChars) {
-      html += `<details>
+      html += `<details data-lazy-detail="${interaction.id}">
         <summary>System Prompt ${charGauge(req._systemChars)}</summary>
         <div class="json-block" style="opacity:0.5">Loading...</div>
       </details>`;
@@ -2955,7 +3058,7 @@
         <div class="json-block">${renderMessages(req.messages)}</div>
       </details>`;
     } else if (req._messageCount > 0) {
-      html += `<details>
+      html += `<details data-lazy-detail="${interaction.id}">
         <summary>Messages ${req._messageCount}</summary>
         <div class="json-block" style="opacity:0.5">Loading...</div>
       </details>`;
@@ -2968,7 +3071,7 @@
         <div class="json-block">${renderTools(req.tools)}</div>
       </details>`;
     } else if (req._toolCount > 0) {
-      html += `<details>
+      html += `<details data-lazy-detail="${interaction.id}">
         <summary>Tools ${req._toolCount}</summary>
         <div class="json-block" style="opacity:0.5">Loading...</div>
       </details>`;
@@ -3055,6 +3158,18 @@
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
+
+    // Lazy-load: when a "Loading..." details is toggled open, re-request full data
+    for (const el of detailContent.querySelectorAll('details[data-lazy-detail]')) {
+      el.addEventListener('toggle', () => {
+        if (!el.open) return;
+        const id = el.dataset.lazyDetail;
+        if (!_pendingDetailRequests.has(id)) {
+          _pendingDetailRequests.add(id);
+          sendWs({ type: 'interaction:getDetail', id });
+        }
+      }, { once: true });
+    }
 
     if (_isLive && interaction.response?.sseEvents?.length > 0) {
       for (const event of interaction.response.sseEvents) {
@@ -3614,6 +3729,13 @@
           if (state.selection?.id === msg.id || state.selection?.interactionId === msg.id) {
             select(state.selection);
           }
+        } else if (dIdx >= 0 && !msg.interaction) {
+          // Server couldn't find full data — clear _summary so we stop retrying
+          delete state.interactions[dIdx]._summary;
+          for (const el of detailContent.querySelectorAll(`details[data-lazy-detail="${msg.id}"]`)) {
+            const loader = el.querySelector('.json-block');
+            if (loader) loader.textContent = '(data not available)';
+          }
         }
         break;
       }
@@ -3802,5 +3924,5 @@
     });
   }
 
-  window.inspectorModule = { handleMessage, handleCliSpawned, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab };
+  window.inspectorModule = { handleMessage, handleCliSpawned, instanceDisplayLabel, renderInspectorTabStrip, switchInstanceTab, toggleFocusMode, isFocusMode: () => _focusMode };
 })();

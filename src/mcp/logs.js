@@ -104,4 +104,4 @@ function rotateLogs(serverDir, maxDays = 30) {
   }
 }
 
-module.exports = { appendLog, readLogs, getStats, clearLogs, rotateLogs };
+module.exports = { readLogs, getStats, clearLogs };

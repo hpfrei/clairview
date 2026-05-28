@@ -16,22 +16,10 @@ class InteractionStore {
     this.sessionMap = new Map();   // instanceId → sessId
     this.sessionSeqs = new Map();  // sessId → seq counter
     this.filePaths = new Map();    // interaction id → absolute file path
-    this.pendingEnrichments = new Map(); // requestId → { data, ts }
+    this.requestIdIndex = new Map(); // request-id → filePath (survives eviction)
 
     fs.mkdirSync(INTERACTIONS_DIR, { recursive: true });
-    this._purgeNumericDirs();
     this._loadFromDisk();
-  }
-
-  _purgeNumericDirs() {
-    try {
-      const entries = fs.readdirSync(INTERACTIONS_DIR);
-      for (const name of entries) {
-        if (/^\d+$/.test(name)) {
-          fs.rmSync(path.join(INTERACTIONS_DIR, name), { recursive: true, force: true });
-        }
-      }
-    } catch {}
   }
 
   _loadFromDisk() {
@@ -84,6 +72,8 @@ class InteractionStore {
       this.interactions.set(interaction.id, interaction);
       this.order.push(interaction.id);
       this.filePaths.set(interaction.id, filePath);
+      const reqId = interaction.response?.headers?.['request-id'];
+      if (reqId) this.requestIdIndex.set(reqId, filePath);
     }
 
     this.seq = this.order.length;
@@ -131,7 +121,23 @@ class InteractionStore {
   }
 
   get(id) {
-    return this.interactions.get(id);
+    return this.interactions.get(id) || this._getFromDisk(id);
+  }
+
+  _getFromDisk(id) {
+    const sep = id.lastIndexOf('-');
+    if (sep <= 0) return null;
+    const sessId = id.slice(0, sep);
+    const dir = path.join(INTERACTIONS_DIR, sessId);
+    try {
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        const filePath = path.join(dir, file);
+        const interaction = this._parseInteractionFile(sessId, parseInt(file), filePath);
+        if (interaction && interaction.id === id) return interaction;
+      }
+    } catch {}
+    return null;
   }
 
   getAll() {
@@ -149,24 +155,18 @@ class InteractionStore {
     seqNum++;
     this.sessionSeqs.set(sessId, seqNum);
 
-    const reqId = interaction.response?.headers?.['request-id'];
-    if (reqId && this.pendingEnrichments.has(reqId)) {
-      interaction.subagent = this.pendingEnrichments.get(reqId).data;
-      this.pendingEnrichments.delete(reqId);
-    }
-
     // When saving a hook, inherit subagent from the parent turn if available
     if (interaction.isHook && interaction.toolUseId && !interaction.subagent && interaction.instanceId) {
       const parent = this._findTurnByToolUseId(interaction.toolUseId, interaction.instanceId);
       if (parent?.subagent) interaction.subagent = parent.subagent;
     }
 
-    this._prunePendingEnrichments();
-
     const fileContent = this._buildFileContent(interaction);
 
     const filePath = path.join(INTERACTIONS_DIR, sessId, `${seqNum}.json`);
     this.filePaths.set(id, filePath);
+    const reqId = interaction.response?.headers?.['request-id'];
+    if (reqId) this.requestIdIndex.set(reqId, filePath);
     fs.writeFile(filePath, JSON.stringify(fileContent, null, 2), (err) => {
       if (err) console.error(`Failed to write interaction ${sessId}/${seqNum}:`, err.message);
     });
@@ -245,6 +245,63 @@ class InteractionStore {
     return enriched;
   }
 
+  enrichFromTranscript(agentTranscriptPath, broadcaster) {
+    if (!agentTranscriptPath) return;
+    const match = path.basename(agentTranscriptPath).match(/^agent-(.+)\.jsonl$/);
+    if (!match) return;
+    const agentId = match[1];
+    const metaPath = agentTranscriptPath.replace(/\.jsonl$/, '.meta.json');
+
+    let meta;
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch { meta = {}; }
+
+    let lines;
+    try { lines = fs.readFileSync(agentTranscriptPath, 'utf-8').split('\n'); } catch { return; }
+
+    const enrichment = {
+      agentId,
+      agentType: meta.agentType || null,
+      description: meta.description || null,
+    };
+
+    const seen = new Set();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+      if (record.type !== 'assistant' || !record.requestId) continue;
+      if (seen.has(record.requestId)) continue;
+      seen.add(record.requestId);
+
+      const interaction = this.findByRequestId(record.requestId);
+      if (interaction) {
+        if (interaction.subagent) continue;
+        const { enrichedHooks } = this.enrichInteraction(interaction.id, enrichment);
+        if (broadcaster) {
+          broadcaster.broadcast({ type: 'interaction:enriched', interactionId: interaction.id, subagent: enrichment });
+          for (const hook of enrichedHooks) {
+            broadcaster.broadcast({ type: 'interaction:enriched', interactionId: hook.id, subagent: enrichment });
+          }
+        }
+      } else {
+        // Interaction was evicted from memory — enrich on disk via requestId index
+        const fp = this.requestIdIndex.get(record.requestId);
+        if (fp) {
+          try {
+            const data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+            if (!data.subagent) {
+              data.subagent = enrichment;
+              fs.writeFileSync(fp, JSON.stringify(data, null, 2));
+              if (broadcaster && data.id) {
+                broadcaster.broadcast({ type: 'interaction:enriched', interactionId: data.id, subagent: enrichment });
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+  }
+
   /** Find the LLM turn that contains a tool_use block with the given ID. */
   _findTurnByToolUseId(toolUseId, instanceId) {
     for (let i = this.order.length - 1; i >= 0; i--) {
@@ -320,13 +377,6 @@ class InteractionStore {
       interaction.mcpSource = data.mcpSource || undefined;
     }
     return interaction;
-  }
-
-  getActiveInteractions() {
-    const activeInstanceIds = new Set(this.sessionMap.keys());
-    return this.order
-      .map(id => this.interactions.get(id))
-      .filter(i => i && activeInstanceIds.has(i.instanceId));
   }
 
   getAllFromDisk() {
@@ -453,34 +503,6 @@ class InteractionStore {
       out.mcpSource = interaction.mcpSource || undefined;
     }
     return out;
-  }
-
-  _prunePendingEnrichments() {
-    const now = Date.now();
-    for (const [key, entry] of this.pendingEnrichments) {
-      if (now - entry.ts > 60000) this.pendingEnrichments.delete(key);
-    }
-  }
-
-  removeByInstanceIds(instanceIds) {
-    const idSet = new Set(instanceIds);
-    const toRemove = [];
-    for (const id of this.order) {
-      const interaction = this.interactions.get(id);
-      if (interaction && idSet.has(interaction.instanceId)) {
-        toRemove.push(id);
-      }
-    }
-    for (const id of toRemove) {
-      const filePath = this.filePaths.get(id);
-      if (filePath) {
-        try { fs.unlinkSync(filePath); } catch {}
-        this.filePaths.delete(id);
-      }
-      this.interactions.delete(id);
-    }
-    this.order = this.order.filter(id => !toRemove.includes(id));
-    return toRemove.length;
   }
 
   static _reconstructBodyFromSSE(sseEvents) {

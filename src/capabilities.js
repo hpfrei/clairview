@@ -269,11 +269,6 @@ function deleteHook(cwd, event, entryIndex) {
 // --- Hook reporter auto-injection ---
 
 const HOOK_REPORTER_MARKER = '__vistaclair_reporter__';
-const HOOK_REPORTER_MARKERS = ['__vistaclair_reporter__', '__claude_doc_reporter__', '__clairview_reporter__'];
-
-function isReporterHook(h) {
-  return HOOK_REPORTER_MARKERS.some(m => h.command?.includes(m));
-}
 
 function ensureHookReporters(cwd, reporterPath) {
   const settings = readSettingsLocal(cwd);
@@ -282,20 +277,11 @@ function ensureHookReporters(cwd, reporterPath) {
   let changed = false;
   for (const event of events) {
     if (!settings.hooks[event]) settings.hooks[event] = [];
-    const entries = settings.hooks[event];
-    // Remove legacy reporter entries (old marker names)
-    const legacy = entries.filter(e => e.hooks?.some(h => isReporterHook(h) && !h.command?.includes(HOOK_REPORTER_MARKER)));
-    if (legacy.length > 0) {
-      settings.hooks[event] = entries.filter(e => !legacy.includes(e));
-      changed = true;
-    }
-    // Check if current reporter already exists with the correct path
     const expectedCmd = `node "${reporterPath}" # ${HOOK_REPORTER_MARKER}`;
     const hasCorrectReporter = settings.hooks[event].some(e =>
       e.hooks?.some(h => h.command === expectedCmd)
     );
     if (!hasCorrectReporter) {
-      // Remove stale reporters with correct marker but wrong path
       const stale = settings.hooks[event].filter(e =>
         e.hooks?.some(h => h.command?.includes(HOOK_REPORTER_MARKER))
       );
@@ -312,25 +298,6 @@ function ensureHookReporters(cwd, reporterPath) {
       changed = true;
     }
   }
-  if (changed) writeSettingsLocal(cwd, settings);
-}
-
-function removeHookReporters(cwd) {
-  const settings = readSettingsLocal(cwd);
-  if (!settings.hooks) return;
-  let changed = false;
-  for (const event of Object.keys(settings.hooks)) {
-    const entries = settings.hooks[event];
-    const filtered = entries.filter(e =>
-      !e.hooks?.some(h => isReporterHook(h))
-    );
-    if (filtered.length !== entries.length) {
-      settings.hooks[event] = filtered;
-      changed = true;
-    }
-    if (settings.hooks[event].length === 0) delete settings.hooks[event];
-  }
-  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   if (changed) writeSettingsLocal(cwd, settings);
 }
 
@@ -416,54 +383,7 @@ function detectProviderKey(apiBaseUrl) {
   return 'custom';
 }
 
-// Migrate old flat array format to { providers, models }
-function migrateFromFlatArray(arr) {
-  const providerMap = {};
-  const models = [];
-
-  for (const m of arr) {
-    const pk = detectProviderKey(m.apiBaseUrl);
-    // Build provider entry from first model we see for this key
-    if (!providerMap[pk]) {
-      let label = pk;
-      if (pk === 'openai') label = 'OpenAI';
-      else if (pk === 'google') label = 'Google';
-      else if (pk === 'deepseek') label = 'DeepSeek';
-      else if (pk === 'moonshot') label = 'Moonshot / Kimi';
-      else if (pk === 'ollama') label = 'Ollama (Local)';
-      else if (pk === 'custom') label = 'Custom';
-      providerMap[pk] = {
-        label,
-        apiBaseUrl: m.apiBaseUrl || '',
-        apiKey: m.apiKey || '',
-      };
-    }
-    // Strip provider-level fields from model
-    const stripped = {
-      name: m.name,
-      label: m.label || m.name,
-      description: m.description || '',
-      providerKey: pk,
-      provider: m.provider || 'openai',
-      modelId: m.modelId || '',
-      systemPromptMode: m.systemPromptMode || 'replace',
-      toolOverrides: m.toolOverrides || {},
-      reasoning: !!m.reasoning,
-      contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
-      maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : null,
-    };
-    // Custom models keep their own apiBaseUrl/apiKey if different from provider
-    if (pk === 'custom' && m.apiBaseUrl) {
-      stripped.apiBaseUrl = m.apiBaseUrl;
-      stripped.apiKey = m.apiKey || '';
-    }
-    models.push(stripped);
-  }
-
-  return { providers: providerMap, models };
-}
-
-// Read models.json, auto-migrating from old flat format if needed
+// Read models.json
 function readModelsFile(baseDir) {
   const file = modelsFilePath(baseDir);
   const empty = { providers: {}, models: [] };
@@ -471,16 +391,9 @@ function readModelsFile(baseDir) {
     if (!fs.existsSync(file)) return empty;
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
 
-    if (Array.isArray(raw)) {
-      // Old flat format — migrate
-      const migrated = migrateFromFlatArray(raw);
-      const dir = path.join(baseDir, 'capabilities');
-      ensureDir(dir);
-      fs.writeFileSync(file, JSON.stringify(migrated, null, 2));
-      return migrated;
-    }
+    if (Array.isArray(raw)) return empty;
 
-    // New format — migrate any inline apiKeys to secrets file
+    // Migrate any inline apiKeys to secrets file
     const result = {
       providers: raw.providers && typeof raw.providers === 'object' ? raw.providers : {},
       models: Array.isArray(raw.models) ? raw.models : [],
@@ -1058,39 +971,28 @@ async function scanProviderModels(baseDir) {
 
 module.exports = {
   KNOWN_TOOLS,
-  WEB_SEARCH_PROVIDERS,
   PROVIDER_ADAPTER_MAP,
   KNOWN_SKILLS,
   HOOK_EVENTS,
   MATCHER_EVENTS,
-  listCommands: commandsCrud.list,
-  readCommand: commandsCrud.read,
-  saveCommand: commandsCrud.save,
-  deleteCommand: commandsCrud.delete,
   listSkills,
-  readSkill,
   saveSkill,
   deleteSkill,
   listAgents: agentsCrud.list,
-  readAgent: agentsCrud.read,
   saveAgent: agentsCrud.save,
   deleteAgent: agentsCrud.delete,
   listHooks,
   saveHook,
   deleteHook,
   ensureHookReporters,
-  removeHookReporters,
   listModels,
   loadModel,
   saveModel,
   deleteModel,
-  validateModel,
   listProviders,
   saveProvider,
   deleteProvider,
-  getDefaultSystemPrompt,
   getModelPricing,
-  updateAnthropicPricing,
   scanProviderModels,
   listProxyRules,
   addProxyRule,

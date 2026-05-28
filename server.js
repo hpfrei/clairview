@@ -6,7 +6,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
-const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, getActiveProcessCount, spawnClaude, buildClaudeArgs } = require('./src/utils');
+const { OUTPUTS_DIR, DATA_HOME, ensureDir, setProcessBroadcaster, spawnClaude, buildClaudeArgs } = require('./src/utils');
 const InteractionStore = require('./src/store');
 const DashboardBroadcaster = require('./src/dashboard-ws');
 const createProxyRouter = require('./src/proxy');
@@ -302,10 +302,22 @@ dashboardApp.post('/api/hook-report', (req, res) => {
       status: 'complete', isStreaming: false,
     };
     if ((hookEvent === 'SubagentStart' || hookEvent === 'SubagentStop') && hookData.agent_id) {
+      let metaDescription = hookData.description || null;
+      let metaToolUseId = null;
+      if (!metaDescription && hookData.transcript_path && hookData.agent_id) {
+        try {
+          const sessionDir = path.join(path.dirname(hookData.transcript_path), path.basename(hookData.transcript_path, '.jsonl'));
+          const metaPath = path.join(sessionDir, 'subagents', `agent-${hookData.agent_id}.meta.json`);
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          metaDescription = meta.description || metaDescription;
+          metaToolUseId = meta.toolUseId || null;
+        } catch {}
+      }
       interaction.subagent = {
         agentId: hookData.agent_id,
         agentType: hookData.agent_type || 'agent',
-        description: hookData.description || null,
+        description: metaDescription,
+        toolUseId: metaToolUseId,
       };
     }
     store.add(interaction);
@@ -313,12 +325,8 @@ dashboardApp.post('/api/hook-report', (req, res) => {
     broadcaster.broadcast({ type: 'interaction:start', interaction });
     broadcaster.broadcast({ type: 'interaction:complete', interaction });
 
-    if (hookData.transcript_path && hookData.session_id && cliSessionManager) {
-      cliSessionManager.notifyTranscriptPath(
-        req.body.instanceId,
-        hookData.session_id,
-        hookData.transcript_path
-      );
+    if (hookEvent === 'SubagentStop' && hookData.agent_transcript_path) {
+      try { store.enrichFromTranscript(hookData.agent_transcript_path, broadcaster); } catch {}
     }
   } catch {}
   res.status(200).end();
@@ -383,10 +391,6 @@ dashboardApp.use(express.static(path.join(__dirname, 'public')));
 // Serve chat outputs at /outputs (directory auto-created)
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
-
-// CLI file uploads (paste / drag-drop)
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-ensureDir(UPLOADS_DIR);
 
 function rewriteGitUrl(url, auth) {
   const parsed = new URL(url);

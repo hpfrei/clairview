@@ -372,9 +372,9 @@ function saveToolSource(slug, source) {
 module.exports = {
   INTEGRATED_SLUG, getServersDir, serverDir, slugify, validateSlug,
   ensureIntegratedServer, readMeta, writeMeta,
-  listTools, loadTool, saveTool, deleteTool, toggleTool,
+  listTools, saveTool, deleteTool, toggleTool,
   generateServerJs, writeToolFile,
   readToolSource, saveToolSource, restoreToolSource,
-  listFiles, readFile, writeFile, deleteFile,
+  listFiles, readFile, writeFile,
   listDeps, installDep, uninstallDep, installAll,
 };

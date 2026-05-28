@@ -244,8 +244,6 @@ function _broadcastInstances(event, instanceId) {
     const instances = getInstances();
     const count = instances.filter(i => i.status === 'running').length;
     _processBroadcaster.broadcast({ type: 'claude:instances', event, instanceId, instances, count });
-    // Backward compat
-    _processBroadcaster.broadcast({ type: 'claude:count', count });
   }
 }
 
@@ -589,12 +587,8 @@ module.exports = {
   PACKAGE_ROOT,
   DATA_HOME,
   OUTPUTS_DIR,
-  resolveOutputDir,
   ensureDir,
   readJSON,
   writeJSON,
-  listFiles,
   processUploadedFiles,
-  placeFilesInCwd,
-  augmentPromptWithFiles,
 };

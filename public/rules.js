@@ -151,11 +151,60 @@
   }
 
   // Create rule
-  document.getElementById('ruleNewBtn')?.addEventListener('click', () => {
-    const desc = prompt('Describe what this rule should do:');
-    if (!desc?.trim()) return;
-    sendWs({ type: 'rule:create', description: desc.trim() });
-  });
+  function showNewRuleModal() {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'alert-modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'alert-modal rule-create-modal';
+    modal.innerHTML = `
+      <div class="rule-create-title">New Proxy Rule</div>
+      <div class="rule-create-help">
+        Proxy rules are middleware functions that intercept every Anthropic API request flowing through the proxy.
+        They can modify requests, transform responses, filter tools, or short-circuit calls entirely.
+        <strong>Describe what your rule should do</strong> and an AI agent will generate the code.
+      </div>
+      <label class="rule-create-label">Name <span class="rule-create-optional">(optional)</span></label>
+      <input class="rule-create-input" type="text" id="ruleCreateName" placeholder="e.g. French Response">
+      <label class="rule-create-label">What should this rule do? <span class="rule-create-required">*</span></label>
+      <textarea class="rule-create-textarea" id="ruleCreateDesc" rows="4" placeholder="Describe the rule behavior...">Strip the gitStatus block from system prompt messages — removes branch name, git status, and recent commit info that Claude Code injects</textarea>
+      <div class="rule-create-example-hint">The example above is the description that produced the built-in "Strip Git Status" rule. Replace it with your own.</div>
+      <div class="rule-create-buttons">
+        <button class="rule-create-cancel">Cancel</button>
+        <button class="rule-create-submit" id="ruleCreateSubmit">Create Rule</button>
+      </div>`;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    const descInput = modal.querySelector('#ruleCreateDesc');
+    const nameInput = modal.querySelector('#ruleCreateName');
+    const submitBtn = modal.querySelector('#ruleCreateSubmit');
+
+    function validate() {
+      submitBtn.disabled = !descInput.value.trim();
+    }
+    descInput.addEventListener('input', validate);
+    validate();
+
+    descInput.select();
+
+    const close = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+    });
+    modal.querySelector('.rule-create-cancel').addEventListener('click', close);
+    submitBtn.addEventListener('click', () => {
+      const description = descInput.value.trim();
+      if (!description) return;
+      const name = nameInput.value.trim();
+      const msg = { type: 'rule:create', description };
+      if (name) msg.name = name;
+      sendWs(msg);
+      close();
+    });
+  }
+
+  document.getElementById('ruleNewBtn')?.addEventListener('click', showNewRuleModal);
 
   // Event delegation
   document.getElementById('ruleList')?.addEventListener('click', (e) => {

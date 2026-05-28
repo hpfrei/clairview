@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME, PACKAGE_ROOT, ensureDir } = require('./utils');
+const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME, ensureDir } = require('./utils');
 const createProxyRouter = require('./proxy');
 const { pendingQuestions, clearPendingQuestionsForTab } = createProxyRouter;
 const caps = require('./capabilities');
@@ -173,6 +173,8 @@ class DashboardBroadcaster {
               const s = sanitizeForDashboard(interaction);
               if (s.response) s.response = { ...s.response, sseEvents: undefined };
               ws.send(JSON.stringify({ type: 'interaction:detail', id: msg.id, interaction: s }));
+            } else {
+              ws.send(JSON.stringify({ type: 'interaction:detail', id: msg.id, interaction: null }));
             }
           } else if (msg.type === 'interaction:getSseEvents') {
             const interaction = this.store.get(msg.id);
@@ -196,10 +198,10 @@ class DashboardBroadcaster {
             }
           // --- Skills ---
           } else if (msg.type === 'skill:list') {
-            const cwd = process.cwd();
+
             ws.send(JSON.stringify({ type: 'skill:list', skills: caps.listSkills(PROJECT_ROOT) }));
           } else if (msg.type === 'skill:save') {
-            const cwd = process.cwd();
+
             const ok = caps.saveSkill(PROJECT_ROOT, msg.name, msg.content, msg.extraFiles);
             if (ok) {
               this.broadcast({ type: 'skill:list', skills: caps.listSkills(PROJECT_ROOT) });
@@ -207,15 +209,15 @@ class DashboardBroadcaster {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Invalid skill name: ${msg.name}` }));
             }
           } else if (msg.type === 'skill:delete') {
-            const cwd = process.cwd();
+
             const ok = caps.deleteSkill(PROJECT_ROOT, msg.name);
             if (ok) this.broadcast({ type: 'skill:list', skills: caps.listSkills(PROJECT_ROOT) });
           // --- Agents ---
           } else if (msg.type === 'agent:list') {
-            const cwd = process.cwd();
+
             ws.send(JSON.stringify({ type: 'agent:list', agents: caps.listAgents(PROJECT_ROOT) }));
           } else if (msg.type === 'agent:save') {
-            const cwd = process.cwd();
+
             const ok = caps.saveAgent(PROJECT_ROOT, msg.name, msg.content);
             if (ok) {
               this.broadcast({ type: 'agent:list', agents: caps.listAgents(PROJECT_ROOT) });
@@ -223,27 +225,27 @@ class DashboardBroadcaster {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Invalid agent name: ${msg.name}` }));
             }
           } else if (msg.type === 'agent:delete') {
-            const cwd = process.cwd();
+
             const ok = caps.deleteAgent(PROJECT_ROOT, msg.name);
             if (ok) this.broadcast({ type: 'agent:list', agents: caps.listAgents(PROJECT_ROOT) });
           // --- Hooks ---
           } else if (msg.type === 'hook:list') {
-            const cwd = process.cwd();
+
             ws.send(JSON.stringify({ type: 'hook:list', hooks: caps.listHooks(PROJECT_ROOT) }));
           } else if (msg.type === 'hook:save') {
-            const cwd = process.cwd();
+
             caps.saveHook(PROJECT_ROOT, msg.hook);
             this.broadcast({ type: 'hook:list', hooks: caps.listHooks(PROJECT_ROOT) });
           } else if (msg.type === 'hook:delete') {
-            const cwd = process.cwd();
+
             const ok = caps.deleteHook(PROJECT_ROOT, msg.event, msg.entryIndex);
             if (ok) this.broadcast({ type: 'hook:list', hooks: caps.listHooks(PROJECT_ROOT) });
           // --- Models ---
           } else if (msg.type === 'model:list') {
-            const cwd = process.cwd();
+
             ws.send(JSON.stringify({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) }));
           } else if (msg.type === 'model:save') {
-            const cwd = process.cwd();
+
             const ok = caps.saveModel(PROJECT_ROOT, msg.model);
             if (ok) {
               this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
@@ -251,7 +253,7 @@ class DashboardBroadcaster {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot save model: ${msg.model?.name} (invalid)` }));
             }
           } else if (msg.type === 'model:delete') {
-            const cwd = process.cwd();
+
             const ok = caps.deleteModel(PROJECT_ROOT, msg.name);
             if (ok) {
               this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
@@ -307,10 +309,10 @@ class DashboardBroadcaster {
             });
           // --- Providers ---
           } else if (msg.type === 'provider:list') {
-            const cwd = process.cwd();
+
             ws.send(JSON.stringify({ type: 'provider:list', providers: caps.listProviders(PROJECT_ROOT) }));
           } else if (msg.type === 'provider:save') {
-            const cwd = process.cwd();
+
             const ok = caps.saveProvider(PROJECT_ROOT, msg.key, msg.provider);
             if (ok) {
               this.broadcast({ type: 'provider:list', providers: caps.listProviders(PROJECT_ROOT) });
@@ -320,7 +322,7 @@ class DashboardBroadcaster {
               ws.send(JSON.stringify({ type: 'chat:error', text: `Cannot save provider: ${msg.key}` }));
             }
           } else if (msg.type === 'provider:delete') {
-            const cwd = process.cwd();
+
             const ok = caps.deleteProvider(PROJECT_ROOT, msg.key);
             if (ok) {
               this.broadcast({ type: 'provider:list', providers: caps.listProviders(PROJECT_ROOT) });
