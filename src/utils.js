@@ -159,6 +159,7 @@ function prepareLocalConfigDir(cwd) {
 function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
   const env = { ...process.env, ...extraEnv };
+  delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
   if (proxyPort) {
     env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
   } else {
@@ -191,6 +192,7 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
 function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated, autoMemory }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
   const env = { ...process.env, ...extraEnv };
+  delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
   if (proxyPort) {
     env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
   } else {

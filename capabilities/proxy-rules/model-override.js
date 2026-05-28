@@ -8,4 +8,11 @@ module.exports = function(ctx) {
       ctx.body.output_config.effort = 'high';
     }
   }
+
+  // CLI tabs: upgrade haiku → sonnet for interactive sessions (cost/quality tradeoff).
+  // App AI prompts (e.g. email classifier) keep haiku as requested.
+  const isCliTab = ctx.instanceId && ctx.instanceId.startsWith('cli-');
+  if (isCliTab && ctx.body.model?.includes('haiku')) {
+    ctx.body.model = 'claude-sonnet-4-6';
+  }
 };

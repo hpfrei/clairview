@@ -109,6 +109,7 @@ class CliSession {
       rows: rows || 24,
       dashboardPort: this._dashboardPort,
       authToken: this._authToken,
+      extraEnv: { GIT_CEILING_DIRECTORIES: cwd },
       isolated: this.isolated,
       autoMemory: this.autoMemory,
     });

@@ -2692,6 +2692,37 @@
     scrollTimelineToBottom();
   }
 
+  // --- Arrow key navigation between LLM turns (when not in live mode) ---
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (_liveMode) return;
+    const dashboardEl = document.getElementById('view-dashboard');
+    if (!dashboardEl || dashboardEl.classList.contains('hidden')) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+    e.preventDefault();
+    const entries = Array.from(
+      timelineList.querySelectorAll('.turn-entry:not(.hook-call-entry):not(.mcp-call-entry)')
+    );
+    if (entries.length === 0) return;
+
+    const currentId = state.selection?.id;
+    let currentIdx = currentId ? entries.findIndex(el => el.dataset.id === currentId) : -1;
+    let nextIdx;
+    if (e.key === 'ArrowUp') {
+      nextIdx = currentIdx > 0 ? currentIdx - 1 : 0;
+    } else {
+      nextIdx = currentIdx < entries.length - 1 ? currentIdx + 1 : entries.length - 1;
+    }
+    if (nextIdx === currentIdx && currentIdx >= 0) return;
+
+    const nextEl = entries[nextIdx];
+    const nextId = nextEl.dataset.id;
+    if (nextId) {
+      select({ type: 'turn', id: nextId }, { userClick: true });
+    }
+  });
+
   const _pendingSseRequests = new Set();
   const _pendingDetailRequests = new Set();
 
@@ -3206,6 +3237,18 @@
     </div>`;
   }
 
+  function msgSizeGauge(chars) {
+    const max = 3000;
+    const pct = Math.min(chars / max, 1);
+    const w = 30, h = 8, fill = Math.max(pct * w, 1);
+    const hue = Math.round((1 - pct) * 120);
+    const sat = pct > 0.9 ? '80%' : '70%';
+    const lit = pct > 0.9 ? '30%' : '45%';
+    const color = `hsl(${hue},${sat},${lit})`;
+    const label = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+    return `<span class="msg-size-gauge" title="${chars.toLocaleString()} chars"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="vertical-align:middle;margin:0 4px"><rect width="${w}" height="${h}" rx="2" fill="var(--bg)" stroke="var(--border)" stroke-width="0.5"/><rect width="${fill}" height="${h}" rx="2" fill="${color}"/></svg><span style="font-size:10px;color:${color}">${label}</span></span>`;
+  }
+
   function renderMessages(messages) {
     return messages.map((msg, idx) => {
       const role = msg.role || 'unknown';
@@ -3221,8 +3264,9 @@
           return `[${b.type}]`;
         }).join(' | ');
       }
+      const msgChars = JSON.stringify(msg).length;
       return `<details>
-        <summary><strong>${escHtml(role)}</strong> [${idx}]: ${escHtml(truncate(preview, 120))}</summary>
+        <summary>${msgSizeGauge(msgChars)} <strong>${escHtml(role)}</strong> [${idx}]: ${escHtml(truncate(preview, 120))}</summary>
         ${jsonBlock(msg)}
       </details>`;
     }).join('');
