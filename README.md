@@ -7,6 +7,7 @@
 **Agent inspector, control room, and transparent proxy for Claude Code.**
 
 [![npm](https://img.shields.io/npm/v/vistaclair)](https://www.npmjs.com/package/vistaclair)
+[![downloads](https://img.shields.io/npm/dm/vistaclair)](https://www.npmjs.com/package/vistaclair)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
@@ -116,19 +117,8 @@ Every `claude` process gets a unique instance ID in its base URL (`http://localh
 
 ---
 
-## Free vs Pro
-
-| Feature | Free | Pro |
-|---------|:----:|:---:|
-| Inspector, CLI, routing, rules, MCP, file manager, skills/agents/hooks | ✓ | ✓ |
-| **Apps Platform** | — | ✓ |
-
-[Get vistaclair Pro →](https://hpfreilabs.com)
-
----
-
 ## License
 
 **Apache 2.0** — see [LICENSE](LICENSE). Copyright 2026 [hpfreilabs.com](https://hpfreilabs.com)
 
-> **vistaclair Pro** — the Apps Platform — is a separately licensed commercial add-on. [Learn more →](https://hpfreilabs.com)
+Everything above is free and open source. **vistaclair Pro** adds the Apps Platform as a separately licensed commercial add-on. [Learn more →](https://hpfreilabs.com)
