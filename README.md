@@ -121,4 +121,4 @@ Every `claude` process gets a unique instance ID in its base URL (`http://localh
 
 **Apache 2.0** — see [LICENSE](LICENSE). Copyright 2026 [hpfreilabs.com](https://hpfreilabs.com)
 
-Everything above is free and open source. **vistaclair Pro** adds the Apps Platform as a separately licensed commercial add-on. [Learn more →](https://hpfreilabs.com)
+Everything above is free and open source. **vistaclair Pro** adds the Apps Platform as a separately licensed commercial add-on. [Learn more →](https://hpfreilabs.com/vistaclair/)
