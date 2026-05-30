@@ -319,7 +319,9 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           : null;
         if (family && modelMap[family]) {
           const mapped = caps.loadModel(PROJECT_ROOT, modelMap[family]);
-          if (mapped) {
+          // Skip retired/disabled targets — fall through to passthrough so a
+          // decommissioned model can never be routed to.
+          if (mapped && mapped.lifecycle !== 'retired' && !mapped.disabled) {
             if (mapped.providerKey === 'anthropic') {
               body.model = mapped.modelId;
             } else {

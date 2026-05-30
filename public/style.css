@@ -4030,6 +4030,31 @@ footer {
 }
 .model-toggle-btn:hover { background: var(--bg-hover); color: var(--text-bright); }
 .model-card-disabled .model-toggle-btn { color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.cap-model-new-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-weight: 600;
+}
+.cap-model-deprecated-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #b45309;
+  color: #fff;
+}
+.cap-model-retired-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--red, #dc2626);
+  color: #fff;
+}
+.model-card-retired {
+  opacity: 0.55;
+}
 .cap-model-disabled-badge {
   font-size: 10px;
   padding: 1px 5px;

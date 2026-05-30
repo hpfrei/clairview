@@ -666,7 +666,11 @@
     if (!settingsModal || settingsModal._tabId !== tabId) return;
     const modelMap = settings.modelMap || { opus: null, sonnet: null, haiku: null };
     const hasAuth = (m) => !!m.apiKey || (hasSubscription && m.providerKey === 'anthropic');
+    const isRetired = (m) => m.lifecycle === 'retired';
     const allModels = (models || []).sort((a, b) => {
+      // Retired models sink to the bottom, then unauthenticated, then alphabetical.
+      const aRet = isRetired(a), bRet = isRetired(b);
+      if (aRet !== bRet) return aRet ? 1 : -1;
       const aKey = hasAuth(a), bKey = hasAuth(b);
       if (aKey !== bKey) return aKey ? -1 : 1;
       return (a.label || a.name).localeCompare(b.label || b.name);
@@ -679,8 +683,12 @@
       allModels.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.name;
-        opt.textContent = m.label || m.name;
-        if (!hasAuth(m)) { opt.disabled = true; opt.textContent += ' (no key)'; }
+        let label = m.label || m.name;
+        if (m.isNew) label += ' (new)';
+        if (isRetired(m)) { opt.disabled = true; label += ' (retired)'; }
+        else if (m.lifecycle === 'deprecated') label += m.retiresAt ? ` (retiring ${m.retiresAt})` : ' (deprecated)';
+        else if (!hasAuth(m)) { opt.disabled = true; label += ' (no key)'; }
+        opt.textContent = label;
         if (modelMap[family] === m.name) opt.selected = true;
         sel.appendChild(opt);
       });

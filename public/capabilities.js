@@ -358,8 +358,14 @@ Available templates in this skill directory:
       const pricing = model.inputCostPerMTok != null
         ? `$${model.inputCostPerMTok} / $${model.outputCostPerMTok} per MTok`
         : '';
+      const isRetired = model.lifecycle === 'retired';
+      const isDeprecated = model.lifecycle === 'deprecated';
+      const lifecycleClass = isRetired ? ' model-card-retired' : '';
       const disabledClass = model.disabled ? ' model-card-disabled' : '';
-      html += `<div class="model-card${disabledClass}" data-name="${escHtml(model.name)}" data-kind="model">
+      const retiresLabel = isDeprecated
+        ? 'retiring' + (model.retiresAt ? ' ' + escHtml(model.retiresAt) : '')
+        : '';
+      html += `<div class="model-card${disabledClass}${lifecycleClass}" data-name="${escHtml(model.name)}" data-kind="model">
         <div class="model-card-top-row">
           <div class="model-card-name">${escHtml(model.label || model.name)}</div>
           <button class="model-toggle-btn" data-model="${escHtml(model.name)}" data-disabled="${model.disabled ? '1' : '0'}" title="${model.disabled ? 'Enable model' : 'Disable model'}">${model.disabled ? 'Enable' : 'Disable'}</button>
@@ -367,7 +373,10 @@ Available templates in this skill directory:
         <div class="model-card-id"><code>${escHtml(model.modelId || '')}</code></div>
         ${model.description ? '<div class="model-card-desc">' + escHtml(model.description) + '</div>' : ''}
         <div class="model-card-meta">
-          ${model.disabled ? '<span class="cap-model-disabled-badge">disabled</span>' : ''}
+          ${model.isNew ? '<span class="cap-model-new-badge">new</span>' : ''}
+          ${isDeprecated ? '<span class="cap-model-deprecated-badge">' + retiresLabel + '</span>' : ''}
+          ${isRetired ? '<span class="cap-model-retired-badge">retired</span>' : ''}
+          ${model.disabled && !isRetired ? '<span class="cap-model-disabled-badge">disabled</span>' : ''}
           ${model.reasoning ? '<span class="cap-model-reasoning">reasoning</span>' : ''}
           ${specs ? '<span class="cap-model-specs">' + escHtml(specs) + '</span>' : ''}
           ${pricing ? '<span class="cap-model-pricing">' + escHtml(pricing) + '</span>' : ''}
@@ -618,19 +627,27 @@ Available templates in this skill directory:
     const providerKeys = Object.keys(results);
     let totalAdded = 0;
     let totalScanned = 0;
+    let totalDeprecated = 0;
+    let totalRetired = 0;
     const lines = [];
 
+    const nameOf = (m) => (typeof m === 'string' ? m : (m.label || m.name));
     for (const key of providerKeys) {
       const r = results[key];
       const provLabel = state.providers.find(p => p.key === key)?.label || key;
       if (r.status === 'ok') {
         totalScanned++;
-        totalAdded += (r.added || []).length;
-        if (r.added?.length > 0) {
-          lines.push(`${provLabel}: added ${r.added.length} (${r.added.map(m => m.label || m.name).join(', ')})`);
-        } else {
-          lines.push(`${provLabel}: up to date (${r.total || 0} models)`);
-        }
+        const added = r.added || [];
+        const deprecated = r.deprecated || [];
+        const retired = r.retired || [];
+        totalAdded += added.length;
+        totalDeprecated += deprecated.length;
+        totalRetired += retired.length;
+        const parts = [];
+        if (added.length) parts.push(`added ${added.length} (${added.map(nameOf).join(', ')})`);
+        if (deprecated.length) parts.push(`deprecated ${deprecated.length} (${deprecated.map(nameOf).join(', ')})`);
+        if (retired.length) parts.push(`retired ${retired.length} (${retired.map(nameOf).join(', ')})`);
+        lines.push(`${provLabel}: ${parts.length ? parts.join('; ') : `up to date (${r.total || 0} models)`}`);
       } else if (r.status === 'error') {
         totalScanned++;
         lines.push(`${provLabel}: error — ${r.error}`);
@@ -640,8 +657,12 @@ Available templates in this skill directory:
     }
 
     if (statusEl) {
-      const summary = totalAdded > 0
-        ? `Scanned ${totalScanned} providers. Added ${totalAdded} new model${totalAdded !== 1 ? 's' : ''} (disabled by default). Updating pricing...`
+      const changeParts = [];
+      if (totalAdded) changeParts.push(`added ${totalAdded} new model${totalAdded !== 1 ? 's' : ''} (disabled by default)`);
+      if (totalDeprecated) changeParts.push(`flagged ${totalDeprecated} deprecated`);
+      if (totalRetired) changeParts.push(`retired ${totalRetired}`);
+      const summary = changeParts.length
+        ? `Scanned ${totalScanned} providers. ${changeParts.join(', ')}. Updating pricing...`
         : `All models up to date. Updating pricing...`;
       statusEl.innerHTML = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
     }

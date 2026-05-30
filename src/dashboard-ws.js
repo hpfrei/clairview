@@ -264,6 +264,7 @@ class DashboardBroadcaster {
             const model = caps.loadModel(PROJECT_ROOT, msg.name);
             if (model) {
               model.disabled = !!msg.disabled;
+              model.isNew = false;
               caps.saveModel(PROJECT_ROOT, model);
               this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
             }
@@ -278,7 +279,7 @@ class DashboardBroadcaster {
               const modelsPath = path.join(PROJECT_ROOT, 'capabilities', 'models.json');
               const anthropicPath = path.join(PROJECT_ROOT, 'capabilities', 'anthropic-pricing.json');
               const modelList = allModels.map(m => `${m.label || m.name} (modelId: ${m.modelId}, provider: ${m.providerKey})`).join('\n');
-              const prompt = `Update the pricing data for AI models by directly editing the pricing files on disk.\n\nSteps:\n1. Read ${modelsPath} to see the current model definitions.\n2. Read ${anthropicPath} to see the current Anthropic pricing entries.\n3. Look up the current official API pricing (per million tokens, in USD) for:\n   - Each model found in models.json (third-party models listed below).\n   - All current Anthropic Claude models. You are a Claude model yourself — you know which models Anthropic currently offers. Update existing entries in anthropic-pricing.json with correct current prefix keys (e.g. claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5) and remove outdated entries that no longer match any current model.\n4. For each model in models.json, update the inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, and cacheCreateCostPerMTok fields directly in the file. Use null for cache fields if not available.\n5. For Anthropic models, update ${anthropicPath} with the same four fields per model.\n\nThe third-party models to look up pricing for:\n${modelList}\n\nIMPORTANT: You MUST directly edit the files using your Edit or Write tools — do not just output JSON. After updating, briefly summarize which models were updated and their new prices.`;
+              const prompt = `Maintain the Anthropic model catalog and AI model pricing by directly editing files on disk.\n\nSteps:\n1. Read ${modelsPath} to see the current model definitions.\n2. Read ${anthropicPath}. This is the authoritative Anthropic catalog: each key is a model prefix (e.g. claude-opus-4-8) and each value is an object that may contain "inputCostPerMTok", "outputCostPerMTok", "cacheReadCostPerMTok", "cacheCreateCostPerMTok", "label", "lifecycle" ("current" | "deprecated" | "retired"), and "retiresAt" (an ISO date string, only for deprecated models).\n3. You are a Claude model yourself — you know which models Anthropic currently offers and which are deprecated or decommissioned. Update ${anthropicPath} so it reflects reality:\n   - ADD an entry for every current Anthropic model that is missing (include label, lifecycle "current", and pricing). Add newly released models even if you only just learned of them.\n   - Set "lifecycle":"deprecated" and a "retiresAt" ISO date on models Anthropic has announced for retirement but not yet removed.\n   - Set "lifecycle":"retired" on models Anthropic has decommissioned (no longer served). Keep the entry; do not delete it.\n   - Set "lifecycle":"current" (and remove any "retiresAt") on models that are fully supported.\n   - Keep/update the four pricing fields (per million tokens, USD) on every entry.\n4. Look up and update the current official pricing for each THIRD-PARTY model in models.json (listed below): set inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, cacheCreateCostPerMTok directly in ${modelsPath}. Use null for cache fields if not available. Do not edit Anthropic entries in models.json — those are reconciled automatically from ${anthropicPath}.\n\nThe third-party models to look up pricing for:\n${modelList}\n\nIMPORTANT: You MUST directly edit the files using your Edit or Write tools — do not just output JSON. After updating, briefly summarize which Anthropic models you added, deprecated, or retired, and which third-party prices you changed.`;
 
               const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
               const proc = spawnClaude(args, {
@@ -303,11 +304,18 @@ class DashboardBroadcaster {
               proc.stdin.end();
               proc.on('close', (code) => {
                 parser.flush();
+                // Re-reconcile so any models the subprocess added/deprecated/retired
+                // in anthropic-pricing.json are reflected in models.json.
+                let recon = null;
+                try { recon = caps.reconcileAnthropicCatalog(PROJECT_ROOT, { clearNew: false }); } catch {}
+                const lifecycleNote = recon
+                  ? ` Anthropic catalog: +${recon.added.length} new, ${recon.deprecated.length} deprecated, ${recon.retired.length} retired.`
+                  : '';
                 const claudeErr = describeClaudeError(code, stderrBuf);
                 if (claudeErr) {
-                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: `Scan complete. Pricing update failed: ${claudeErr}` }));
+                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: `Scan complete.${lifecycleNote} Pricing update failed: ${claudeErr}` }));
                 } else {
-                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: resultText }));
+                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: (resultText || 'Refresh complete.') + lifecycleNote }));
                 }
                 this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
               });

@@ -464,6 +464,9 @@ function resolveModel(model, providers, secrets) {
     outputCostPerMTok: typeof model.outputCostPerMTok === 'number' ? model.outputCostPerMTok : null,
     cacheReadCostPerMTok: typeof model.cacheReadCostPerMTok === 'number' ? model.cacheReadCostPerMTok : null,
     cacheCreateCostPerMTok: typeof model.cacheCreateCostPerMTok === 'number' ? model.cacheCreateCostPerMTok : null,
+    lifecycle: ['current', 'deprecated', 'retired'].includes(model.lifecycle) ? model.lifecycle : 'current',
+    retiresAt: (typeof model.retiresAt === 'string' && model.retiresAt) ? model.retiresAt : null,
+    isNew: !!model.isNew,
   };
 }
 
@@ -543,7 +546,12 @@ function validateModel(m) {
     outputCostPerMTok: typeof m.outputCostPerMTok === 'number' ? m.outputCostPerMTok : null,
     cacheReadCostPerMTok: typeof m.cacheReadCostPerMTok === 'number' ? m.cacheReadCostPerMTok : null,
     cacheCreateCostPerMTok: typeof m.cacheCreateCostPerMTok === 'number' ? m.cacheCreateCostPerMTok : null,
+    lifecycle: ['current', 'deprecated', 'retired'].includes(m.lifecycle) ? m.lifecycle : 'current',
+    retiresAt: (typeof m.retiresAt === 'string' && m.retiresAt) ? m.retiresAt : null,
+    isNew: !!m.isNew,
   };
+  // Retired models are always hidden from selection
+  if (result.lifecycle === 'retired') result.disabled = true;
   // Custom provider models can have their own apiBaseUrl/apiKey
   if (m.providerKey === 'custom') {
     result.apiBaseUrl = typeof m.apiBaseUrl === 'string' ? m.apiBaseUrl : '';
@@ -772,6 +780,99 @@ const GEMINI_MODEL_EXCLUDE = /tts|image|nano-banana|robotics|computer-use|deep-r
 // Dated Anthropic variants (claude-opus-4-7-20250715)
 const ANTHROPIC_DATED_RE = /-(\d{8})$/;
 
+const PRICING_FIELDS = ['inputCostPerMTok', 'outputCostPerMTok', 'cacheReadCostPerMTok', 'cacheCreateCostPerMTok'];
+
+// Hardcoded safety net of currently-offered Anthropic models. Guarantees these
+// exist in models.json even when the Claude pricing subprocess is unavailable
+// (e.g. subscription-only auth with no Anthropic API key). To support a new
+// release, add it here (lifecycle 'current'); the refresh subprocess also adds
+// newly-released models automatically by editing anthropic-pricing.json.
+const ANTHROPIC_CATALOG_FALLBACK = {
+  'claude-opus-4-8': { label: 'Claude Opus 4.8', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current', description: "Anthropic's newest and most capable model — frontier reasoning, coding, and agentic tasks" },
+  'claude-opus-4-7': { label: 'Claude Opus 4.7', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current' },
+  'claude-opus-4-6': { label: 'Claude Opus 4.6', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current' },
+  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', reasoning: true, contextWindow: 200000, maxOutputTokens: 16000, lifecycle: 'current' },
+  'claude-haiku-4-5': { label: 'Claude Haiku 4.5', reasoning: false, contextWindow: 200000, maxOutputTokens: 8192, lifecycle: 'current' },
+};
+
+// Reconcile models.json against the Anthropic catalog (hardcoded fallback merged
+// with anthropic-pricing.json, which the refresh subprocess keeps current).
+// Adds missing current/deprecated models (flagged isNew), updates lifecycle and
+// pricing, and disables models the catalog marks retired. Retirement only happens
+// for entries explicitly marked lifecycle:'retired' — never on mere absence —
+// to avoid false positives from an incomplete fallback.
+function reconcileAnthropicCatalog(baseDir, opts = {}) {
+  const result = { status: 'ok', added: [], deprecated: [], retired: [], total: 0 };
+  const pricingPath = path.join(baseDir, 'capabilities', 'anthropic-pricing.json');
+  let fileCatalog = {};
+  try { fileCatalog = JSON.parse(fs.readFileSync(pricingPath, 'utf-8')) || {}; } catch {}
+  const catalog = {};
+  for (const key of new Set([...Object.keys(ANTHROPIC_CATALOG_FALLBACK), ...Object.keys(fileCatalog)])) {
+    catalog[key] = { ...(ANTHROPIC_CATALOG_FALLBACK[key] || {}), ...(fileCatalog[key] || {}) };
+  }
+
+  const data = readModelsFile(baseDir);
+  const baseOf = (m) => (m.modelId || m.name || '').replace(ANTHROPIC_DATED_RE, '');
+  const existingNames = new Set(data.models.map(m => m.name));
+  const byBase = new Map();
+  for (const m of data.models) {
+    if (m.providerKey !== 'anthropic') continue;
+    byBase.set(m.name, m);
+    byBase.set(baseOf(m), m);
+    if (opts.clearNew && m.isNew) m.isNew = false;
+  }
+
+  for (const [key, meta] of Object.entries(catalog)) {
+    const lifecycle = ['current', 'deprecated', 'retired'].includes(meta.lifecycle) ? meta.lifecycle : 'current';
+    const retiresAt = (typeof meta.retiresAt === 'string' && meta.retiresAt) ? meta.retiresAt : null;
+    const existing = byBase.get(key);
+    result.total++;
+
+    if (lifecycle === 'retired') {
+      if (existing && existing.lifecycle !== 'retired') {
+        existing.lifecycle = 'retired';
+        existing.disabled = true;
+        existing.retiresAt = null;
+        result.retired.push(existing.label || existing.name);
+      }
+      continue;
+    }
+
+    if (!existing) {
+      if (existingNames.has(key)) continue;
+      const entry = {
+        name: key,
+        label: meta.label || key,
+        description: meta.description || '',
+        providerKey: 'anthropic',
+        provider: 'anthropic',
+        modelId: meta.modelId || key,
+        systemPromptMode: 'passthrough',
+        reasoning: !!meta.reasoning,
+        disabled: false,
+        lifecycle,
+        retiresAt,
+        isNew: true,
+        contextWindow: typeof meta.contextWindow === 'number' ? meta.contextWindow : null,
+        maxOutputTokens: typeof meta.maxOutputTokens === 'number' ? meta.maxOutputTokens : null,
+      };
+      for (const f of PRICING_FIELDS) if (typeof meta[f] === 'number') entry[f] = meta[f];
+      data.models.push(validateModel(entry));
+      existingNames.add(key);
+      byBase.set(key, entry);
+      byBase.set(baseOf(entry), entry);
+      result.added.push(entry.label || key);
+    } else {
+      existing.lifecycle = lifecycle;
+      existing.retiresAt = lifecycle === 'deprecated' ? retiresAt : null;
+      for (const f of PRICING_FIELDS) if (typeof meta[f] === 'number') existing[f] = meta[f];
+      if (lifecycle === 'deprecated') result.deprecated.push(existing.label || existing.name);
+    }
+  }
+  writeModelsFile(baseDir, data);
+  return result;
+}
+
 function _sanitizeModelName(modelId, existingNames) {
   let name = modelId.toLowerCase()
     .replace(/^models\//, '')
@@ -864,60 +965,6 @@ async function _fetchGeminiModels(apiBaseUrl, apiKey) {
   return all;
 }
 
-async function _fetchAnthropicModels(apiKey) {
-  const all = [];
-  let afterId = null;
-  for (let page = 0; page < 5; page++) {
-    let url = 'https://api.anthropic.com/v1/models?limit=100';
-    if (afterId) url += `&after_id=${afterId}`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    try {
-      const res = await fetch(url, {
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        signal: ctrl.signal,
-      });
-      if (!res.ok) {
-        const status = res.status;
-        if (status === 401) throw new Error('Invalid API key');
-        if (status === 429) throw new Error('Rate limited — try again later');
-        throw new Error(`HTTP ${status}: ${res.statusText}`);
-      }
-      const data = await res.json();
-      const items = Array.isArray(data.data) ? data.data : [];
-      for (const m of items) {
-        if (!m.id) continue;
-        all.push({
-          modelId: m.id,
-          displayName: m.display_name || m.id,
-          description: '',
-          contextWindow: null,
-          maxOutputTokens: null,
-        });
-      }
-      if (!data.has_more) break;
-      afterId = items.length ? items[items.length - 1].id : null;
-      if (!afterId) break;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  // Dedup dated variants: group by base name, prefer undated; keep latest dated if no undated exists
-  const groups = new Map();
-  for (const m of all) {
-    const base = m.modelId.replace(ANTHROPIC_DATED_RE, '');
-    const isDated = ANTHROPIC_DATED_RE.test(m.modelId);
-    const existing = groups.get(base);
-    if (!existing || (!isDated && existing.isDated) || (isDated && existing.isDated && m.modelId > existing.model.modelId)) {
-      groups.set(base, { model: m, isDated });
-    }
-  }
-  return Array.from(groups.values()).map(({ model }) => model);
-}
-
 async function scanProviderModels(baseDir) {
   const data = readModelsFile(baseDir);
   const secrets = readSecrets(baseDir);
@@ -925,53 +972,69 @@ async function scanProviderModels(baseDir) {
   const existingNames = new Set(data.models.map(m => m.name));
   const results = {};
 
-  // Scan providers sequentially to avoid race conditions on saveModel
+  // Scan keyed providers via their /models API. Anthropic is handled separately
+  // by reconcileAnthropicCatalog below (works without an API key).
   for (const [key, prov] of Object.entries(data.providers)) {
-    const apiKey = secrets.providerKeys?.[key]
-      || (key === 'anthropic' ? process.env.ANTHROPIC_API_KEY : '')
-      || '';
+    if (key === 'anthropic') continue;
+    const apiKey = secrets.providerKeys?.[key] || '';
     if (!apiKey) {
       results[key] = { status: 'skipped', error: 'No API key configured', added: [] };
       continue;
     }
+    const adapter = PROVIDER_ADAPTER_MAP[key] || 'openai';
+    const exclude = adapter === 'gemini' ? GEMINI_MODEL_EXCLUDE : OPENAI_MODEL_EXCLUDE;
     try {
-      let raw;
-      const adapter = PROVIDER_ADAPTER_MAP[key] || 'openai';
-      if (key === 'anthropic') {
-        raw = await _fetchAnthropicModels(apiKey);
-      } else if (adapter === 'gemini') {
-        raw = await _fetchGeminiModels(prov.apiBaseUrl || '', apiKey);
-      } else {
-        raw = await _fetchOpenAICompatModels(prov.apiBaseUrl || '', apiKey);
-      }
+      const raw = adapter === 'gemini'
+        ? await _fetchGeminiModels(prov.apiBaseUrl || '', apiKey)
+        : await _fetchOpenAICompatModels(prov.apiBaseUrl || '', apiKey);
+      const liveIds = new Set(raw.map(m => m.modelId));
       const added = [];
+      const retired = [];
+      // Recompute isNew + retirement against the live list
+      for (const m of data.models) {
+        if (m.providerKey !== key) continue;
+        if (m.isNew) m.isNew = false;
+        // Decommission detection: a model we'd normally track but the API no
+        // longer returns. Guarded by the exclude regex so filtered-out models
+        // (embeddings, dated aliases, etc.) are never falsely retired.
+        if (m.modelId && !exclude.test(m.modelId) && !liveIds.has(m.modelId) && m.lifecycle !== 'retired') {
+          m.lifecycle = 'retired';
+          m.disabled = true;
+          retired.push(m.label || m.name);
+        }
+      }
       for (const m of raw) {
         if (existingModelIds.has(m.modelId)) continue;
         const name = _sanitizeModelName(m.modelId, existingNames);
         existingNames.add(name);
         existingModelIds.add(m.modelId);
-        const entry = {
+        const entry = validateModel({
           name,
           label: m.displayName !== m.modelId ? m.displayName : name,
           description: m.description || '',
           providerKey: key,
           provider: adapter,
           modelId: m.modelId,
-          systemPromptMode: key === 'anthropic' ? 'passthrough' : 'replace',
+          systemPromptMode: 'replace',
           reasoning: false,
           disabled: true,
+          lifecycle: 'current',
+          isNew: true,
           contextWindow: m.contextWindow || null,
           maxOutputTokens: m.maxOutputTokens || null,
-        };
-        saveModel(baseDir, entry);
+        });
+        data.models.push(entry);
         added.push({ name, label: entry.label, modelId: m.modelId });
       }
-      results[key] = { status: 'ok', total: raw.length, added };
+      results[key] = { status: 'ok', total: raw.length, added, retired };
     } catch (err) {
       results[key] = { status: 'error', error: err.message || String(err), added: [] };
     }
   }
 
+  writeModelsFile(baseDir, data);
+  // Anthropic: ensure all current models exist + apply lifecycle flags
+  results.anthropic = reconcileAnthropicCatalog(baseDir, { clearNew: true });
   return results;
 }
 
@@ -1000,6 +1063,7 @@ module.exports = {
   deleteProvider,
   getModelPricing,
   scanProviderModels,
+  reconcileAnthropicCatalog,
   listProxyRules,
   addProxyRule,
   toggleProxyRule,
