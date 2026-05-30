@@ -193,25 +193,29 @@
     return { clampedIds, clampParentInfo };
   }
 
-  // --- Server-tool detection (WebSearch responses, etc.) ---
+  // --- Subagent attribution by spawning-prompt match ---
 
-  function hasServerToolContent(interaction) {
-    const body = interaction.response?.body;
-    if (body?.content) {
-      for (const block of body.content) {
-        if (block.type === 'server_tool_use' || block.type === 'web_search_tool_result') return true;
+  // The prompt a parent passes to an Agent tool call appears verbatim in that
+  // subagent's own request messages. This uniquely identifies a subagent turn —
+  // even among identical concurrent agents — when server-side enrichment hasn't
+  // (yet) stamped subagent.agentId.
+
+  function normWhitespace(s) {
+    return (s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function turnUserText(interaction) {
+    const msgs = interaction.request?.messages;
+    if (!Array.isArray(msgs)) return '';
+    const parts = [];
+    for (const m of msgs) {
+      if (m.role !== 'user') continue;
+      if (typeof m.content === 'string') parts.push(m.content);
+      else if (Array.isArray(m.content)) {
+        for (const b of m.content) if (b.type === 'text' && b.text) parts.push(b.text);
       }
     }
-    const sseEvents = interaction.response?.sseEvents;
-    if (sseEvents?.length) {
-      for (const evt of sseEvents) {
-        if (evt.eventType === 'content_block_start') {
-          const t = evt.data?.content_block?.type;
-          if (t === 'server_tool_use' || t === 'web_search_tool_result') return true;
-        }
-      }
-    }
-    return false;
+    return normWhitespace(parts.join('\n'));
   }
 
   // --- Column assignment ---
@@ -277,12 +281,62 @@
         if (!agentLastIdx.has(agentId) && desc) {
           agentLastIdx.set(agentId, i);
         }
-        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, subagentType: tc.input?.subagent_type || null });
+        const probe = normWhitespace(tc.input?.prompt).slice(0, 200);
+        agentToolCalls.push({ toolUseId: tc.id, description: desc, agentId, parentIdx: i, subagentType: tc.input?.subagent_type || null, promptProbe: probe.length >= 30 ? probe : null });
       }
     }
     const toolUseToEagerAgent = new Map();
     for (const atc of agentToolCalls) {
       toolUseToEagerAgent.set(atc.toolUseId, atc);
+    }
+
+    // --- Attribution precompute ---
+    // Resolve every Agent tool call's toolUseId to a real agentId, and use the
+    // spawning-prompt probe to attribute unenriched subagent turns to a column.
+
+    // toolUseId -> real agentId. Two sources, both reliable:
+    //  1. FIFO pairing of PreToolUse/Agent hooks with the next SubagentStart.
+    //  2. An enriched turn whose user text contains a tool call's prompt probe.
+    const realAgentForToolUse = new Map();
+    {
+      const preQueue = [];
+      for (const int of interactions) {
+        if (!int.isHook) continue;
+        if (/PreToolUse/i.test(int.hookEvent) && int.toolName === 'Agent' && int.toolUseId) {
+          preQueue.push(int.toolUseId);
+        } else if (int.hookEvent === 'SubagentStart' && int.hookAgentId) {
+          const tuid = preQueue.shift();
+          if (tuid) realAgentForToolUse.set(tuid, int.hookAgentId);
+        }
+      }
+    }
+    const probeToolCalls = agentToolCalls.filter(atc => atc.promptProbe);
+    function matchTurnToToolUse(interaction) {
+      if (probeToolCalls.length === 0) return null;
+      const text = turnUserText(interaction);
+      if (!text) return null;
+      for (const atc of probeToolCalls) {
+        if (text.includes(atc.promptProbe)) return atc.toolUseId;
+      }
+      return null;
+    }
+    for (const int of interactions) {
+      if (int.isHook || int.isMcp) continue;
+      const aid = int.subagent?.agentId;
+      if (!aid) continue;
+      const tuid = matchTurnToToolUse(int);
+      if (tuid && !realAgentForToolUse.has(tuid)) realAgentForToolUse.set(tuid, aid);
+    }
+
+    // Unenriched standard-LLM turn -> agentId, via its spawning-prompt probe.
+    const inferredAgentForTurn = new Map();
+    for (const int of interactions) {
+      if (int.isHook || int.isMcp || int.subagent?.agentId || !isStandardLlm(int)) continue;
+      const tuid = matchTurnToToolUse(int);
+      if (!tuid) continue;
+      const realAid = realAgentForToolUse.get(tuid);
+      const aid = realAid || ('pending-' + tuid);
+      inferredAgentForTurn.set(int.id, { agentId: aid, toolUseId: tuid });
     }
 
     // Extend agentLastIdx using PostToolUse/Agent hooks so columns stay
@@ -306,16 +360,28 @@
           || resolveHookAgentId(interaction, interactions.slice(0, idx));
       } else {
         agentId = interaction.subagent?.agentId || null;
-        // Fallback: when exactly one subagent is active and this LLM turn has no
-        // enrichment, assign it to that agent — but only if this looks like an
-        // actual subagent turn, not a main-thread auxiliary call:
-        //  - non-standard LLM turns (count_tokens) stay on main
-        //  - WebSearch/server-tool responses stay on main
-        if (!agentId && !interaction.isMcp && activeColumns.size === 1
-            && isStandardLlm(interaction) && !hasServerToolContent(interaction)) {
-          for (const [aid, col] of activeColumns) {
-            agentId = aid;
-            const agentSub = columnAgents.get(col);
+        // Fallback for trace-less sessions: the server stamps subagent.agentId
+        // authoritatively from Claude's transcripts when available, so this only
+        // runs when enrichment is absent. Attributes an unenriched subagent turn
+        // via the spawning prompt the parent passed to the Agent tool call —
+        // works even with identical concurrent agents; main-thread turns (incl.
+        // server-side web searches) match nothing and stay on main.
+        if (!agentId) {
+          const inferred = inferredAgentForTurn.get(interaction.id);
+          if (inferred) {
+            // Bind to whichever key the column currently lives under: the real
+            // agentId once SubagentStart has reconciled it, otherwise the eager
+            // pending key. Avoids allocating a duplicate column.
+            const pendingKey = 'pending-' + inferred.toolUseId;
+            if (activeColumns.has(inferred.agentId) || historicalColumns.has(inferred.agentId)) {
+              agentId = inferred.agentId;
+            } else if (activeColumns.has(pendingKey) || historicalColumns.has(pendingKey)) {
+              agentId = pendingKey;
+            } else {
+              agentId = inferred.agentId;
+            }
+            const col = activeColumns.get(agentId) ?? historicalColumns.get(agentId);
+            const agentSub = col != null ? columnAgents.get(col) : null;
             if (agentSub) {
               interaction.subagent = { ...agentSub };
               interaction._subagentInferred = true;
@@ -337,7 +403,10 @@
           if (tc.name !== 'Agent' || !tc.id) continue;
           const eager = toolUseToEagerAgent.get(tc.id);
           if (!eager) continue;
-          const eagerAid = eager.agentId;
+          // Key the lane by the real agentId when known (FIFO-resolved from
+          // SubagentStart), so the eager column and the announced agent are the
+          // same column — no duplicate lane, no reconciliation needed.
+          const eagerAid = realAgentForToolUse.get(tc.id) || eager.agentId;
           if (activeColumns.has(eagerAid) || historicalColumns.has(eagerAid)) continue;
           const alloc = allocateColumn(freeColumns, activeColumns, nextColumn);
           nextColumn = alloc.nextColumn;
@@ -734,8 +803,7 @@
     const hookEntryById = new Map();
     for (const me of mainEntries) hookEntryById.set(me.id, me);
 
-    if (columnSegments && columnSegments.length > 0) {
-      for (const seg of columnSegments) {
+    for (const seg of columnSegments || []) {
         const entries = (colEntries.get(seg.col) || []).filter(item => {
           const aid = item.interaction.subagent?.agentId;
           return aid === seg.agentId;
@@ -837,44 +905,6 @@
           color, agentId: seg.agentId,
           isStreaming: entries.some(e => e.interaction.status === 'streaming'),
         });
-      }
-    } else {
-      // Legacy fallback without segments
-      for (let col = 1; col < totalColumns; col++) {
-        const entries = colEntries.get(col);
-        if (!entries || entries.length === 0) continue;
-        const agent = columnAgents.get(col);
-        const color = agent ? getSubagentColor(agent) : SUBAGENT_COLORS[0];
-        const bgLeft = D3_CONST.RULER_WIDTH + col * (colWidth + D3_CONST.COLUMN_GAP) - 4;
-        const bgTop = entries[0].y - 4;
-        const lastEntry = entries[entries.length - 1];
-        const bgBottom = (lastEntry.timeBottom || (lastEntry.y + computeNodeHeight(lastEntry.interaction))) + 4;
-
-        connectors.push({
-          type: 'bgRect', col,
-          x: bgLeft, y: bgTop, width: colWidth + 8, height: bgBottom - bgTop,
-          color, agentId: agent?.agentId,
-          isStreaming: entries.some(e => e.interaction.status === 'streaming'),
-        });
-
-        let forkOriginY = bgTop;
-        let forkOriginX = D3_CONST.RULER_WIDTH + colWidth / 2;
-        for (let i = mainEntries.length - 1; i >= 0; i--) {
-          if (mainEntries[i].y <= entries[0].y) {
-            forkOriginY = mainEntries[i].y + mainEntries[i].height / 2;
-            forkOriginX = mainEntries[i].x + mainEntries[i].width / 2;
-            break;
-          }
-        }
-        const legacyTargetX = bgLeft + (colWidth + 8) / 2;
-        const legacyBow = Math.max(20, Math.abs(legacyTargetX - forkOriginX) * 0.2);
-        const legacyTopY = Math.min(forkOriginY, bgTop) - legacyBow;
-        connectors.push({
-          type: 'fork', col,
-          path: `M${forkOriginX},${forkOriginY} C${forkOriginX},${legacyTopY} ${legacyTargetX},${legacyTopY} ${legacyTargetX},${bgTop}`,
-          color, opacity: 0.6, strokeWidth: 2.5, agentId: agent?.agentId,
-        });
-      }
     }
 
     return connectors;

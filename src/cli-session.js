@@ -3,7 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
-const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, PACKAGE_ROOT } = require('./utils');
+const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, PACKAGE_ROOT, DATA_HOME } = require('./utils');
+
+const INTERACTIONS_DIR = path.join(DATA_HOME, 'interactions');
 
 const PROJECT_ROOT = PACKAGE_ROOT;
 
@@ -143,6 +145,14 @@ class CliSession {
       autoMemory: this.autoMemory,
       hidden: this.hidden,
     });
+
+    this._writeInternalJson({
+      mode: 'cli',
+      resumed: !!resumeSessionId,
+      resumedFrom: resumeSessionId || null,
+      isolated: this.isolated,
+      autoMemory: this.autoMemory,
+    });
   }
 
   spawnShell(cwd, cols, rows) {
@@ -184,6 +194,33 @@ class CliSession {
       title: this.title,
       settings: this.settings,
     });
+
+  }
+
+  _writeInternalJson(extra = {}) {
+    const dir = this.sessId
+      ? path.join(INTERACTIONS_DIR, this.sessId)
+      : null;
+    if (!dir) return;
+
+    const record = {
+      sessId: this.sessId || null,
+      tabId: this.tabId || null,
+      tabName: this.title || (this.cwd ? path.basename(this.cwd) : null),
+      cwd: this.cwd || null,
+      hidden: this.hidden || false,
+      spawnedAt: new Date().toISOString(),
+      ...extra,
+    };
+
+    const filePath = path.join(dir, 'internal.json');
+    let entries = [];
+    try {
+      entries = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!Array.isArray(entries)) entries = [];
+    } catch {}
+    entries.push(record);
+    fs.writeFile(filePath, JSON.stringify(entries, null, 2), () => {});
   }
 
   write(data) {

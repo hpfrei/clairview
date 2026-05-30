@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, ensureDir, generateId, DATA_HOME } = require('./utils');
+const { buildClaudeArgs, spawnClaude, describeClaudeError, ensureDir, generateId, DATA_HOME } = require('./utils');
 
 const PROJECT_ROOT = DATA_HOME;
 
@@ -321,7 +321,8 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
       clearTimeout(genTimeout);
 
       if (!fs.existsSync(targetPath)) {
-        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        const claudeErr = describeClaudeError(code, stderrBuf);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
         reject(new Error(`Generation produced no rule file (exit ${code})${detail}`));
         return;
       }
@@ -428,7 +429,8 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
       clearTimeout(genTimeout);
 
       if (!fs.existsSync(targetPath)) {
-        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        const claudeErr = describeClaudeError(code, stderrBuf);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
         reject(new Error(`Edit produced no rule file (exit ${code})${detail}`));
         return;
       }

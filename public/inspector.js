@@ -294,7 +294,7 @@
       : state.interactions.filter(i => i.instanceId === activeInstanceTab);
     const last = filtered[filtered.length - 1];
     if (last) {
-      select({ type: last.isMcp ? 'mcp' : last.isHook ? 'hook' : 'turn', id: last.id });
+      select({ type: 'turn', id: last.id });
     } else {
       state.selection = null;
       document.querySelectorAll('.timeline-entry.selected').forEach(el => el.classList.remove('selected'));
@@ -467,6 +467,14 @@
     showCurlModal(buildCurlCommand(interaction));
   });
 
+  // --- Collapse/expand a tool-use card by clicking its name header ---
+  document.addEventListener('click', (e) => {
+    const name = e.target.closest('.content-block-body.tool-use > .tool-name');
+    if (!name) return;
+    if (e.target.closest('.jt-copy')) return;
+    name.parentElement.classList.toggle('collapsed');
+  });
+
   // --- Tool call extraction ---
   function extractToolCalls(interaction) {
     const calls = [];
@@ -630,7 +638,7 @@
     if (_splitMode && _splitInteractions.has(interactionId)) {
       appendSSEToDetail(event, interaction);
     } else if (sel?.type === 'turn' && sel.id === interactionId) {
-      if (event.eventType === 'message_start' && !_splitMode) {
+      if (event.eventType === 'message_start' && !_splitMode && _liveMode) {
         _trySplitMode(interactionId);
       }
       if (_splitMode && _splitInteractions.has(interactionId)) {
@@ -638,8 +646,9 @@
       } else {
         appendSSEToDetail(event, interaction);
       }
-    } else if (!_splitMode && event.eventType === 'message_start'
-               && (interaction.status === 'streaming' || interaction.status === 'pending')) {
+    } else if (_liveMode && !_splitMode && event.eventType === 'message_start'
+               && (interaction.status === 'streaming' || interaction.status === 'pending')
+               && (activeInstanceTab === 'all' || interaction.instanceId === activeInstanceTab)) {
       if (_trySplitMode(interactionId)) {
         appendSSEToDetail(event, interaction);
       }
@@ -663,6 +672,15 @@
   function _scopeFind(scope, id) {
     if (scope && scope !== document) return scope.querySelector(`#${CSS.escape(id)}`);
     return document.getElementById(id);
+  }
+
+  // Keep the streaming response in view. Blocks now flow at natural height
+  // inside the scrollable response panel, so we follow at the panel level.
+  function _followResponse(scope) {
+    if (!_liveMode) return;
+    const panel = (scope && scope !== document ? scope.querySelector('.response-panel') : document.querySelector('#detail-content .response-panel'))
+      || _scopeFind(scope, 'response-blocks');
+    if (panel) panel.scrollTop = panel.scrollHeight;
   }
 
   function appendSSEToDetail(event, interaction, scope) {
@@ -689,6 +707,7 @@
       if (!block) return;
       const container = _scopeFind(scope, 'response-blocks');
       if (!container) return;
+      _followResponse(scope);
 
       if (block.type !== 'text') {
         _flushPendingMarkdownFor(ss);
@@ -711,7 +730,8 @@
         const body = document.createElement('div');
         body.className = 'content-block-body tool-use';
         body.id = `block-body-${data.index}`;
-        body.innerHTML = `<div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div><div class="json-block jt-root" id="tool-input-${data.index}"></div>`;
+        body.dataset.toolName = block.name || '';
+        body.innerHTML = `<div class="tool-name" data-tool-summary=""><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div><div class="json-block jt-root" id="tool-input-${data.index}"></div>`;
         container.appendChild(body);
       } else {
         const blockEl = document.createElement('div');
@@ -742,7 +762,7 @@
         const bodyEl = _scopeFind(scope, `block-body-${data.index}`);
         if (!bodyEl) return;
         bodyEl.appendChild(document.createTextNode(delta.thinking || ''));
-        if (_liveMode) bodyEl.scrollTop = bodyEl.scrollHeight;
+        if (_liveMode) { bodyEl.scrollTop = bodyEl.scrollHeight; _followResponse(scope); }
         if (delta.estimated_tokens) {
           const total = (thinkingTokens.get(data.index) || 0) + delta.estimated_tokens;
           thinkingTokens.set(data.index, total);
@@ -763,7 +783,7 @@
         bodyEl._rawText = (bodyEl._rawText || '') + (delta.text || '');
         bodyEl.classList.add('markdown-body');
         renderMarkdownDebounced(bodyEl._rawText, bodyEl);
-        if (_liveMode) bodyEl.scrollTop = bodyEl.scrollHeight;
+        if (_liveMode) { bodyEl.scrollTop = bodyEl.scrollHeight; _followResponse(scope); }
       } else if (delta.type === 'input_json_delta') {
         const inputEl = _scopeFind(scope, `tool-input-${data.index}`);
         if (inputEl) inputEl.appendChild(document.createTextNode(delta.partial_json || ''));
@@ -776,6 +796,9 @@
         try {
           const parsed = JSON.parse(inputEl.textContent);
           inputEl.innerHTML = renderJSON(parsed);
+          const toolBody = inputEl.closest('.content-block-body.tool-use');
+          const nameEl = toolBody?.querySelector('.tool-name');
+          if (nameEl) nameEl.dataset.toolSummary = truncate(toolSummary(toolBody.dataset.toolName, parsed), 120);
         } catch {}
       }
       const entry = blockMap.get(data.index);
@@ -850,10 +873,13 @@
 
   function _findParallelStreamers(interactionId) {
     if (!_d3State) return [];
+    const source = state.interactions.find(i => i.id === interactionId);
+    const sourceInstance = source?.instanceId;
     return state.interactions.filter(i =>
       i.id !== interactionId
       && (i.status === 'streaming' || i.status === 'pending')
       && !i.isHook && !i.isMcp
+      && i.instanceId === sourceInstance
     );
   }
 
@@ -1959,9 +1985,6 @@
       agentId = interaction.subagent?.agentId || wl.resolveHookAgentId(interaction, state.interactions);
     } else {
       agentId = interaction.subagent?.agentId || null;
-      if (!agentId && !interaction.isMcp && ds.activeColumns.size === 1) {
-        for (const [aid] of ds.activeColumns) agentId = aid;
-      }
     }
     // PostToolUse/Agent hooks go to column 0
     if (interaction.isHook && /PostToolUse/i.test(interaction.hookEvent) && interaction.toolName === 'Agent') {
@@ -3304,10 +3327,11 @@
       } else if (b.type === 'text') {
         return `<div class="content-block-body markdown-body" data-md-pending="${escHtml(b.text)}">${escHtml(b.text)}</div>`;
       } else if (b.type === 'tool_use') {
-        let inputHtml;
-        try { inputHtml = jsonBlock(JSON.parse(b.text)); } catch { inputHtml = `<pre class="json-block">${escHtml(b.text)}</pre>`; }
+        let inputHtml, parsedInput = null;
+        try { parsedInput = JSON.parse(b.text); inputHtml = jsonBlock(parsedInput); } catch { inputHtml = `<pre class="json-block">${escHtml(b.text)}</pre>`; }
+        const summary = truncate(toolSummary(b.name, parsedInput), 120);
         return `<div class="content-block-body tool-use">
-          <div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(b.name)}</div>
+          <div class="tool-name" data-tool-summary="${escHtml(summary)}"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(b.name)}</div>
           ${inputHtml}
         </div>`;
       }
@@ -3341,19 +3365,20 @@
       </div>`;
     }
     if (block.type === 'tool_use') {
+      const summary = truncate(toolSummary(block.name, block.input), 120);
       return `<div class="content-block-body tool-use">
-        <div class="tool-name"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div>
-        ${jsonBlock(block.input || {})}</pre>
+        <div class="tool-name" data-tool-summary="${escHtml(summary)}"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>${escHtml(block.name || '')}</div>
+        ${jsonBlock(block.input || {})}
       </div>`;
     }
     return `<div class="content-block">
       <div class="content-block-header">${escHtml(block.type)}</div>
-      ${jsonBlock(block)}</pre>
+      ${jsonBlock(block)}
     </div>`;
   }
 
   function msgSizeGauge(chars) {
-    const max = 3000;
+    const max = 80000;
     const pct = Math.min(chars / max, 1);
     const w = 30, h = 8, fill = Math.max(pct * w, 1);
     const hue = Math.round((1 - pct) * 120);

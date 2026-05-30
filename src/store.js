@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { DATA_HOME } = require('./utils');
 const { getModelPricing } = require('./capabilities');
+const { TraceIndex } = require('./trace-index');
 
 const INTERACTIONS_DIR = path.join(DATA_HOME, 'interactions');
 
@@ -17,9 +18,157 @@ class InteractionStore {
     this.sessionSeqs = new Map();  // sessId → seq counter
     this.filePaths = new Map();    // interaction id → absolute file path
     this.requestIdIndex = new Map(); // request-id → filePath (survives eviction)
+    this.diskIndex = new Map();    // interaction id → file path (any file ever parsed; survives memory eviction)
+
+    // Authoritative subagent attribution from Claude's trace files.
+    this.traceIndexes = new Map();   // sessId → TraceIndex
+    this.pendingRequestEnrich = new Map(); // request-id → true (awaiting trace resolution)
+    this._broadcaster = null;
 
     fs.mkdirSync(INTERACTIONS_DIR, { recursive: true });
     this._loadFromDisk();
+  }
+
+  /**
+   * Attach a TraceIndex for a session (called when its SessionStart hook arrives
+   * with a transcript_path). Idempotent. The index watches the transcript dir
+   * and calls back into applyResolution as mappings appear.
+   */
+  attachTraceIndex(sessId, transcriptPath, broadcaster) {
+    if (!sessId || !transcriptPath) return;
+    if (broadcaster) this._broadcaster = broadcaster;
+    if (this.traceIndexes.has(sessId)) return;
+    try {
+      const ti = new TraceIndex(transcriptPath, (kind, key, agentId) => {
+        this.applyResolution(sessId, kind, key, agentId);
+      });
+      this.traceIndexes.set(sessId, ti);
+      // Resolve anything already buffered against the freshly-built index.
+      this._drainPending(sessId);
+    } catch {}
+  }
+
+  setBroadcaster(broadcaster) {
+    this._broadcaster = broadcaster;
+  }
+
+  getTraceIndex(sessId) {
+    return this.traceIndexes.get(sessId) || null;
+  }
+
+  /** Force-rescan a session's transcripts (e.g. on SubagentStop/Stop hooks). */
+  rescanTrace(sessId) {
+    const ti = this.traceIndexes.get(sessId);
+    if (ti) ti.rescanNow();
+  }
+
+  _drainPending(sessId) {
+    const ti = this.traceIndexes.get(sessId);
+    if (!ti) return;
+    for (const reqId of [...this.pendingRequestEnrich.keys()]) {
+      const agentId = ti.resolveRequestId(reqId);
+      if (agentId != null) {
+        this.pendingRequestEnrich.delete(reqId);
+        this.applyResolution(sessId, 'request', reqId, agentId);
+      }
+    }
+  }
+
+  /** Build a subagent descriptor for an agentId from trace meta, or null for main. */
+  _subagentFor(sessId, agentId) {
+    if (!agentId || agentId === 'main') return null;
+    const ti = this.traceIndexes.get(sessId);
+    const meta = ti ? ti.getAgentMeta(agentId) : null;
+    return {
+      agentId,
+      agentType: meta?.agentType || 'agent',
+      description: meta?.description || null,
+      toolUseId: meta?.toolUseId || null,
+    };
+  }
+
+  /**
+   * Apply a trace resolution (request-id or tool_use-id → agentId|'main') to the
+   * matching interaction/hook: stamp subagent, persist, and broadcast enriched.
+   */
+  applyResolution(sessId, kind, key, agentId) {
+    const target = kind === 'request'
+      ? this._findByResponseRequestId(key)
+      : this._findHookByToolUseId(key);
+    if (!target) return;
+
+    const subagent = this._subagentFor(sessId, agentId);
+    // 'main' resolution: leave subagent unset (interaction belongs on main).
+    if (!subagent) return;
+    // Don't clobber an existing, equal stamp.
+    if (target.subagent?.agentId === subagent.agentId) return;
+
+    target.subagent = subagent;
+    this._persist(target);
+    if (this._broadcaster && target.id) {
+      this._broadcaster.broadcast({ type: 'interaction:enriched', interactionId: target.id, subagent });
+    }
+    // A tool_use resolution also pins any hooks sharing that tool_use_id.
+    if (kind === 'request') {
+      const enrichedHooks = this._enrichRelatedHooks(target, subagent);
+      if (this._broadcaster) {
+        for (const hook of enrichedHooks) {
+          this._broadcaster.broadcast({ type: 'interaction:enriched', interactionId: hook.id, subagent });
+        }
+      }
+    }
+  }
+
+  /** Resolve an LLM turn against the trace index now, or queue it for the watcher. */
+  tryEnrichLlmTurn(interaction, broadcaster) {
+    if (!interaction || interaction.isHook || interaction.isMcp) return;
+    if (broadcaster) this._broadcaster = broadcaster;
+    const reqId = interaction.response?.headers?.['request-id'];
+    if (!reqId) return;
+    const sessId = this.sessionMap.get(interaction.instanceId);
+    const ti = sessId ? this.traceIndexes.get(sessId) : null;
+    if (ti) {
+      const agentId = ti.resolveRequestId(reqId);
+      if (agentId != null) { this.applyResolution(sessId, 'request', reqId, agentId); return; }
+    }
+    // Not in the transcript yet (Claude writes the record after we finish the
+    // response) — let the watcher enrich it when the line lands.
+    this.pendingRequestEnrich.set(reqId, true);
+  }
+
+  /** Find a live or on-disk interaction by its response request-id header. */
+  _findByResponseRequestId(reqId) {
+    for (const interaction of this.interactions.values()) {
+      if (interaction.response?.headers?.['request-id'] === reqId) return interaction;
+    }
+    const fp = this.requestIdIndex.get(reqId);
+    if (fp) {
+      try {
+        const data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+        data.__filePath = fp;
+        return data;
+      } catch {}
+    }
+    return null;
+  }
+
+  /** Find a live or on-disk hook by its tool_use_id. */
+  _findHookByToolUseId(toolUseId) {
+    for (const interaction of this.interactions.values()) {
+      if (interaction.isHook && interaction.toolUseId === toolUseId) return interaction;
+    }
+    return null;
+  }
+
+  /** Persist an interaction's current state back to its file. */
+  _persist(interaction) {
+    const fp = interaction.__filePath || this.filePaths.get(interaction.id);
+    if (!fp) return;
+    try {
+      const content = interaction.__filePath ? interaction : this._buildFileContent(interaction);
+      if (interaction.__filePath) delete content.__filePath;
+      fs.writeFile(fp, JSON.stringify(content, null, 2), () => {});
+    } catch {}
   }
 
   _loadFromDisk() {
@@ -125,18 +274,35 @@ class InteractionStore {
   }
 
   _getFromDisk(id) {
-    const sep = id.lastIndexOf('-');
-    if (sep <= 0) return null;
-    const sessId = id.slice(0, sep);
-    const dir = path.join(INTERACTIONS_DIR, sessId);
-    try {
-      const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    // Interaction ids don't embed their session dir (e.g. "req_..._..", "hook-..."),
+    // so we can't derive the path from the id. Consult the disk index first; if it's
+    // not yet populated (no loadAll this session), fall back to scanning all sessions.
+    const indexed = this.diskIndex.get(id);
+    if (indexed) {
+      const sessId = path.basename(path.dirname(indexed));
+      const seqNum = parseInt(path.basename(indexed));
+      const interaction = this._parseInteractionFile(sessId, seqNum, indexed);
+      if (interaction && interaction.id === id) return interaction;
+    }
+    return this._scanDiskForId(id);
+  }
+
+  _scanDiskForId(id) {
+    let sessionDirs;
+    try { sessionDirs = fs.readdirSync(INTERACTIONS_DIR); } catch { return null; }
+    for (const sessId of sessionDirs) {
+      const dir = path.join(INTERACTIONS_DIR, sessId);
+      let files;
+      try {
+        if (!fs.statSync(dir).isDirectory()) continue;
+        files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+      } catch { continue; }
       for (const file of files) {
         const filePath = path.join(dir, file);
         const interaction = this._parseInteractionFile(sessId, parseInt(file), filePath);
         if (interaction && interaction.id === id) return interaction;
       }
-    } catch {}
+    }
     return null;
   }
 
@@ -155,29 +321,37 @@ class InteractionStore {
     seqNum++;
     this.sessionSeqs.set(sessId, seqNum);
 
-    // When saving a hook, inherit subagent from the parent turn if available
+    // When saving a tool-call hook without an explicit agent_id, resolve its
+    // owner authoritatively via the trace index (tool_use_id → agentId). Falls
+    // back to inheriting from the parent turn that emitted the tool_use.
     if (interaction.isHook && interaction.toolUseId && !interaction.subagent && interaction.instanceId) {
-      const parent = this._findTurnByToolUseId(interaction.toolUseId, interaction.instanceId);
-      if (parent?.subagent) interaction.subagent = parent.subagent;
+      const ti = this.traceIndexes.get(sessId);
+      const agentId = ti ? ti.resolveToolUseId(interaction.toolUseId) : null;
+      if (agentId && agentId !== 'main') {
+        interaction.subagent = this._subagentFor(sessId, agentId);
+      } else if (agentId == null) {
+        const parent = this._findTurnByToolUseId(interaction.toolUseId, interaction.instanceId);
+        if (parent?.subagent) interaction.subagent = parent.subagent;
+      }
     }
 
     const fileContent = this._buildFileContent(interaction);
 
     const filePath = path.join(INTERACTIONS_DIR, sessId, `${seqNum}.json`);
     this.filePaths.set(id, filePath);
+    this.diskIndex.set(id, filePath);
     const reqId = interaction.response?.headers?.['request-id'];
     if (reqId) this.requestIdIndex.set(reqId, filePath);
     fs.writeFile(filePath, JSON.stringify(fileContent, null, 2), (err) => {
       if (err) console.error(`Failed to write interaction ${sessId}/${seqNum}:`, err.message);
     });
-  }
 
-  findByRequestId(requestId) {
-    if (!requestId) return null;
-    for (const interaction of this.interactions.values()) {
-      if (interaction.response?.headers?.['request-id'] === requestId) return interaction;
+    // Resolve LLM turns to their owning thread the moment they complete. If the
+    // transcript line isn't written yet, this queues the request-id for the
+    // watcher. Idempotent across the multiple save() calls per interaction.
+    if (!interaction.isHook && !interaction.isMcp && interaction.status === 'complete') {
+      this.tryEnrichLlmTurn(interaction);
     }
-    return null;
   }
 
   enrichInteraction(id, subagent) {
@@ -243,63 +417,6 @@ class InteractionStore {
       }
     }
     return enriched;
-  }
-
-  enrichFromTranscript(agentTranscriptPath, broadcaster) {
-    if (!agentTranscriptPath) return;
-    const match = path.basename(agentTranscriptPath).match(/^agent-(.+)\.jsonl$/);
-    if (!match) return;
-    const agentId = match[1];
-    const metaPath = agentTranscriptPath.replace(/\.jsonl$/, '.meta.json');
-
-    let meta;
-    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch { meta = {}; }
-
-    let lines;
-    try { lines = fs.readFileSync(agentTranscriptPath, 'utf-8').split('\n'); } catch { return; }
-
-    const enrichment = {
-      agentId,
-      agentType: meta.agentType || null,
-      description: meta.description || null,
-    };
-
-    const seen = new Set();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let record;
-      try { record = JSON.parse(line); } catch { continue; }
-      if (record.type !== 'assistant' || !record.requestId) continue;
-      if (seen.has(record.requestId)) continue;
-      seen.add(record.requestId);
-
-      const interaction = this.findByRequestId(record.requestId);
-      if (interaction) {
-        if (interaction.subagent) continue;
-        const { enrichedHooks } = this.enrichInteraction(interaction.id, enrichment);
-        if (broadcaster) {
-          broadcaster.broadcast({ type: 'interaction:enriched', interactionId: interaction.id, subagent: enrichment });
-          for (const hook of enrichedHooks) {
-            broadcaster.broadcast({ type: 'interaction:enriched', interactionId: hook.id, subagent: enrichment });
-          }
-        }
-      } else {
-        // Interaction was evicted from memory — enrich on disk via requestId index
-        const fp = this.requestIdIndex.get(record.requestId);
-        if (fp) {
-          try {
-            const data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
-            if (!data.subagent) {
-              data.subagent = enrichment;
-              fs.writeFileSync(fp, JSON.stringify(data, null, 2));
-              if (broadcaster && data.id) {
-                broadcaster.broadcast({ type: 'interaction:enriched', interactionId: data.id, subagent: enrichment });
-              }
-            }
-          } catch {}
-        }
-      }
-    }
   }
 
   /** Find the LLM turn that contains a tool_use block with the given ID. */
@@ -376,6 +493,7 @@ class InteractionStore {
       interaction.isMcp = true;
       interaction.mcpSource = data.mcpSource || undefined;
     }
+    this.diskIndex.set(interaction.id, filePath);
     return interaction;
   }
 

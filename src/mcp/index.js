@@ -2,7 +2,7 @@ const servers = require('./servers');
 const registrar = require('./registrar');
 const logs = require('./logs');
 const caps = require('../capabilities');
-const { buildClaudeArgs, spawnClaude, PACKAGE_ROOT, DATA_HOME } = require('../utils');
+const { buildClaudeArgs, spawnClaude, describeClaudeError, PACKAGE_ROOT, DATA_HOME } = require('../utils');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -517,7 +517,8 @@ Use the Write tool to create the file. Write ONLY valid JavaScript (no markdown 
       clearTimeout(genTimeout);
 
       if (!fs.existsSync(targetPath)) {
-        const detail = stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '';
+        const claudeErr = describeClaudeError(code, stderrBuf);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
         reject(new Error(`Edit produced no tool file (exit ${code})${detail}`));
         return;
       }

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, DATA_HOME, ensureDir } = require('./utils');
+const { sanitizeForDashboard, getActiveProcessCount, getInstances, killInstance, removeInstances, processUploadedFiles, buildClaudeArgs, spawnClaude, createStreamJsonParser, describeClaudeError, DATA_HOME, ensureDir } = require('./utils');
 const createProxyRouter = require('./proxy');
 const { pendingQuestions, clearPendingQuestionsForTab } = createProxyRouter;
 const caps = require('./capabilities');
@@ -288,6 +288,7 @@ class DashboardBroadcaster {
               });
 
               let resultText = '';
+              let stderrBuf = '';
               const parser = createStreamJsonParser((ev) => {
                 if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
                   resultText += ev.delta.text || '';
@@ -297,11 +298,17 @@ class DashboardBroadcaster {
                 parser.write(chunk);
                 ws.send(JSON.stringify({ type: 'model:refresh:status', text: 'Updating pricing...' }));
               });
+              proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
               proc.stdin.write(prompt);
               proc.stdin.end();
-              proc.on('close', () => {
+              proc.on('close', (code) => {
                 parser.flush();
-                ws.send(JSON.stringify({ type: 'model:refresh:done', text: resultText }));
+                const claudeErr = describeClaudeError(code, stderrBuf);
+                if (claudeErr) {
+                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: `Scan complete. Pricing update failed: ${claudeErr}` }));
+                } else {
+                  ws.send(JSON.stringify({ type: 'model:refresh:done', text: resultText }));
+                }
                 this.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
               });
             }).catch(err => {

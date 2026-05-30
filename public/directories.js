@@ -136,14 +136,11 @@
       const tab = tabs.get(tabId);
       if (!tab) return;
       tab.showPreviews = e.target.checked;
-      if (tab.showPreviews && !tab.selectedFile) {
-        renderPreviews(tab);
-      } else if (!tab.showPreviews && !tab.selectedFile) {
-        const content = tab.rightPanel.querySelector('.dir-viewer-content');
-        const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
-        content.style.display = 'none';
-        content.innerHTML = '';
-        empty.style.display = '';
+      if (!tab.selectedFile) {
+        tab.selectedPaths.clear();
+        tab._lastSelectedIndex = -1;
+        if (tab.showPreviews) renderPreviews(tab);
+        else renderDirListing(tab);
       }
     });
     sortBar.appendChild(previewToggle);
@@ -173,6 +170,17 @@
 
     const list = document.createElement('div');
     list.className = 'dir-file-list';
+
+    list.addEventListener('click', (e) => {
+      if (e.target !== list) return;
+      const tab = tabs.get(tabId);
+      if (!tab) return;
+      if (tab.selectedFile) {
+        tab.selectedFile = null;
+        list.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+        resetPreviewPanel(tab);
+      }
+    });
 
     panel.appendChild(header);
     panel.appendChild(list);
@@ -605,7 +613,7 @@
     hdr.style.display = 'none';
     content.style.display = 'none';
     content.innerHTML = '';
-    empty.style.display = '';
+    empty.style.display = 'none';
     tab.selectedFile = null;
     tab.selectedPaths.clear();
     tab._lastSelectedIndex = -1;
@@ -616,6 +624,7 @@
     if (checkbox) checkbox.checked = tab.showPreviews;
 
     if (tab.showPreviews) renderPreviews(tab);
+    else renderDirListing(tab);
   }
 
   function renderPreviews(tab) {
@@ -785,29 +794,268 @@
     btn.textContent = `Delete ${n} file${n > 1 ? 's' : ''}`;
   }
 
-  async function deleteSelectedFiles(tab) {
-    const paths = [...tab.selectedPaths];
+  function deleteSelectedFiles(tab) {
+    const paths = [...tab.selectedPaths].filter(p => {
+      const entry = tab.entries.find(e => tab.cwd + '/' + e.name === p);
+      return entry && !entry.isDirectory;
+    });
     if (paths.length === 0) return;
     const msg = paths.length === 1
       ? `Delete "${paths[0].split('/').pop()}"?`
       : `Delete ${paths.length} files?`;
-    if (!confirm(msg)) return;
-    try {
-      const resp = await fetch('/api/delete-files', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paths }),
-      });
-      const result = await resp.json();
-      if (result.errors?.length) {
-        console.warn('Some files could not be deleted:', result.errors);
+    showConfirmModal(msg, async () => {
+      try {
+        const resp = await fetch('/api/delete-files', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths }),
+        });
+        const result = await resp.json();
+        if (result.errors?.length) {
+          console.warn('Some files could not be deleted:', result.errors);
+        }
+      } catch (err) {
+        console.error('Delete failed:', err);
       }
-    } catch (err) {
-      console.error('Delete failed:', err);
+      tab.selectedPaths.clear();
+      tab._lastSelectedIndex = -1;
+      loadDir(tab.id, tab.cwd);
+    });
+  }
+
+  // ── Directory listing in preview panel ─────────────────────────────
+
+  function renderDirListing(tab) {
+    const content = tab.rightPanel.querySelector('.dir-viewer-content');
+    const empty = tab.rightPanel.querySelector('.dir-viewer-empty');
+    content.style.display = '';
+    content.innerHTML = '';
+    empty.style.display = 'none';
+
+    if (!tab.entries || tab.entries.length === 0) {
+      content.innerHTML = '<div style="padding:16px;color:var(--text-dim);font-size:12px">Empty directory</div>';
+      return;
     }
-    tab.selectedPaths.clear();
-    tab._lastSelectedIndex = -1;
-    loadDir(tab.id, tab.cwd);
+
+    const sortKey = tab.listingSortBy || tab.sortBy || 'name';
+    const sortDir = tab.listingSortDir || tab.sortDir || 'asc';
+
+    // Column header row
+    const header = document.createElement('div');
+    header.className = 'dir-listing-header';
+    const columns = [
+      { key: 'name', label: 'Name', cls: 'dir-listing-col-name' },
+      { key: 'size', label: 'Size', cls: 'dir-listing-col-size' },
+      { key: 'date', label: 'Modified', cls: 'dir-listing-col-date' },
+    ];
+    for (const col of columns) {
+      const hdr = document.createElement('div');
+      hdr.className = 'dir-listing-col-header ' + col.cls + (sortKey === col.key ? ' active' : '');
+      const label = document.createElement('span');
+      label.textContent = col.label;
+      hdr.appendChild(label);
+      if (sortKey === col.key) {
+        const arrow = document.createElement('span');
+        arrow.className = 'dir-listing-sort-arrow';
+        arrow.textContent = sortDir === 'desc' ? ' ▾' : ' ▴';
+        hdr.appendChild(arrow);
+      }
+      hdr.addEventListener('click', () => {
+        if (tab.listingSortBy === col.key) {
+          tab.listingSortDir = tab.listingSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          tab.listingSortBy = col.key;
+          tab.listingSortDir = 'asc';
+        }
+        renderDirListing(tab);
+      });
+      header.appendChild(hdr);
+    }
+    content.appendChild(header);
+
+    const sorted = [...tab.entries].sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      const dir = sortDir === 'desc' ? -1 : 1;
+      if (sortKey === 'name') return dir * a.name.localeCompare(b.name);
+      if (sortKey === 'date') return dir * ((a.mtime || 0) - (b.mtime || 0));
+      return dir * ((a.size || 0) - (b.size || 0));
+    });
+
+    const wrap = document.createElement('div');
+    wrap.className = 'dir-listing-wrap';
+
+    let totalSize = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const entry = sorted[i];
+      const fullPath = tab.cwd + '/' + entry.name;
+      if (!entry.isDirectory) totalSize += entry.size || 0;
+
+      const row = document.createElement('div');
+      row.className = 'dir-listing-entry' + (entry.isDirectory ? ' dir-folder' : '') + (tab.selectedPaths.has(fullPath) ? ' selected' : '');
+      row.dataset.index = i;
+      row.dataset.path = fullPath;
+      row.dataset.isDir = entry.isDirectory ? '1' : '';
+
+      const icon = document.createElement('span');
+      icon.className = 'dir-entry-icon';
+      icon.textContent = entry.isDirectory ? '📁' : getFileIcon(entry.name);
+
+      const name = document.createElement('span');
+      name.className = 'dir-entry-name';
+      name.textContent = entry.name;
+      name.title = entry.name;
+
+      const sizeText = entry.isDirectory
+        ? (entry.childCount != null ? entry.childCount + ' item' + (entry.childCount !== 1 ? 's' : '') : '')
+        : formatSize(entry.size);
+      const size = document.createElement('span');
+      size.className = 'dir-entry-size';
+      size.textContent = sizeText;
+      size.title = sizeText;
+
+      const date = document.createElement('span');
+      date.className = 'dir-entry-date';
+      if (entry.isDirectory && entry.oldestChild && entry.newestChild) {
+        const dateText = formatDate(entry.oldestChild) + ' – ' + formatDate(entry.newestChild);
+        date.textContent = dateText;
+        date.title = 'Oldest: ' + new Date(entry.oldestChild).toLocaleString() + '\nNewest: ' + new Date(entry.newestChild).toLocaleString();
+      } else {
+        date.textContent = formatDate(entry.mtime);
+        date.title = entry.mtime ? new Date(entry.mtime).toLocaleString() : '';
+      }
+
+      row.appendChild(icon);
+      row.appendChild(name);
+      row.appendChild(size);
+      row.appendChild(date);
+
+      row.addEventListener('click', (e) => {
+        const idx = parseInt(row.dataset.index, 10);
+        if (e.shiftKey && tab._lastSelectedIndex >= 0) {
+          const from = Math.min(tab._lastSelectedIndex, idx);
+          const to = Math.max(tab._lastSelectedIndex, idx);
+          if (!e.ctrlKey && !e.metaKey) tab.selectedPaths.clear();
+          for (let j = from; j <= to; j++) {
+            const r = wrap.children[j];
+            if (r) tab.selectedPaths.add(r.dataset.path);
+          }
+        } else if (e.ctrlKey || e.metaKey) {
+          if (tab.selectedPaths.has(fullPath)) tab.selectedPaths.delete(fullPath);
+          else tab.selectedPaths.add(fullPath);
+        } else {
+          tab.selectedPaths.clear();
+          tab.selectedPaths.add(fullPath);
+        }
+        tab._lastSelectedIndex = idx;
+        syncListingSelection(wrap, tab);
+        updateListingDeleteBar(tab, content, header);
+      });
+
+      row.addEventListener('dblclick', () => {
+        if (entry.isDirectory) {
+          loadDir(tab.id, fullPath);
+        } else {
+          openFile(tab, fullPath, entry);
+        }
+      });
+
+      wrap.appendChild(row);
+    }
+
+    content.appendChild(wrap);
+
+    // Status bar with totals
+    const dirs = tab.entries.filter(e => e.isDirectory);
+    const files = tab.entries.filter(e => !e.isDirectory);
+    const statusBar = document.createElement('div');
+    statusBar.className = 'dir-listing-status';
+    const parts = [];
+    if (dirs.length) parts.push(dirs.length + ' folder' + (dirs.length !== 1 ? 's' : ''));
+    if (files.length) parts.push(files.length + ' file' + (files.length !== 1 ? 's' : ''));
+    if (totalSize > 0) parts.push(formatSize(totalSize) + ' total');
+    statusBar.textContent = parts.join(', ');
+    content.appendChild(statusBar);
+
+    updateListingDeleteBar(tab, content, header);
+  }
+
+  function syncListingSelection(wrap, tab) {
+    for (const row of wrap.children) {
+      row.classList.toggle('selected', tab.selectedPaths.has(row.dataset.path));
+    }
+  }
+
+  function updateListingDeleteBar(tab, content, headerEl) {
+    let bar = headerEl.querySelector('.dir-listing-delete-bar');
+    const filePaths = [...tab.selectedPaths].filter(p => {
+      const row = content.querySelector(`.dir-listing-entry[data-path="${CSS.escape(p)}"]`);
+      return row && !row.dataset.isDir;
+    });
+    if (filePaths.length === 0) {
+      if (bar) bar.remove();
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'dir-listing-delete-bar';
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'dir-preview-clear-btn';
+      clearBtn.textContent = 'Cancel';
+      clearBtn.addEventListener('click', () => {
+        tab.selectedPaths.clear();
+        tab._lastSelectedIndex = -1;
+        const wrap = content.querySelector('.dir-listing-wrap');
+        if (wrap) syncListingSelection(wrap, tab);
+        updateListingDeleteBar(tab, content, headerEl);
+      });
+      const delBtn = document.createElement('button');
+      delBtn.className = 'dir-preview-delete-btn';
+      bar.appendChild(clearBtn);
+      bar.appendChild(delBtn);
+      headerEl.appendChild(bar);
+    }
+    const delBtn = bar.querySelector('.dir-preview-delete-btn');
+    delBtn.textContent = `Delete ${filePaths.length} file${filePaths.length > 1 ? 's' : ''}`;
+    delBtn.onclick = () => deleteSelectedFiles(tab);
+  }
+
+  // ── Confirm modal ─────────────────────────────────────────────────
+
+  function showConfirmModal(message, onConfirm) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'confirm-modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'confirm-modal';
+
+    const msg = document.createElement('div');
+    msg.className = 'confirm-modal-message';
+    msg.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-modal-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'confirm-modal-cancel';
+    cancelBtn.textContent = 'Cancel';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'confirm-modal-delete';
+    deleteBtn.textContent = 'Delete';
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(deleteBtn);
+    modal.appendChild(msg);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    deleteBtn.focus();
+
+    const close = () => backdrop.remove();
+    cancelBtn.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    deleteBtn.addEventListener('click', () => { close(); onConfirm(); });
   }
 
   // ── Terminal panel ─────────────────────────────────────────────────

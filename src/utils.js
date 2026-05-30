@@ -247,6 +247,26 @@ function _broadcastInstances(event, instanceId) {
   }
 }
 
+const CLAUDE_AUTH_ERROR_RE = /not logged in|authentication failed|session has expired|please run.*claude login|invalid.*credentials|could not authenticate|oauth.*token.*expired|unauthorized|401.*auth|auth.*error|re-?authenticate/i;
+
+function isClaudeAuthError(stderrText) {
+  if (!stderrText) return false;
+  return CLAUDE_AUTH_ERROR_RE.test(stderrText);
+}
+
+function describeClaudeError(exitCode, stderrText) {
+  if (isClaudeAuthError(stderrText)) {
+    return 'Claude is not authenticated. Run "claude login" in a terminal to re-authenticate.';
+  }
+  if (exitCode !== 0 && stderrText) {
+    return `Claude CLI error (exit ${exitCode}): ${stderrText.trim().split('\n')[0]}`;
+  }
+  if (exitCode !== 0) {
+    return `Claude CLI exited with code ${exitCode}`;
+  }
+  return null;
+}
+
 /**
  * Create a stream-json line parser.
  * Buffers chunks, splits on newlines, JSON.parses each complete line.
@@ -583,6 +603,8 @@ module.exports = {
   killInstance,
   removeInstances,
   createStreamJsonParser,
+  isClaudeAuthError,
+  describeClaudeError,
   MIME_TYPES,
   PACKAGE_ROOT,
   DATA_HOME,

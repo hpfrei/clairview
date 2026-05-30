@@ -777,9 +777,10 @@ Available templates in this skill directory:
       case 'model:refresh:done': {
         const statusEl = document.getElementById('capRefreshStatus');
         const btn = document.getElementById('capRefreshModels');
-        if (statusEl) statusEl.textContent = 'Refresh complete.';
+        const hasError = msg.text && /failed|error|not authenticated/i.test(msg.text);
+        if (statusEl) statusEl.textContent = hasError ? msg.text : 'Refresh complete.';
         if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
-        setTimeout(() => { if (statusEl) statusEl.classList.add('hidden'); }, 5000);
+        if (!hasError) setTimeout(() => { if (statusEl) statusEl.classList.add('hidden'); }, 5000);
         break;
       }
     }

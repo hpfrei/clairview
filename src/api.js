@@ -58,7 +58,25 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
         try {
           const fullPath = path.join(resolved, d.name);
           const stat = fs.statSync(fullPath);
-          entries.push({ name: d.name, isDirectory: stat.isDirectory(), size: stat.size, mtime: stat.mtimeMs });
+          const entry = { name: d.name, isDirectory: stat.isDirectory(), size: stat.size, mtime: stat.mtimeMs };
+          if (entry.isDirectory) {
+            try {
+              const children = fs.readdirSync(fullPath, { withFileTypes: true });
+              let count = 0, oldest = Infinity, newest = 0;
+              for (const c of children) {
+                if (c.name.startsWith('.')) continue;
+                try {
+                  const cStat = fs.statSync(path.join(fullPath, c.name));
+                  count++;
+                  if (cStat.mtimeMs < oldest) oldest = cStat.mtimeMs;
+                  if (cStat.mtimeMs > newest) newest = cStat.mtimeMs;
+                } catch {}
+              }
+              entry.childCount = count;
+              if (count > 0) { entry.oldestChild = oldest; entry.newestChild = newest; }
+            } catch {}
+          }
+          entries.push(entry);
         } catch { /* skip inaccessible entries */ }
       }
       const dirs = entries.filter(e => e.isDirectory);

@@ -905,11 +905,17 @@ async function _fetchAnthropicModels(apiKey) {
       clearTimeout(timer);
     }
   }
-  // Dedup dated variants: keep base name, drop dated suffixes
-  const baseIds = new Set(all.map(m => m.modelId.replace(ANTHROPIC_DATED_RE, '')));
-  return all
-    .filter(m => !ANTHROPIC_DATED_RE.test(m.modelId) || !baseIds.has(m.modelId.replace(ANTHROPIC_DATED_RE, '')) || m.modelId === m.modelId.replace(ANTHROPIC_DATED_RE, ''))
-    .filter(m => !ANTHROPIC_DATED_RE.test(m.modelId));
+  // Dedup dated variants: group by base name, prefer undated; keep latest dated if no undated exists
+  const groups = new Map();
+  for (const m of all) {
+    const base = m.modelId.replace(ANTHROPIC_DATED_RE, '');
+    const isDated = ANTHROPIC_DATED_RE.test(m.modelId);
+    const existing = groups.get(base);
+    if (!existing || (!isDated && existing.isDated) || (isDated && existing.isDated && m.modelId > existing.model.modelId)) {
+      groups.set(base, { model: m, isDated });
+    }
+  }
+  return Array.from(groups.values()).map(({ model }) => model);
 }
 
 async function scanProviderModels(baseDir) {

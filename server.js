@@ -301,21 +301,39 @@ dashboardApp.post('/api/hook-report', (req, res) => {
       timing: { startedAt: hookTs, duration: hookData.duration_ms || 0 },
       status: 'complete', isStreaming: false,
     };
-    if ((hookEvent === 'SubagentStart' || hookEvent === 'SubagentStop') && hookData.agent_id) {
+    const sessId = hookData.session_id
+      || (interaction.instanceId?.startsWith('cli-') ? interaction.instanceId.slice(4) : null);
+
+    // Stand up the authoritative trace index as soon as we learn the transcript
+    // path (SessionStart carries it; so do most subsequent hooks).
+    if (sessId && hookData.transcript_path) {
+      store.attachTraceIndex(sessId, hookData.transcript_path, broadcaster);
+    }
+
+    // Every hook that carries an agent_id belongs to that subagent — stamp it
+    // directly (instant, no file read). Tool-call hooks without agent_id are
+    // resolved by tool_use_id via the trace index inside store.save/applyResolution.
+    if (hookData.agent_id) {
       let metaDescription = hookData.description || null;
       let metaToolUseId = null;
-      if (!metaDescription && hookData.transcript_path && hookData.agent_id) {
+      const ti = sessId ? store.getTraceIndex(sessId) : null;
+      const meta = ti ? ti.getAgentMeta(hookData.agent_id) : null;
+      if (meta) {
+        metaDescription = metaDescription || meta.description;
+        metaToolUseId = meta.toolUseId;
+      }
+      if (!metaDescription && hookData.transcript_path) {
         try {
           const sessionDir = path.join(path.dirname(hookData.transcript_path), path.basename(hookData.transcript_path, '.jsonl'));
           const metaPath = path.join(sessionDir, 'subagents', `agent-${hookData.agent_id}.meta.json`);
-          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-          metaDescription = meta.description || metaDescription;
-          metaToolUseId = meta.toolUseId || null;
+          const m = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          metaDescription = m.description || metaDescription;
+          metaToolUseId = metaToolUseId || m.toolUseId || null;
         } catch {}
       }
       interaction.subagent = {
         agentId: hookData.agent_id,
-        agentType: hookData.agent_type || 'agent',
+        agentType: hookData.agent_type || meta?.agentType || 'agent',
         description: metaDescription,
         toolUseId: metaToolUseId,
       };
@@ -325,8 +343,10 @@ dashboardApp.post('/api/hook-report', (req, res) => {
     broadcaster.broadcast({ type: 'interaction:start', interaction });
     broadcaster.broadcast({ type: 'interaction:complete', interaction });
 
-    if (hookEvent === 'SubagentStop' && hookData.agent_transcript_path) {
-      try { store.enrichFromTranscript(hookData.agent_transcript_path, broadcaster); } catch {}
+    // SubagentStop / Stop are authoritative "transcript just flushed" signals —
+    // force an immediate rescan so pending LLM turns enrich without watcher lag.
+    if ((hookEvent === 'SubagentStop' || hookEvent === 'Stop') && sessId) {
+      store.rescanTrace(sessId);
     }
   } catch {}
   res.status(200).end();
@@ -592,6 +612,7 @@ const cliSessionManager = new CliSessionManager(PROXY_PORT, { broadcast: (...arg
 const wss = new WebSocketServer({ noServer: true });
 broadcaster = new DashboardBroadcaster(wss, store, { authToken: AUTH_TOKEN, proxyPort: PROXY_PORT, cliSessionManager });
 setProcessBroadcaster(broadcaster);
+store.setBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
