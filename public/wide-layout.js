@@ -10,6 +10,7 @@
     MIN_GAP: 6,
     HEADER_HEIGHT: 30,
     ZIGZAG_MIN_CUT: 10000,
+    COHORT_EPSILON_MS: 300,
   };
 
   const GAP_COLLAPSE_HEIGHT = 28;
@@ -700,9 +701,50 @@
     return D3_CONST.COLUMN_WIDTH;
   }
 
+  // --- Parallel cohort detection ---
+  // A cohort = >=2 lanes (columnSegments) whose first rendered entry starts
+  // within COHORT_EPSILON_MS of each other. These were dispatched in parallel
+  // (same fork batch) and should share a start rail / merge join bus rather
+  // than cascading diagonally.
+  function buildCohorts(layout, columnSegments) {
+    if (!columnSegments || columnSegments.length === 0) return [];
+    const byId = new Map();
+    for (const item of layout) {
+      if (item.height > 0) byId.set(item.id, item);
+    }
+    // First and last visible entry per segment.
+    const segInfos = [];
+    for (const seg of columnSegments) {
+      let first = null, last = null;
+      for (const item of layout) {
+        if (item.height <= 0) continue;
+        if (item.col !== seg.col) continue;
+        if (item.interaction.subagent?.agentId !== seg.agentId) continue;
+        if (first === null || item.idx < first.idx) first = item;
+        if (last === null || item.idx > last.idx) last = item;
+      }
+      if (first) segInfos.push({ seg, first, last, startElapsed: first.elapsed });
+    }
+    if (segInfos.length < 2) return [];
+    segInfos.sort((a, b) => a.startElapsed - b.startElapsed);
+
+    const cohorts = [];
+    let group = [segInfos[0]];
+    for (let i = 1; i < segInfos.length; i++) {
+      if (segInfos[i].startElapsed - group[0].startElapsed <= D3_CONST.COHORT_EPSILON_MS) {
+        group.push(segInfos[i]);
+      } else {
+        if (group.length >= 2) cohorts.push(group);
+        group = [segInfos[i]];
+      }
+    }
+    if (group.length >= 2) cohorts.push(group);
+    return cohorts;
+  }
+
   // --- Main layout pass ---
 
-  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, _depthAt) {
+  function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, _depthAt, columnSegments) {
     const C = D3_CONST;
     const layout = [];
     const breaks = [];
@@ -711,7 +753,21 @@
     let globalBottom = C.HEADER_HEIGHT + 8;
     const availWidth = computeColumnWidth(totalColumns);
 
+    // Start-row model: the y position is driven by START TIME, not by a global
+    // running bottom. Elements whose starts fall within COHORT_EPSILON_MS share
+    // a "row" and a baseline y, so near-simultaneous (parallel) elements ALIGN —
+    // regardless of which column they land in. The time axis is intentionally
+    // non-linear: rows step down by a fixed amount, so ordering is top-down and
+    // start-correct without being proportional to real elapsed time.
+    //
+    // Stacking pushes an element DOWN only for two reasons, never because a
+    // sibling parallel lane is deep:
+    //   1. its own column is still occupied (sequential within a lane), or
+    //   2. the main-thread spine (col 0) has advanced past it (causal order).
+    const ROW_STEP = C.MIN_ENTRY_HEIGHT + C.MIN_GAP;
     let prevElapsed = null;
+    let rowStartElapsed = null;
+    let rowBaseline = globalBottom;
 
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
@@ -726,19 +782,29 @@
       const height = computeNodeHeight(interaction);
       const x = C.RULER_WIDTH + col * (availWidth + C.COLUMN_GAP);
 
-      // Gap compression: zigzag break for long pauses
-      if (prevElapsed != null && (elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
-        const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
-        breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
-        globalBottom = breakY + GAP_COLLAPSE_HEIGHT / 2;
-        for (const [k, v] of colBottoms) {
-          if (v < globalBottom) colBottoms.set(k, globalBottom);
+      // Advance to a new start-row when this element starts more than the
+      // epsilon after the current row began. Same-row elements reuse the
+      // baseline (and therefore align).
+      if (rowStartElapsed === null || (elapsed - rowStartElapsed) > C.COHORT_EPSILON_MS) {
+        if (rowStartElapsed !== null) {
+          if ((elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
+            // Long real-time pause: zigzag break, re-anchor to the deepest content.
+            const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
+            breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
+            rowBaseline = breakY + GAP_COLLAPSE_HEIGHT / 2;
+          } else {
+            rowBaseline += ROW_STEP;
+          }
         }
+        // Never let a row sit above the main-thread spine's current bottom.
+        const mainBottom = colBottoms.get(0);
+        if (mainBottom != null) rowBaseline = Math.max(rowBaseline, mainBottom + C.MIN_GAP);
+        rowStartElapsed = elapsed;
       }
 
-      // Sequential placement: respect both global timestamp order and column bottom
-      const colBottom = colBottoms.get(col) || globalBottom;
-      let y = Math.max(globalBottom, colBottom) + C.MIN_GAP;
+      let y = rowBaseline;
+      const colBottom = colBottoms.get(col);
+      if (colBottom != null) y = Math.max(y, colBottom + C.MIN_GAP);
 
       // For merge-point hooks (PostToolUse/Agent), also respect the closed column bottom
       if (postHookClosedCol) {
@@ -755,8 +821,14 @@
       prevElapsed = elapsed;
     }
 
+    // Cohorts (for merge-bus routing). The start-row model already aligns
+    // parallel starts, so no separate snap pass is needed.
+    const cohorts = buildCohorts(layout, columnSegments);
+
     // Monotonic elapsed→Y interpolation for ruler and connectors
-    const yPoints = layout.filter(item => item.height > 0).map(item => ({ elapsed: item.elapsed, y: item.y }));
+    const yPoints = layout.filter(item => item.height > 0)
+      .map(item => ({ elapsed: item.elapsed, y: item.y }))
+      .sort((a, b) => a.elapsed - b.elapsed);
     for (let i = 1; i < yPoints.length; i++) {
       if (yPoints[i].y < yPoints[i - 1].y) yPoints[i].y = yPoints[i - 1].y;
     }
@@ -780,7 +852,8 @@
       if (item.y + item.height > finalBottom) finalBottom = item.y + item.height;
     }
 
-    return { layout, totalHeight: finalBottom + 40, sessionStart, breaks, compressedY: elapsedToY };
+    const cohortAgentGroups = cohorts.map(group => group.map(ci => ci.seg.agentId));
+    return { layout, totalHeight: finalBottom + 40, sessionStart, breaks, compressedY: elapsedToY, cohorts: cohortAgentGroups };
   }
 
   // --- Connector data (fork/merge arrows, bgRects) ---
@@ -790,6 +863,16 @@
     const getSubagentColor = opts?.getSubagentColor || (() => SUBAGENT_COLORS[0]);
     const connectors = [];
     const colWidth = computeColumnWidth(totalColumns);
+
+    // Parallel-cohort merge routing: members of the same cohort merge through a
+    // shared horizontal join bus instead of each drawing its own arrow to main.
+    const cohortGroups = opts?.cohorts || [];
+    const cohortIdxForAgent = new Map();
+    for (let ci = 0; ci < cohortGroups.length; ci++) {
+      for (const aid of cohortGroups[ci]) cohortIdxForAgent.set(aid, ci);
+    }
+    // Per-cohort accumulator: tributaries (one per lane) + the common main target.
+    const cohortMerge = new Map();
 
     const layoutById = new Map();
     const colEntries = new Map();
@@ -889,13 +972,27 @@
           }
           if (mergeTargetY != null) {
             const bgCenterX = bgLeft + (colWidth + 8) / 2;
-            const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
-            const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
-            connectors.push({
-              type: 'merge', col: seg.col,
-              path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
-              color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
-            });
+            const cohortIdx = cohortIdxForAgent.get(seg.agentId);
+            if (cohortIdx != null) {
+              // Cohort member: stash this lane's exit point; the join bus and the
+              // single shared arrow to main are emitted after the loop.
+              if (!cohortMerge.has(cohortIdx)) {
+                cohortMerge.set(cohortIdx, { tribs: [], targetY: mergeTargetY, targetX: mergeTargetX });
+              }
+              const cm = cohortMerge.get(cohortIdx);
+              // Use the lowest (latest-finishing) lane's target — a parallel
+              // barrier resumes main only after the last lane completes.
+              if (mergeTargetY > cm.targetY) { cm.targetY = mergeTargetY; cm.targetX = mergeTargetX; }
+              cm.tribs.push({ x: bgCenterX, bottom: bgBottom, color });
+            } else {
+              const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
+              const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
+              connectors.push({
+                type: 'merge', col: seg.col,
+                path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
+                color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
+              });
+            }
           }
         }
 
@@ -905,6 +1002,45 @@
           color, agentId: seg.agentId,
           isStreaming: entries.some(e => e.interaction.status === 'streaming'),
         });
+    }
+
+    // Emit cohort join buses. Each lane's tributary leaves from its OWN box
+    // bottom and runs to a shared horizontal bus; a single arrow then drops
+    // from the bus into main. Early-finishing lanes show a visible gap down to
+    // the bus — the barrier wait made literal.
+    for (const cm of cohortMerge.values()) {
+      if (cm.tribs.length === 0) continue;
+      const busBottom = Math.max(...cm.tribs.map(t => t.bottom));
+      const busY = Math.max(busBottom, cm.targetY) - 18;
+      const xs = cm.tribs.map(t => t.x);
+      const busLeft = Math.min(...xs);
+      const busRight = Math.max(...xs);
+      const busColor = cm.tribs[0].color;
+      // Tributaries: each box bottom curves down to the bus (no arrowhead).
+      for (const t of cm.tribs) {
+        const midY = (t.bottom + busY) / 2;
+        connectors.push({
+          type: 'merge-trib', col: 0,
+          path: `M${t.x},${t.bottom} C${t.x},${midY} ${t.x},${midY} ${t.x},${busY}`,
+          color: t.color, opacity: 0.5, strokeWidth: 2,
+        });
+      }
+      // The horizontal bus line.
+      if (busRight - busLeft > 1) {
+        connectors.push({
+          type: 'merge-trib', col: 0,
+          path: `M${busLeft},${busY} L${busRight},${busY}`,
+          color: busColor, opacity: 0.5, strokeWidth: 2,
+        });
+      }
+      // Single arrow from the bus down into main.
+      const busMidX = (busLeft + busRight) / 2;
+      const dropY = (busY + cm.targetY) / 2;
+      connectors.push({
+        type: 'merge', col: 0,
+        path: `M${busMidX},${busY} C${busMidX},${dropY} ${cm.targetX},${dropY} ${cm.targetX},${cm.targetY}`,
+        color: busColor, opacity: 0.6, strokeWidth: 2.5,
+      });
     }
 
     return connectors;

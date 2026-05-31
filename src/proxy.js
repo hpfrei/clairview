@@ -139,6 +139,52 @@ async function* resumeWebStream(firstChunk, reader) {
   }
 }
 
+// Resolve a CLI tab's per-session model override (modelMap, family-substring
+// match opus/sonnet/haiku). Anthropic targets are applied in-place to
+// body.model; non-Anthropic targets are returned as tabModelDef for the
+// translation path. Shared by /v1/messages and /v1/messages/count_tokens so a
+// remapped model is honored consistently and never reaches Anthropic with an
+// unknown model id.
+function resolveTabModel(body, cliSettings) {
+  if (!cliSettings || !body.model || !cliSettings.modelMap) return { tabModelDef: null };
+  const lower = body.model.toLowerCase();
+  const family = lower.includes('opus') ? 'opus'
+    : lower.includes('sonnet') ? 'sonnet'
+    : lower.includes('haiku') ? 'haiku'
+    : null;
+  if (!family || !cliSettings.modelMap[family]) return { tabModelDef: null };
+  const mapped = caps.loadModel(PROJECT_ROOT, cliSettings.modelMap[family]);
+  // Skip retired/disabled targets — fall through to passthrough so a
+  // decommissioned model can never be routed to.
+  if (!mapped || mapped.lifecycle === 'retired' || mapped.disabled) return { tabModelDef: null };
+  if (mapped.providerKey === 'anthropic') {
+    body.model = mapped.modelId;
+    return { tabModelDef: null };
+  }
+  return { tabModelDef: mapped };
+}
+
+// Rough local token estimate (~4 chars/token) for count_tokens when the tab
+// model routes to a non-Anthropic provider. Approximate by design — used only
+// to keep the CLI's context gauge sane, not for billing.
+function estimateInputTokens(body) {
+  let chars = 0;
+  if (typeof body.system === 'string') chars += body.system.length;
+  else if (Array.isArray(body.system)) for (const b of body.system) chars += (b?.text || '').length;
+  for (const m of body.messages || []) {
+    if (typeof m.content === 'string') chars += m.content.length;
+    else if (Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (typeof block === 'string') chars += block.length;
+        else if (block?.text) chars += block.text.length;
+        else chars += JSON.stringify(block || '').length;
+      }
+    }
+  }
+  for (const t of body.tools || []) chars += JSON.stringify(t || '').length;
+  return Math.max(1, Math.ceil(chars / 4));
+}
+
 function sendProxyError(res, err) {
   if (res.headersSent) {
     try { res.end(); } catch {}
@@ -308,29 +354,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     }
 
     // --- Tab-level model override (applies before global proxy rules) ---
-    let tabModelDef = null;
-    if (cliSettings && body.model) {
-      const modelMap = cliSettings.modelMap;
-      if (modelMap) {
-        const lower = body.model.toLowerCase();
-        const family = lower.includes('opus') ? 'opus'
-          : lower.includes('sonnet') ? 'sonnet'
-          : lower.includes('haiku') ? 'haiku'
-          : null;
-        if (family && modelMap[family]) {
-          const mapped = caps.loadModel(PROJECT_ROOT, modelMap[family]);
-          // Skip retired/disabled targets — fall through to passthrough so a
-          // decommissioned model can never be routed to.
-          if (mapped && mapped.lifecycle !== 'retired' && !mapped.disabled) {
-            if (mapped.providerKey === 'anthropic') {
-              body.model = mapped.modelId;
-            } else {
-              tabModelDef = mapped;
-            }
-          }
-        }
-      }
-    }
+    const { tabModelDef } = resolveTabModel(body, cliSettings);
 
     const instCtx = getInstanceContext(req.instanceId);
     const interaction = {
@@ -445,7 +469,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
           interaction: sanitizeForDashboard(interaction),
         });
 
-        const upstream = await fetch(translated.url, {
+        const { upstream } = await fetchUpstreamWithRetry(translated.url, {
           method: 'POST',
           headers: translated.headers,
           body: JSON.stringify(translated.body),
@@ -735,6 +759,15 @@ function createProxyRouter(store, broadcaster, targetUrl) {
   router.post(['/v1/messages/count_tokens', '/i/:instanceId/v1/messages/count_tokens'], async (req, res) => {
     const body = req.body;
 
+    // Honor the same tab-level model override as /v1/messages so a remapped
+    // model is never sent to Anthropic's count_tokens with an unknown id.
+    const isCliInstance = req.instanceId && req.instanceId.startsWith('cli-');
+    let cliSettings = null;
+    if (isCliInstance && createProxyRouter._cliSettingsGetter) {
+      cliSettings = createProxyRouter._cliSettingsGetter(req.instanceId);
+    }
+    const { tabModelDef } = resolveTabModel(body, cliSettings);
+
     // Apply proxy rules (tool filtering, etc.)
     for (const rule of getEnabledRules()) {
       try {
@@ -774,8 +807,26 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       interaction: sanitizeForDashboard(interaction),
     });
 
+    // Non-Anthropic tab model: Anthropic's count_tokens can't price it and the
+    // providers expose no token-count endpoint, so return a local estimate
+    // instead of querying upstream with a foreign model id.
+    if (tabModelDef && getProvider(tabModelDef.provider) && tabModelDef.provider !== 'anthropic') {
+      const input_tokens = estimateInputTokens(body);
+      interaction.timing.duration = Date.now() - interaction.timing.startedAt;
+      interaction.response.status = 200;
+      interaction.response.body = { input_tokens };
+      interaction.status = 'complete';
+      res.json({ input_tokens });
+      store.save(interaction.id);
+      broadcaster.broadcast({
+        type: 'interaction:complete',
+        interaction: sanitizeForDashboard(interaction),
+      });
+      return;
+    }
+
     try {
-      const upstream = await fetch(`${targetUrl}/v1/messages/count_tokens`, {
+      const { upstream } = await fetchUpstreamWithRetry(`${targetUrl}/v1/messages/count_tokens`, {
         method: 'POST',
         headers: filterRequestHeaders(req.headers),
         body: JSON.stringify(body),

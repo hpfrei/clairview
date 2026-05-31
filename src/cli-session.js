@@ -307,13 +307,12 @@ class CliSession {
         if (k) env[k] = String(v);
       }
     }
-    if (meta.secrets && typeof meta.secrets === 'object') {
-      for (const [k, v] of Object.entries(meta.secrets)) {
-        if (k) env[k] = String(v);
-      }
-    }
+    // Secrets are NOT injected here — the bridge decrypts secrets.enc itself at
+    // spawn (via VISTACLAIR_DATA_HOME + slug), so plaintext never hits this tmp
+    // config file.
     env.VISTACLAIR_DASHBOARD_PORT = String(this._dashboardPort || process.env.DASHBOARD_PORT || '3457');
     env.VISTACLAIR_AUTH_TOKEN = String(this._authToken || process.env.AUTH_TOKEN || '');
+    env.VISTACLAIR_DATA_HOME = DATA_HOME;
     env.VISTACLAIR_SERVER_SLUG = mcpServers.INTEGRATED_SLUG;
     env.VISTACLAIR_INSTANCE_ID = this.instanceId;
 

@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const caps = require('./capabilities');
-const { buildClaudeArgs, spawnClaude, describeClaudeError, ensureDir, generateId, DATA_HOME } = require('./utils');
+const { describeClaudeError, ensureDir, generateId, runClaudeArtifactTask, DATA_HOME } = require('./utils');
 
 const PROJECT_ROOT = DATA_HOME;
 
@@ -298,32 +298,18 @@ The metadata JSON must have exactly these fields:
 
 Use the Write tool to create both files. Write ONLY valid JavaScript (no markdown fences) to the .js file, and ONLY valid JSON to the .meta.json file.`;
 
-    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
-    const proc = spawnClaude(args, {
+    runClaudeArtifactTask({
+      prompt,
       cwd: PROJECT_ROOT,
       proxyPort: opts.proxyPort || 3456,
       instanceId: `rule-gen-${Date.now()}`,
-    });
-
-    const genTimeout = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, 300000);
-
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-
-    let stderrBuf = '';
-    proc.stdout.on('data', () => {});
-    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
-
-    proc.on('close', (code) => {
-      clearTimeout(genTimeout);
-
-      if (!fs.existsSync(targetPath)) {
-        const claudeErr = describeClaudeError(code, stderrBuf);
-        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
-        reject(new Error(`Generation produced no rule file (exit ${code})${detail}`));
+      expectFile: targetPath,
+      allowedTools: [...caps.KNOWN_TOOLS],
+    }).then(({ exitCode, stderr, fileExists }) => {
+      if (!fileExists) {
+        const claudeErr = describeClaudeError(exitCode, stderr);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderr.trim() ? `: ${stderr.trim()}` : '');
+        reject(new Error(`Generation produced no rule file (exit ${exitCode})${detail}`));
         return;
       }
 
@@ -349,10 +335,7 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
       try { fs.unlinkSync(targetPath); } catch {}
 
       resolve({ id, name, slug, source });
-    });
-
-    proc.on('error', (err) => {
-      clearTimeout(genTimeout);
+    }).catch((err) => {
       reject(new Error(`Generation failed: ${err.message}`));
     });
   });
@@ -406,32 +389,18 @@ The metadata JSON must have exactly these fields:
 
 Use the Write tool to create both files. Write ONLY valid JavaScript (no markdown fences) to the .js file, and ONLY valid JSON to the .meta.json file.`;
 
-    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
-    const proc = spawnClaude(args, {
+    runClaudeArtifactTask({
+      prompt,
       cwd: PROJECT_ROOT,
       proxyPort: opts.proxyPort || 3456,
       instanceId: `rule-edit-${Date.now()}`,
-    });
-
-    const genTimeout = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, 300000);
-
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-
-    let stderrBuf = '';
-    proc.stdout.on('data', () => {});
-    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
-
-    proc.on('close', (code) => {
-      clearTimeout(genTimeout);
-
-      if (!fs.existsSync(targetPath)) {
-        const claudeErr = describeClaudeError(code, stderrBuf);
-        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
-        reject(new Error(`Edit produced no rule file (exit ${code})${detail}`));
+      expectFile: targetPath,
+      allowedTools: [...caps.KNOWN_TOOLS],
+    }).then(({ exitCode, stderr, fileExists }) => {
+      if (!fileExists) {
+        const claudeErr = describeClaudeError(exitCode, stderr);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderr.trim() ? `: ${stderr.trim()}` : '');
+        reject(new Error(`Edit produced no rule file (exit ${exitCode})${detail}`));
         return;
       }
 
@@ -458,10 +427,7 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
 
       const source = fs.readFileSync(targetPath, 'utf-8');
       resolve({ id, name, slug, source });
-    });
-
-    proc.on('error', (err) => {
-      clearTimeout(genTimeout);
+    }).catch((err) => {
       reject(new Error(`Edit failed: ${err.message}`));
     });
   });

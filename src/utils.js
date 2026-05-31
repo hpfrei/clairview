@@ -57,6 +57,23 @@ function generateId() {
  * Build CLI args from a profile/capabilities object.
  * Returns the base args array (caller adds --resume, --mcp-config, etc.).
  */
+/**
+ * Append the flag block shared verbatim by headless (buildClaudeArgs) and
+ * interactive (buildCliArgs) arg builders: model, effort, slash-commands,
+ * bare, turn/budget limits, and system-prompt flags.
+ */
+function _appendProfileTail(args, p) {
+  if (p.model) args.push('--model', p.model);
+  if (p.effort) args.push('--effort', p.effort);
+  if (p.disableSlashCommands) args.push('--disable-slash-commands');
+  if (p.bare) args.push('--bare');
+  if (p.maxTurns) args.push('--max-turns', String(p.maxTurns));
+  if (p.maxBudgetUsd) args.push('--max-budget-usd', String(p.maxBudgetUsd));
+  if (p.appendSystemPrompt) args.push('--append-system-prompt', p.appendSystemPrompt);
+  if (p.systemPrompt) args.push('--system-prompt', p.systemPrompt);
+  return args;
+}
+
 function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = {}) {
   const args = ['-p'];
   if (outputFormat === 'stream-json') {
@@ -81,15 +98,7 @@ function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = 
       args.push('--disallowedTools', ...profile.disabledTools);
     }
   }
-  if (profile.model) args.push('--model', profile.model);
-  if (profile.effort) args.push('--effort', profile.effort);
-  if (profile.disableSlashCommands) args.push('--disable-slash-commands');
-  if (profile.bare) args.push('--bare');
-  if (profile.maxTurns) args.push('--max-turns', String(profile.maxTurns));
-  if (profile.maxBudgetUsd) args.push('--max-budget-usd', String(profile.maxBudgetUsd));
-  if (profile.appendSystemPrompt) args.push('--append-system-prompt', profile.appendSystemPrompt);
-  if (profile.systemPrompt) args.push('--system-prompt', profile.systemPrompt);
-  return args;
+  return _appendProfileTail(args, profile);
 }
 
 /**
@@ -108,15 +117,7 @@ function buildCliArgs(settings) {
   if (settings.disabledTools?.length > 0) {
     args.push('--disallowedTools', ...settings.disabledTools);
   }
-  if (settings.model) args.push('--model', settings.model);
-  if (settings.effort) args.push('--effort', settings.effort);
-  if (settings.disableSlashCommands) args.push('--disable-slash-commands');
-  if (settings.bare) args.push('--bare');
-  if (settings.maxTurns) args.push('--max-turns', String(settings.maxTurns));
-  if (settings.maxBudgetUsd) args.push('--max-budget-usd', String(settings.maxBudgetUsd));
-  if (settings.appendSystemPrompt) args.push('--append-system-prompt', settings.appendSystemPrompt);
-  if (settings.systemPrompt) args.push('--system-prompt', settings.systemPrompt);
-  return args;
+  return _appendProfileTail(args, settings);
 }
 
 /**
@@ -156,8 +157,12 @@ function prepareLocalConfigDir(cwd) {
   return localConfigDir;
 }
 
-function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory }) {
-  if (!instanceId) throw new Error('spawnClaude requires instanceId');
+/**
+ * Build the environment a spawned `claude` process inherits: proxy base URL
+ * (instance-scoped), isolated config dir, auto-memory toggle, and the
+ * VISTACLAIR_* handshake vars. Shared by spawnClaude and spawnClaudePty.
+ */
+function buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory }) {
   const env = { ...process.env, ...extraEnv };
   delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
   if (proxyPort) {
@@ -170,19 +175,32 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
   if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
   if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
   env.VISTACLAIR_INSTANCE_ID = instanceId;
-  const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  return env;
+}
 
+/**
+ * Register a freshly-spawned process in the live-instance map, broadcast the
+ * spawn, and return the exit handler to wire to the proc's exit event
+ * (`.on('exit')` for child_process, `.onExit()` for pty). Shared by both spawns.
+ */
+function _trackProcess(instanceId, proc, sourceContext, cwd, autoMemory) {
   _activeProcesses.set(instanceId, { proc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: { ...sourceContext, autoMemory: autoMemory === true }, cwd: cwd || null });
   _broadcastInstances('spawn', instanceId);
-  proc.on('exit', () => {
+  return () => {
     const entry = _activeProcesses.get(instanceId);
     // Only mark exited if this proc is still the current one (avoids race on respawn)
     if (entry && entry.proc === proc) {
       entry.status = 'exited';
       _broadcastInstances('exit', instanceId);
     }
-  });
+  };
+}
 
+function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory }) {
+  if (!instanceId) throw new Error('spawnClaude requires instanceId');
+  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory });
+  const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  proc.on('exit', _trackProcess(instanceId, proc, sourceContext, cwd, autoMemory));
   return proc;
 }
 
@@ -191,18 +209,7 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
  */
 function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated, autoMemory }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
-  const env = { ...process.env, ...extraEnv };
-  delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-  if (proxyPort) {
-    env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
-  } else {
-    delete env.ANTHROPIC_BASE_URL;
-  }
-  if (isolated !== false) env.CLAUDE_CONFIG_DIR = prepareLocalConfigDir(cwd);
-  if (!autoMemory) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
-  if (dashboardPort) env.VISTACLAIR_DASHBOARD_PORT = String(dashboardPort);
-  if (authToken) env.VISTACLAIR_AUTH_TOKEN = authToken;
-  env.VISTACLAIR_INSTANCE_ID = instanceId;
+  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory });
 
   const ptyProc = getPty().spawn('claude', args, {
     name: 'xterm-256color',
@@ -212,16 +219,7 @@ function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols,
     env,
   });
 
-  _activeProcesses.set(instanceId, { proc: ptyProc, instanceId, spawnedAt: Date.now(), status: 'running', sourceContext: { ...sourceContext, autoMemory: autoMemory === true }, cwd: cwd || null });
-  _broadcastInstances('spawn', instanceId);
-  ptyProc.onExit(() => {
-    const entry = _activeProcesses.get(instanceId);
-    if (entry && entry.proc === ptyProc) {
-      entry.status = 'exited';
-      _broadcastInstances('exit', instanceId);
-    }
-  });
-
+  ptyProc.onExit(_trackProcess(instanceId, ptyProc, sourceContext, cwd, autoMemory));
   return ptyProc;
 }
 
@@ -265,6 +263,62 @@ function describeClaudeError(exitCode, stderrText) {
     return `Claude CLI exited with code ${exitCode}`;
   }
   return null;
+}
+
+/**
+ * Run a headless Claude that writes an artifact file, then read it back.
+ *
+ * Collapses the repeated "spawn claude → pipe prompt to stdin → wait with a
+ * SIGTERM-then-SIGKILL timeout → check the expected file exists → read it →
+ * describeClaudeError" dance used by proxy-rule generation/editing and MCP
+ * tool AI-editing. Pure lifecycle wrapper — callers keep their own meta.json
+ * handling and require()/syntax validation around it.
+ *
+ * @returns {Promise<{exitCode, stderr, fileExists, source?}>}
+ *   Rejects only on spawn 'error'. A missing expectFile is reported via
+ *   fileExists:false (callers decide how to surface it with describeClaudeError).
+ */
+function runClaudeArtifactTask({
+  prompt,
+  cwd,
+  proxyPort,
+  instanceId,
+  expectFile = null,
+  allowedTools,
+  permissionMode = 'bypassPermissions',
+  timeoutMs = 300000,
+}) {
+  return new Promise((resolve, reject) => {
+    const args = buildClaudeArgs({ permissionMode, allowedTools });
+    const proc = spawnClaude(args, { cwd, proxyPort, instanceId });
+
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
+    }, timeoutMs);
+
+    let stderr = '';
+    proc.stdout.on('data', () => {});
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf-8'); });
+
+    proc.on('close', (exitCode) => {
+      clearTimeout(timer);
+      const fileExists = expectFile ? fs.existsSync(expectFile) : true;
+      let source;
+      if (fileExists && expectFile) {
+        try { source = fs.readFileSync(expectFile, 'utf-8'); } catch {}
+      }
+      resolve({ exitCode, stderr, fileExists, source });
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
 }
 
 /**
@@ -336,6 +390,19 @@ function resolveOutputDir(userPath) {
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+/**
+ * Resolve `rel` against `base` and guarantee the result stays inside `base`.
+ * Single source of truth for path-traversal containment in core.
+ * Throws 'Path traversal not allowed' if the resolved path escapes base.
+ */
+function safeJoin(base, rel) {
+  const resolved = path.resolve(base, rel);
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+    throw new Error('Path traversal not allowed');
+  }
+  return resolved;
 }
 
 function readJSON(filePath, defaultValue = null) {
@@ -603,8 +670,10 @@ module.exports = {
   killInstance,
   removeInstances,
   createStreamJsonParser,
+  runClaudeArtifactTask,
   isClaudeAuthError,
   describeClaudeError,
+  safeJoin,
   MIME_TYPES,
   PACKAGE_ROOT,
   DATA_HOME,

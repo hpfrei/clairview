@@ -14,18 +14,18 @@ const { pendingQuestions } = createProxyRouter;
 const CliSessionManager = require('./src/cli-sessions');
 const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
-let pro = null;
+const { createLicensing } = require('./src/licensing');
+const addons = require('./src/addons');
+let proModule = null;   // the loaded ./vistaclair-pro module (for licensing/update)
+let proAddon = null;    // its registered descriptor (null until init succeeds)
 let proLicenseValid = false;
-const proDir = path.join(DATA_HOME, 'vistaclair-pro');
 const isDev = process.argv.includes('dev');
 if (isDev && !process.env.DEV_LICENCING_SERVER) {
   console.error('Error: DEV_LICENCING_SERVER is not set. Create a .env file with DEV_LICENCING_SERVER=http://localhost:8888');
   process.exit(1);
 }
-const LICENSE_SERVER = isDev
-  ? process.env.DEV_LICENCING_SERVER
-  : (process.env.PROD_LICENCING_SERVER || 'https://licencing.hpfreilabs.com');
-const PRODUCT_SLUG = process.env.HPFREILABS_PRODUCT || 'vistaclair-pro-subscription';
+const licensing = createLicensing({ dataHome: DATA_HOME, isDev });
+const { proDir, validateLicense, fetchProductInfo, checkProUpdates } = licensing;
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 
@@ -48,146 +48,6 @@ const createApiRouter = require('./src/api');
   process.exit(child.status ?? 1);
 })();
 
-function getMachineId() {
-  const os = require('os');
-  const fs = require('fs');
-
-  let raw = null;
-  if (process.platform === 'linux') {
-    try { raw = fs.readFileSync('/etc/machine-id', 'utf-8').trim(); } catch {}
-  } else if (process.platform === 'darwin') {
-    try {
-      const out = require('child_process').execSync('ioreg -rd1 -c IOPlatformExpertDevice', { encoding: 'utf-8', timeout: 5000 });
-      const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
-      if (m) raw = m[1];
-    } catch {}
-  } else if (process.platform === 'win32') {
-    try {
-      const out = require('child_process').execSync('wmic csproduct get UUID', { encoding: 'utf-8', timeout: 5000 });
-      const lines = out.trim().split('\n').map(l => l.trim()).filter(Boolean);
-      if (lines.length >= 2 && lines[1] !== 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF') raw = lines[1];
-    } catch {}
-  }
-  if (!raw) raw = os.hostname() + '|' + os.userInfo().username;
-  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
-}
-
-const OFFLINE_GRACE_DAYS = 7;
-
-function fetchSigningKey() {
-  return new Promise((resolve, reject) => {
-    const keyUrl = new URL('/api/signing-key', LICENSE_SERVER);
-    const mod = keyUrl.protocol === 'https:' ? require('https') : require('http');
-    const r = mod.request(keyUrl, { timeout: 10000 }, (resp) => {
-      let data = '';
-      resp.on('data', c => data += c);
-      resp.on('end', () => resolve(data.trim()));
-    });
-    r.on('error', reject);
-    r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-    r.end();
-  });
-}
-
-function verifySignature(signedFields, signature, publicKeyPem) {
-  if (!signature || !signedFields || !publicKeyPem) return false;
-  try {
-    const pubKey = crypto.createPublicKey(publicKeyPem);
-    const canonical = JSON.stringify(signedFields);
-    return crypto.verify(null, Buffer.from(canonical), pubKey, Buffer.from(signature, 'base64'));
-  } catch {
-    return false;
-  }
-}
-
-async function validateLicense() {
-  const fs = require('fs');
-  const licPath = path.join(DATA_HOME, 'data', 'license.json');
-  if (!fs.existsSync(licPath)) return { valid: false, reason: 'no-key' };
-
-  let stored;
-  try { stored = JSON.parse(fs.readFileSync(licPath, 'utf-8')); } catch { return { valid: false, reason: 'corrupt' }; }
-  if (!stored.key) return { valid: false, reason: 'no-key' };
-
-  const machineId = getMachineId();
-
-  try {
-    const https = require('https');
-    const licUrl = new URL('/api/validate', LICENSE_SERVER);
-    const body = JSON.stringify({ key: stored.key, product: PRODUCT_SLUG, machineId });
-
-    const response = await new Promise((resolve, reject) => {
-      const mod = licUrl.protocol === 'https:' ? https : require('http');
-      const r = mod.request(licUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 10000 }, (resp) => {
-        let data = '';
-        resp.on('data', c => data += c);
-        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
-      });
-      r.on('error', reject);
-      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-      r.write(body);
-      r.end();
-    });
-
-    if (response.valid && response.signature) {
-      // Fetch and cache public key if we don't have it or if it changed
-      if (!stored.signingKey) {
-        try { stored.signingKey = await fetchSigningKey(); } catch {}
-      }
-      if (stored.signingKey && verifySignature(response.signedFields, response.signature, stored.signingKey)) {
-        stored.lastValidation = response.signedFields;
-        stored.lastSignature = response.signature;
-        fs.writeFileSync(licPath, JSON.stringify(stored));
-      }
-    }
-
-    return {
-      valid: !!response.valid,
-      reason: response.valid ? 'ok' : (response.error || 'invalid'),
-      customerPortalUrl: response.customerPortalUrl || null,
-      licenseInfo: response.valid ? {
-        email: response.license?.email || null,
-        expiresAt: response.license?.expiresAt || null,
-        productName: response.product?.name || null,
-      } : null,
-    };
-  } catch {
-    if (stored.lastValidation && stored.lastSignature && stored.signingKey) {
-      if (verifySignature(stored.lastValidation, stored.lastSignature, stored.signingKey)) {
-        const ageMs = Date.now() - new Date(stored.lastValidation.validatedAt).getTime();
-        if (ageMs <= OFFLINE_GRACE_DAYS * 24 * 60 * 60 * 1000) {
-          return { valid: true, reason: 'offline-grace' };
-        }
-        return { valid: false, reason: 'offline-grace-expired' };
-      }
-    }
-    return { valid: false, reason: 'offline-no-cache' };
-  }
-}
-
-let productInfo = null;
-let customerPortalUrl = null;
-let licenseInfo = null;
-
-async function fetchProductInfo() {
-  try {
-    const https = require('https');
-    const infoUrl = new URL(`/api/product/group/${PRODUCT_SLUG}`, LICENSE_SERVER);
-    const data = await new Promise((resolve, reject) => {
-      const mod = infoUrl.protocol === 'https:' ? https : require('http');
-      const r = mod.request(infoUrl, { timeout: 10000 }, (resp) => {
-        let buf = '';
-        resp.on('data', c => buf += c);
-        resp.on('end', () => { try { resolve(JSON.parse(buf)); } catch { reject(new Error('Invalid response')); } });
-      });
-      r.on('error', reject);
-      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-      r.end();
-    });
-    productInfo = data;
-  } catch {}
-}
-
 (async () => {
 
 const fs = require('fs');
@@ -197,10 +57,8 @@ setInterval(fetchProductInfo, 60 * 60 * 1000);
 if (fs.existsSync(proDir)) {
   const result = await validateLicense();
   proLicenseValid = result.valid;
-  customerPortalUrl = result.customerPortalUrl || null;
-  licenseInfo = result.licenseInfo || null;
   if (proLicenseValid) {
-    try { pro = require('./vistaclair-pro'); } catch (e) {
+    try { proModule = require('./vistaclair-pro'); } catch (e) {
       console.error('  Pro: failed to load:', e.message);
     }
   } else {
@@ -393,8 +251,10 @@ dashboardApp.get('/api/ping', (req, res) => res.json({ ok: true }));
 
 // Auth middleware for all other routes
 dashboardApp.use((req, res, next) => {
-  // OAuth callbacks must be exempt — SameSite=Lax cookies aren't sent on cross-site redirects from Google
-  if (/^\/apps\/[^/]+\/auth\/google\/callback/.test(req.path)) return next();
+  // Add-on-declared public paths (e.g. OAuth callbacks) — SameSite=Lax cookies
+  // aren't sent on cross-site redirects, so these must bypass auth. Declarative
+  // per-add-on list, no hardcoded product knowledge here.
+  if (addons.isAuthExempt(req.path)) return next();
   // Allow internal requests from MCP tools (localhost + internal header)
   if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
   const token = getTokenFromCookies(req.headers.cookie);
@@ -412,197 +272,25 @@ dashboardApp.use(express.static(path.join(__dirname, 'public')));
 ensureDir(OUTPUTS_DIR);
 dashboardApp.use('/outputs', express.static(OUTPUTS_DIR));
 
-function rewriteGitUrl(url, auth) {
-  const parsed = new URL(url);
-  const target = new URL(LICENSE_SERVER);
-  parsed.protocol = target.protocol;
-  parsed.hostname = target.hostname;
-  parsed.port = target.port;
-  if (auth) parsed.username = auth.username;
-  if (auth) parsed.password = auth.password;
-  return parsed.toString();
-}
-
-function installPro(response, licenseKey) {
-  const { execFileSync } = require('child_process');
-  const creds = response.gitCredentials
-    ? { username: encodeURIComponent(response.gitCredentials.username), password: encodeURIComponent(response.gitCredentials.password) }
-    : null;
-
-  if (!fs.existsSync(proDir)) {
-    const cloneUrl = rewriteGitUrl(response.gitUrl, creds);
-    const safeUrl = cloneUrl.replace(/:\/\/[^@]+@/, '://***@');
-    console.log(`[pro] Cloning from ${safeUrl}`);
-    try {
-      execFileSync('git', ['clone', cloneUrl, 'vistaclair-pro'], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
-      console.log('[pro] Clone successful');
-    } catch (err) {
-      console.error(`[pro] Clone failed: ${err.message}`);
-      throw err;
-    }
-  }
-
-  if (response.extras) {
-    for (const extra of response.extras) {
-      const dir = path.join(DATA_HOME, extra.name);
-      if (!fs.existsSync(dir)) {
-        const extraUrl = rewriteGitUrl(extra.gitUrl, creds);
-        try {
-          execFileSync('git', ['clone', extraUrl, extra.name], { cwd: DATA_HOME, stdio: 'pipe', timeout: 60000 });
-        } catch (e) {
-          if (!extra.optional) throw e;
-        }
-      }
-    }
-  }
-
-  ensureDir(path.join(DATA_HOME, 'data'));
-  fs.writeFileSync(path.join(DATA_HOME, 'data', 'license.json'), JSON.stringify({ key: licenseKey, activatedAt: new Date().toISOString() }));
-}
-
-dashboardApp.post('/api/pro/claim', async (req, res) => {
-  const { orderId } = req.body;
-  if (!orderId) return res.status(400).json({ error: 'Order ID required' });
-
-  try {
-    const https = require('https');
-    const os = require('os');
-    const hostname = os.hostname();
-    const username = os.userInfo().username;
-    const machineId = getMachineId();
-
-    const body = JSON.stringify({ orderId, product: PRODUCT_SLUG, machineId, hostname, username });
-    const claimUrl = new URL('/api/claim', LICENSE_SERVER);
-
-    const response = await new Promise((resolve, reject) => {
-      const mod = claimUrl.protocol === 'https:' ? https : require('http');
-      const r = mod.request(claimUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 30000 }, (resp) => {
-        let data = '';
-        resp.on('data', c => data += c);
-        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
-      });
-      r.on('error', reject);
-      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-      r.write(body);
-      r.end();
-    });
-
-    if (!response.valid) return res.json({ ok: false, error: response.error || 'Claim failed' });
-
-    installPro(response, response.key);
-
-    res.json({ ok: true, message: 'Pro activated. Restarting...' });
-
-    scheduleRestart();
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-dashboardApp.post('/api/pro/activate', async (req, res) => {
-  const { key } = req.body;
-  if (!key) return res.status(400).json({ error: 'License key required' });
-
-  try {
-    const https = require('https');
-    const os = require('os');
-    const hostname = os.hostname();
-    const username = os.userInfo().username;
-    const machineId = getMachineId();
-
-    const body = JSON.stringify({ key, product: PRODUCT_SLUG, machineId, hostname, username });
-    const activateUrl = new URL('/api/activate', LICENSE_SERVER);
-
-    const response = await new Promise((resolve, reject) => {
-      const mod = activateUrl.protocol === 'https:' ? https : require('http');
-      const r = mod.request(activateUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 30000 }, (resp) => {
-        let data = '';
-        resp.on('data', c => data += c);
-        resp.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid response')); } });
-      });
-      r.on('error', reject);
-      r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-      r.write(body);
-      r.end();
-    });
-
-    if (!response.valid) return res.json({ ok: false, error: response.error || 'Activation failed' });
-
-    installPro(response, response.key);
-
-    res.json({ ok: true, message: 'Pro activated. Restarting...' });
-
-    scheduleRestart();
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// Pro update check/apply
-let proUpdateAvailable = false;
-
-function checkProUpdates() {
-  if (!fs.existsSync(proDir)) return;
-  try {
-    const { execSync } = require('child_process');
-    execSync('git fetch', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
-    const local = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-    const remote = execSync('git rev-parse @{u}', { cwd: proDir, encoding: 'utf-8' }).trim();
-    proUpdateAvailable = local !== remote;
-    if (proUpdateAvailable) console.log('[pro] Update available');
-  } catch {}
-}
-
+// Pro update check (background)
 if (fs.existsSync(proDir) && proLicenseValid) {
   checkProUpdates();
   setInterval(checkProUpdates, 60 * 60 * 1000);
 }
 
-dashboardApp.post('/api/pro/update', async (req, res) => {
-  try {
-    const { execSync } = require('child_process');
-    if (!fs.existsSync(proDir)) return res.json({ ok: false, error: 'Pro not installed' });
-
-    const before = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-    try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); } catch {}
-    const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-
-    if (pro?.update) await pro.update();
-
-    const updated = before !== after;
-    proUpdateAvailable = false;
-    res.json({ ok: true, updated, version: after.slice(0, 8) });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-dashboardApp.get('/api/pro/status', async (req, res) => {
-  if (req.query.check === '1') {
+// Mount the /api/pro/* licensing routes. The lifecycle adapter bridges to the
+// Pro module-load state that this file owns as the composition root.
+dashboardApp.use('/api', licensing.createLicenseRouter({
+  getPro: () => proModule,
+  isProLoaded: () => !!proAddon,
+  getProLicenseValid: () => proLicenseValid,
+  getProClientModules: () => (proAddon ? addons.getClientModules() : null),
+  scheduleRestart: () => scheduleRestart(),
+  revalidate: async () => {
     const result = await validateLicense();
     proLicenseValid = result.valid;
-    customerPortalUrl = result.customerPortalUrl || customerPortalUrl;
-    licenseInfo = result.licenseInfo || licenseInfo;
-  }
-  const installed = fs.existsSync(proDir);
-  res.json({
-    installed,
-    licensed: proLicenseValid,
-    loaded: !!pro,
-    clientModules: pro ? proClientModules : undefined,
-    needsRestart: installed && proLicenseValid && !pro,
-    updateAvailable: proUpdateAvailable,
-    customerPortalUrl: proLicenseValid ? customerPortalUrl : undefined,
-    licenseInfo: proLicenseValid ? licenseInfo : undefined,
-    productInfo: (!pro && !proLicenseValid) ? productInfo : undefined,
-  });
-});
-
-dashboardApp.post('/api/pro/restart', (req, res) => {
-  if (!proLicenseValid || !fs.existsSync(proDir)) return res.status(400).json({ error: 'Not ready' });
-  res.json({ ok: true });
-  scheduleRestart();
-});
+  },
+}));
 
 const dashboardServer = http.createServer(dashboardApp);
 
@@ -624,8 +312,8 @@ dashboardServer.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  // VNC WebSocket proxy for GUI apps
-  if (proResult?.handleUpgrade?.(req, socket, head)) return;
+  // Offer the upgrade to add-ons (e.g. Pro's VNC websockify proxy) first.
+  if (addons.handleUpgrade(req, socket, head)) return;
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
@@ -640,14 +328,29 @@ createProxyRouter._cliSettingsGetter = (instanceId) => cliSessionManager.getSett
 // Initialize MCP Server Manager
 mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT });
 
-// Initialize Pro (Apps Platform) if available
-let proClientModules = null;
-let proResult = null;
-if (pro) {
-  proResult = pro.init({ broadcaster, store, dashboardApp, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT, cliSessionManager, spawnClaude, buildClaudeArgs });
-  proClientModules = proResult?.clientModules || null;
-  console.log('  Pro: loaded');
+// Initialize add-ons (Pro Apps Platform, etc.) and register their descriptors.
+// init() returns a versioned descriptor; core consumes it generically — routers
+// are mounted after auth (below), upgrades/clientModules/auth-exempt paths are
+// dispatched through the addon registry. No per-add-on branching here.
+const addonCtx = {
+  broadcaster, store, authToken: AUTH_TOKEN,
+  dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT,
+  cliSessionManager, spawnClaude, buildClaudeArgs,
+  secretStore: require('./src/secret-store'),
+};
+if (proModule) {
+  try {
+    const descriptor = proModule.init(addonCtx);
+    proAddon = addons.registerAddon(descriptor);
+    if (proAddon) console.log('  Pro: loaded');
+    else console.error('  Pro: descriptor rejected (contract mismatch)');
+  } catch (e) {
+    console.error('  Pro: init failed:', e.message);
+  }
 }
+// Mount add-on routers AFTER the auth middleware (declared above) so add-on
+// routes are auth-gated by construction, except their declared authExemptPaths.
+addons.mountRouters(dashboardApp);
 
 ruleHandler.init({ broadcaster, store, proxyPort: PROXY_PORT, dashboardPort: DASHBOARD_PORT, authToken: AUTH_TOKEN });
 
@@ -740,12 +443,14 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
 
     // Re-validate license every 4 hours
     setInterval(async () => {
-      if (!pro) return;
+      if (!proAddon) return;
       const result = await validateLicense();
       if (!result.valid && result.reason !== 'offline-grace') {
         console.log(`  Pro: license no longer valid (${result.reason}) — disabling`);
-        pro.shutdown();
-        pro = null;
+        try { proAddon.shutdown?.(); } catch {}
+        addons.removeAddon(proAddon.id);
+        proAddon = null;
+        proModule = null;
         proLicenseValid = false;
         broadcaster.broadcast({ type: 'pro:disabled', reason: result.reason });
       }
@@ -757,7 +462,7 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
 function gracefulShutdown() {
   cliSessionManager.saveAllToHistory();
   cliSessionManager.killAll();
-  if (pro) pro.shutdown();
+  addons.shutdownAll();
   mcp.shutdown();
   process.exit(0);
 }

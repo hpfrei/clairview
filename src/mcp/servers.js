@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { readJSON, writeJSON, ensureDir, DATA_HOME } = require('../utils');
+const secretStore = require('../secret-store');
 
 // --- Integrated MCP server directory ---
 
@@ -24,13 +25,45 @@ function metaPath() {
   return path.join(serverDir(), 'meta.json');
 }
 
+function secretsPath() {
+  return path.join(serverDir(), 'secrets.enc');
+}
+
+// MCP server secrets live in an encrypted store (secrets.enc), never in
+// meta.json. The bridge process decrypts them at spawn time via secret-store
+// using the same keyDir (DATA_HOME), so plaintext secrets never reach the
+// shared .mcp.json / ~/.claude.json config or any tmp file.
+function readSecrets() {
+  return secretStore.readSecretFile(secretsPath(), DATA_HOME, { fallback: {} });
+}
+
+function writeSecrets(secrets) {
+  secretStore.writeSecretFile(secretsPath(), secrets || {}, DATA_HOME);
+}
+
 function readMeta() {
-  return readJSON(metaPath());
+  const meta = readJSON(metaPath());
+  if (!meta) return meta;
+  // One-time migration: lift any plaintext secrets left in meta.json into the
+  // encrypted store, then drop them from meta on the next write.
+  if (meta.secrets && Object.keys(meta.secrets).length > 0) {
+    try {
+      const enc = readSecrets();
+      writeSecrets({ ...meta.secrets, ...enc });
+    } catch {}
+    delete meta.secrets;
+    try { writeMeta(meta); } catch {}
+  } else if (meta.secrets) {
+    delete meta.secrets;
+  }
+  return meta;
 }
 
 function writeMeta(meta) {
   meta.updatedAt = new Date().toISOString();
-  fs.writeFileSync(metaPath(), JSON.stringify(meta, null, 2));
+  // Never persist secrets in plaintext meta.json.
+  const { secrets, ...safe } = meta;
+  fs.writeFileSync(metaPath(), JSON.stringify(safe, null, 2));
 }
 
 // --- Integrated server setup ---
@@ -59,7 +92,6 @@ function ensureIntegratedServer() {
     version: '1.0.0',
     scope: 'project',
     env: {},
-    secrets: {},
     tools: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -371,7 +403,7 @@ function saveToolSource(slug, source) {
 
 module.exports = {
   INTEGRATED_SLUG, getServersDir, serverDir, slugify, validateSlug,
-  ensureIntegratedServer, readMeta, writeMeta,
+  ensureIntegratedServer, readMeta, writeMeta, readSecrets, writeSecrets,
   listTools, saveTool, deleteTool, toggleTool,
   generateServerJs, writeToolFile,
   readToolSource, saveToolSource, restoreToolSource,

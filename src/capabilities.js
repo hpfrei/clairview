@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { ensureDir } = require('./utils');
+const { ensureDir, safeJoin } = require('./utils');
+const secretStore = require('./secret-store');
 
 const KNOWN_TOOLS = [
   'Read', 'Write', 'Edit', 'NotebookEdit',
@@ -148,11 +149,9 @@ function saveSkill(cwd, name, content, extraFiles) {
     for (const f of extraFiles) {
       if (!f.name || typeof f.content !== 'string') continue;
       // Prevent path traversal — resolve and verify containment
-      const clean = path.normalize(f.name);
-      const filePath = path.resolve(dir, clean);
-      if (!filePath.startsWith(dir + path.sep) && filePath !== dir) continue;
-      const fileDir = path.dirname(filePath);
-      ensureDir(fileDir);
+      let filePath;
+      try { filePath = safeJoin(dir, f.name); } catch { continue; }
+      ensureDir(path.dirname(filePath));
       fs.writeFileSync(filePath, f.content);
     }
   }
@@ -352,23 +351,39 @@ function modelsFilePath(baseDir) {
   return path.join(baseDir, 'capabilities', 'models.json');
 }
 
-function secretsFilePath(baseDir) {
+// Provider/model API keys live in an encrypted store (secrets.enc). A legacy
+// plaintext secrets.json is migrated on first read and removed on next write.
+function secretsEncPath(baseDir) {
+  return path.join(baseDir, 'capabilities', 'secrets.enc');
+}
+
+function secretsLegacyPath(baseDir) {
   return path.join(baseDir, 'capabilities', 'secrets.json');
 }
 
 function readSecrets(baseDir) {
-  const file = secretsFilePath(baseDir);
-  try {
-    if (!fs.existsSync(file)) return { providerKeys: {}, modelKeys: {} };
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
-  } catch {
-    return { providerKeys: {}, modelKeys: {} };
+  const encPath = secretsEncPath(baseDir);
+  const legacyPath = secretsLegacyPath(baseDir);
+  const s = secretStore.readSecretFile(encPath, baseDir, {
+    legacyPath,
+    fallback: { providerKeys: {}, modelKeys: {} },
+  });
+  if (!s.providerKeys) s.providerKeys = {};
+  if (!s.modelKeys) s.modelKeys = {};
+  // Proactively migrate a legacy plaintext file to the encrypted store on first
+  // read (mirrors the inline migration in readModelsFile), so keys never linger
+  // in plaintext after the new code first runs.
+  if (!fs.existsSync(encPath) && fs.existsSync(legacyPath)) {
+    try { writeSecrets(baseDir, s); } catch {}
   }
+  return s;
 }
 
 function writeSecrets(baseDir, secrets) {
   ensureDir(path.join(baseDir, 'capabilities'));
-  fs.writeFileSync(secretsFilePath(baseDir), JSON.stringify(secrets, null, 2));
+  secretStore.writeSecretFile(secretsEncPath(baseDir), secrets, baseDir, {
+    legacyPath: secretsLegacyPath(baseDir),
+  });
 }
 
 // Detect provider key from apiBaseUrl domain (used in migration)

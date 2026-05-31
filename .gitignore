@@ -18,6 +18,8 @@ vistaclair-apps/
 
 # Capabilities — ignore runtime state and secrets, track definitions
 capabilities/secrets.json
+capabilities/secrets.enc
+.secrets_key
 capabilities/active.json
 capabilities/workflows/*/runs/
 

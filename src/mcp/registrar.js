@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readJSON } = require('../utils');
+const { readJSON, DATA_HOME } = require('../utils');
 
 function resolveConfigPath(scope, projectDir) {
   if (scope === 'project' && projectDir) {
@@ -37,11 +37,13 @@ function register(slug, meta, bridgePath, authToken, dashboardPort, projectDir) 
     MCP_AUTH_TOKEN: authToken,
     VISTACLAIR_AUTH_TOKEN: authToken,
     VISTACLAIR_DASHBOARD_PORT: String(dashboardPort),
+    // The bridge decrypts secrets.enc itself at spawn — secrets never land in
+    // this (plaintext) config file. Only the locator + slug are passed.
+    VISTACLAIR_DATA_HOME: DATA_HOME,
+    VISTACLAIR_SERVER_SLUG: slug,
   };
-  // Merge user env vars
+  // Merge user env vars (non-secret)
   if (meta.env) Object.assign(env, meta.env);
-  // Merge decrypted secrets (for now, stored as plaintext — encryption deferred)
-  if (meta.secrets) Object.assign(env, meta.secrets);
 
   config.mcpServers[slug] = {
     command: 'node',

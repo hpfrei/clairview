@@ -1693,6 +1693,15 @@
           .attr('opacity', c.opacity)
           .attr('marker-end', markers ? `url(#${markers.merge})` : null)
           .attr('data-agent-id', c.agentId || '');
+      } else if (c.type === 'merge-trib') {
+        gFg.append('path')
+          .attr('class', 'connector-path connector-merge-trib')
+          .attr('d', c.path)
+          .attr('stroke', c.color)
+          .attr('stroke-width', c.strokeWidth)
+          .attr('stroke-linecap', 'round')
+          .attr('fill', 'none')
+          .attr('opacity', c.opacity);
       }
     }
   }
@@ -1782,7 +1791,7 @@
       }
     }
 
-    const { layout, totalHeight, sessionStart, breaks, compressedY } = wl.computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt);
+    const { layout, totalHeight, sessionStart, breaks, compressedY, cohorts } = wl.computeD3Layout(filtered, columnFor, totalColumns, parallelRegions, postHookClosedCol, depthAt, columnSegments);
 
     // Create wrapper
     const wrapper = document.createElement('div');
@@ -1902,7 +1911,7 @@
     timelineList.appendChild(wrapper);
 
     // Render connectors: backgrounds in svg (behind nodes), curves in svgFg (above nodes)
-    const connectors = wl.computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart, postHookClosedCol, columnSegments, { subagentColors: SUBAGENT_COLORS, getSubagentColor });
+    const connectors = wl.computeConnectorData(layout, columnFor, columnAgents, totalColumns, compressedY, sessionStart, postHookClosedCol, columnSegments, { subagentColors: SUBAGENT_COLORS, getSubagentColor, cohorts });
     renderConnectors(svg, svgFg, connectors, layout, columnAgents, totalColumns, compressedY, sessionStart, columnSegments);
 
     // Render time ruler
@@ -1943,7 +1952,7 @@
     _d3State = {
       wrapper, svg, svgFg, nodesLayer, headers,
       columnFor, columnAgents, columnSegments, totalColumns,
-      layout, totalHeight, sessionStart, breaks, compressedY,
+      layout, totalHeight, sessionStart, breaks, compressedY, cohorts,
       turnNum, subagentTurnCounts,
       activeColumns: assignment.activeColumns,
       historicalColumns: assignment.historicalColumns,
@@ -2094,7 +2103,7 @@
       el.style.transform = `translate(${x}px, ${y}px)`;
     });
 
-    const connectors = wl.computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.postHookClosedCol, ds.columnSegments || [], { subagentColors: SUBAGENT_COLORS, getSubagentColor });
+    const connectors = wl.computeConnectorData(ds.layout, ds.columnFor, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.postHookClosedCol, ds.columnSegments || [], { subagentColors: SUBAGENT_COLORS, getSubagentColor, cohorts: ds.cohorts });
     renderConnectors(ds.svg, ds.svgFg, connectors, ds.layout, ds.columnAgents, ds.totalColumns, ds.compressedY, ds.sessionStart, ds.columnSegments || []);
     renderTimeRuler(ds.svg, ds.layout, ds.sessionStart, ds.totalHeight, ds.breaks || [], ds.compressedY);
 

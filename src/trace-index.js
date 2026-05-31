@@ -39,6 +39,7 @@ class TraceIndex {
 
     this._offsets = new Map();          // filePath -> bytes already parsed
     this._watchers = [];
+    this._watchedDirs = new Set();      // dirs already under fs.watch (dedup)
     this._rescanTimer = null;
     this._closed = false;
 
@@ -61,14 +62,27 @@ class TraceIndex {
   /** Full (re)scan: main file + every subagent file + meta files. */
   scanAll() {
     this._scanFile(this.mainFile, 'main');
-    let subFiles = [];
-    try { subFiles = fs.readdirSync(this.subagentsDir); } catch { subFiles = []; }
-    for (const f of subFiles) {
+    // Flat subagents (Agent-tool spawned): <sessionId>/subagents/agent-*.jsonl
+    this._scanAgentDir(this.subagentsDir);
+    // Workflow forks: <sessionId>/subagents/workflows/wf_<runId>/agent-*.jsonl
+    const workflowsDir = path.join(this.subagentsDir, 'workflows');
+    let wfRuns = [];
+    try { wfRuns = fs.readdirSync(workflowsDir); } catch { wfRuns = []; }
+    for (const run of wfRuns) {
+      this._scanAgentDir(path.join(workflowsDir, run));
+    }
+  }
+
+  /** Scan one directory of agent-*.jsonl transcripts and agent-*.meta.json files. */
+  _scanAgentDir(dir) {
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { return; }
+    for (const f of files) {
       if (f.endsWith('.meta.json')) {
-        this._loadMeta(path.join(this.subagentsDir, f));
+        this._loadMeta(path.join(dir, f));
       } else if (/^agent-.+\.jsonl$/.test(f)) {
         const agentId = f.slice('agent-'.length, -'.jsonl'.length);
-        this._scanFile(path.join(this.subagentsDir, f), agentId);
+        this._scanFile(path.join(dir, f), agentId);
       }
     }
   }
@@ -132,18 +146,37 @@ class TraceIndex {
     }
   }
 
+  _watchDir(dir) {
+    if (this._watchedDirs.has(dir)) return;
+    try {
+      const w = fs.watch(dir, () => this._scheduleRescan());
+      w.on('error', () => {});
+      this._watchers.push(w);
+      this._watchedDirs.add(dir);
+    } catch {}
+  }
+
   _startWatching() {
-    const watchDir = (dir) => {
-      try {
-        const w = fs.watch(dir, () => this._scheduleRescan());
-        w.on('error', () => {});
-        this._watchers.push(w);
-      } catch {}
-    };
     // Watch the session dir (main .jsonl changes) and the subagents dir.
-    watchDir(path.dirname(this.mainFile));
+    this._watchDir(path.dirname(this.mainFile));
     try { fs.mkdirSync(this.subagentsDir, { recursive: true }); } catch {}
-    watchDir(this.subagentsDir);
+    this._watchDir(this.subagentsDir);
+    // Watch the workflows dir so new wf_<runId> run dirs (created after session
+    // start) trigger a rescan that picks up their nested fork transcripts.
+    const workflowsDir = path.join(this.subagentsDir, 'workflows');
+    try { fs.mkdirSync(workflowsDir, { recursive: true }); } catch {}
+    this._watchDir(workflowsDir);
+    // fs.watch is non-recursive, so also watch each run dir directly to catch
+    // appends to its fork transcripts mid-run.
+    this._watchWorkflowRunDirs();
+  }
+
+  /** Attach watchers to each existing wf_<runId> run dir (idempotent). */
+  _watchWorkflowRunDirs() {
+    const workflowsDir = path.join(this.subagentsDir, 'workflows');
+    let runs = [];
+    try { runs = fs.readdirSync(workflowsDir); } catch { return; }
+    for (const run of runs) this._watchDir(path.join(workflowsDir, run));
   }
 
   /** Debounced rescan — fs.watch can fire many times per flush. */
@@ -151,7 +184,9 @@ class TraceIndex {
     if (this._closed || this._rescanTimer) return;
     this._rescanTimer = setTimeout(() => {
       this._rescanTimer = null;
-      if (!this._closed) this.scanAll();
+      if (this._closed) return;
+      this._watchWorkflowRunDirs();
+      this.scanAll();
     }, 60);
   }
 
@@ -165,6 +200,7 @@ class TraceIndex {
     if (this._rescanTimer) { clearTimeout(this._rescanTimer); this._rescanTimer = null; }
     for (const w of this._watchers) { try { w.close(); } catch {} }
     this._watchers = [];
+    this._watchedDirs.clear();
   }
 }
 

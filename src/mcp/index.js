@@ -2,7 +2,7 @@ const servers = require('./servers');
 const registrar = require('./registrar');
 const logs = require('./logs');
 const caps = require('../capabilities');
-const { buildClaudeArgs, spawnClaude, describeClaudeError, PACKAGE_ROOT, DATA_HOME } = require('../utils');
+const { describeClaudeError, runClaudeArtifactTask, PACKAGE_ROOT, DATA_HOME } = require('../utils');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -288,7 +288,7 @@ function handleMessage(ws, msg, bc) {
         const meta = servers.readMeta();
         if (meta) {
           if (msg.updates.env !== undefined) meta.env = msg.updates.env;
-          if (msg.updates.secrets !== undefined) meta.secrets = msg.updates.secrets;
+          if (msg.updates.secrets !== undefined) servers.writeSecrets(msg.updates.secrets);
           if (msg.updates.name !== undefined) meta.name = msg.updates.name;
           if (msg.updates.scope !== undefined) meta.scope = msg.updates.scope;
           servers.writeMeta(meta);
@@ -494,42 +494,24 @@ Write the updated tool to: ${targetPath}
 
 Use the Write tool to create the file. Write ONLY valid JavaScript (no markdown fences).`;
 
-    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
-    const proc = spawnClaude(args, {
+    runClaudeArtifactTask({
+      prompt,
       cwd: PROJECT_ROOT,
       proxyPort: opts.proxyPort || 3456,
       instanceId: `mcp-edit-${Date.now()}`,
-    });
-
-    const genTimeout = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, 300000);
-
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-
-    let stderrBuf = '';
-    proc.stdout.on('data', () => {});
-    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
-
-    proc.on('close', (code) => {
-      clearTimeout(genTimeout);
-
-      if (!fs.existsSync(targetPath)) {
-        const claudeErr = describeClaudeError(code, stderrBuf);
-        const detail = claudeErr ? `: ${claudeErr}` : (stderrBuf.trim() ? `: ${stderrBuf.trim()}` : '');
-        reject(new Error(`Edit produced no tool file (exit ${code})${detail}`));
+      expectFile: targetPath,
+      allowedTools: [...caps.KNOWN_TOOLS],
+    }).then(({ exitCode, stderr, fileExists, source }) => {
+      if (!fileExists) {
+        const claudeErr = describeClaudeError(exitCode, stderr);
+        const detail = claudeErr ? `: ${claudeErr}` : (stderr.trim() ? `: ${stderr.trim()}` : '');
+        reject(new Error(`Edit produced no tool file (exit ${exitCode})${detail}`));
         return;
       }
 
-      const source = fs.readFileSync(targetPath, 'utf-8');
       servers.generateServerJs();
-      resolve({ source });
-    });
-
-    proc.on('error', (err) => {
-      clearTimeout(genTimeout);
+      resolve({ source: source ?? fs.readFileSync(targetPath, 'utf-8') });
+    }).catch((err) => {
       reject(new Error(`Edit failed: ${err.message}`));
     });
   });
