@@ -1579,5 +1579,12 @@
     if (allIds.length > 0) switchTab(allIds[idx]);
   }
 
-  window.directoriesModule = { tabs, handleShellMessage };
+  function openPath(dirPath) {
+    const tab = createTab(dirPath || null);
+    switchTab(tab.id);
+    loadDir(tab.id, dirPath || '');
+    return tab.id;
+  }
+
+  window.directoriesModule = { tabs, handleShellMessage, openPath };
 })();

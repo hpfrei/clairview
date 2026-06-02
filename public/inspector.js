@@ -1692,6 +1692,7 @@
           .attr('stroke', c.color)
           .attr('stroke-width', c.strokeWidth)
           .attr('stroke-linecap', 'round')
+          .attr('stroke-dasharray', c.dashed ? '7,5' : null)
           .attr('fill', 'none')
           .attr('opacity', c.opacity)
           .attr('marker-end', markers ? `url(#${markers.fork})` : null)
@@ -1704,19 +1705,30 @@
           .attr('stroke', c.color)
           .attr('stroke-width', c.strokeWidth)
           .attr('stroke-linecap', 'round')
+          .attr('stroke-dasharray', c.dashed ? '7,5' : null)
           .attr('fill', 'none')
           .attr('opacity', c.opacity)
           .attr('marker-end', markers ? `url(#${markers.merge})` : null)
           .attr('data-agent-id', c.agentId || '');
-      } else if (c.type === 'merge-trib') {
+      } else if (c.type === 'hub-spoke' || c.type === 'merge-trib') {
         gFg.append('path')
-          .attr('class', 'connector-path connector-merge-trib')
+          .attr('class', 'connector-path connector-hub-spoke')
           .attr('d', c.path)
           .attr('stroke', c.color)
           .attr('stroke-width', c.strokeWidth)
           .attr('stroke-linecap', 'round')
+          .attr('stroke-dasharray', c.dashed ? '6,4' : null)
           .attr('fill', 'none')
           .attr('opacity', c.opacity);
+      } else if (c.type === 'hub') {
+        gFg.append('circle')
+          .attr('class', 'connector-hub')
+          .attr('cx', c.cx)
+          .attr('cy', c.cy)
+          .attr('r', c.r)
+          .attr('fill', c.filled ? c.color : 'var(--bg-surface)')
+          .attr('stroke', c.color)
+          .attr('stroke-width', 3);
       }
     }
   }

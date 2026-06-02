@@ -744,112 +744,230 @@
 
   // --- Main layout pass ---
 
+  // Time-aligned layout via longest-path on a forward-in-time constraint graph.
+  //
+  // The vertical axis is a SHARED time axis across every column. Two rules:
+  //   • a box's TOP sits at y(startTime)  → boxes that start together align.
+  //   • a box's BOTTOM sits at y(endTime) → boxes that end together align;
+  //     a box stretches taller than its content when a denser parallel lane
+  //     forces that wall-clock interval to need more pixels.
+  //
+  // We model this as lower-bound constraints  y(v) - y(u) >= w  on a graph whose
+  // nodes are the distinct start/end times. Every edge points forward in time, so
+  // the graph is a DAG and the minimal satisfying assignment is the LONGEST PATH —
+  // computed in one linear relaxation pass over nodes in time order. The "densest
+  // thread sets the pace" property falls out for free: in any interval the longest
+  // path picks the max height required across all columns.
+  //
+  // endTime reflects the end of all of a box's SYNCHRONOUS tool calls: clamped
+  // hooks are folded into the box and extend its end. Async children (Workflow /
+  // subagent lanes) live in their own columns, so they never inflate the parent.
   function computeD3Layout(interactions, columnFor, totalColumns, parallelRegions, postHookClosedCol, _depthAt, columnSegments) {
     const C = D3_CONST;
-    const layout = [];
-    const breaks = [];
-    const colBottoms = new Map();
-    const sessionStart = interactions.length > 0 ? interactions[0].timestamp : 0;
-    let globalBottom = C.HEADER_HEIGHT + 8;
+    const TOP = C.HEADER_HEIGHT + 8;
     const availWidth = computeColumnWidth(totalColumns);
+    const sessionStart = interactions.length > 0 ? interactions[0].timestamp : 0;
+    const breaks = [];
 
-    // Start-row model: the y position is driven by START TIME, not by a global
-    // running bottom. Elements whose starts fall within COHORT_EPSILON_MS share
-    // a "row" and a baseline y, so near-simultaneous (parallel) elements ALIGN —
-    // regardless of which column they land in. The time axis is intentionally
-    // non-linear: rows step down by a fixed amount, so ordering is top-down and
-    // start-correct without being proportional to real elapsed time.
-    //
-    // Stacking pushes an element DOWN only for two reasons, never because a
-    // sibling parallel lane is deep:
-    //   1. its own column is still occupied (sequential within a lane), or
-    //   2. the main-thread spine (col 0) has advanced past it (causal order).
-    const ROW_STEP = C.MIN_ENTRY_HEIGHT + C.MIN_GAP;
-    let prevElapsed = null;
-    let rowStartElapsed = null;
-    let rowBaseline = globalBottom;
+    // --- Phase 1: gather renderable boxes (folded/clamped hooks render 0-height) ---
+    const boxes = [];
+    const boxByIdx = new Map();
+    for (let idx = 0; idx < interactions.length; idx++) {
+      const interaction = interactions[idx];
+      if (_foldedHookIds.has(interaction.id) || _clampedHookIds.has(interaction.id)) continue;
+      const col = columnFor.get(interaction.id) || 0;
+      const height = computeNodeHeight(interaction);
+      const start = interaction.timestamp - sessionStart;
+      let end = start + (interaction.timing?.duration || 0);
+      const clamped = interaction._clampedHooks;
+      if (clamped) {
+        for (const h of clamped) {
+          const he = (h.timestamp - sessionStart) + (h.timing?.duration || 0);
+          if (he > end) end = he;
+        }
+      }
+      if (end < start) end = start;
+      const box = { idx, interaction, col, height, start, end };
+      boxes.push(box);
+      boxByIdx.set(idx, box);
+    }
 
+    // Per-column box lists (sorted by start) for stacking + merge constraints.
+    const colBoxes = new Map();
+    for (const b of boxes) {
+      if (!colBoxes.has(b.col)) colBoxes.set(b.col, []);
+      colBoxes.get(b.col).push(b);
+    }
+    for (const arr of colBoxes.values()) {
+      arr.sort((a, b) => a.start - b.start || a.end - b.end || a.idx - b.idx);
+    }
+
+    // Within a single column the timeline is strictly sequential, so cap each
+    // box's stretch-end at the next box's start. This is what keeps the layout
+    // bullet-proof: same-column intervals become non-overlapping, so every
+    // constraint edge points forward in time and no box can overlap another in
+    // its lane. A lane's terminal box has no successor, so it still stretches to
+    // its true end and aligns with its merge point. Per-column sequence index
+    // (seqInCol) gives a stable tie-break for equal-time anchors.
+    for (const arr of colBoxes.values()) {
+      for (let i = 0; i < arr.length; i++) {
+        arr[i]._seq = i;
+        const next = arr[i + 1];
+        if (next && arr[i].end > next.start) arr[i].end = next.start;
+        if (arr[i].end < arr[i].start) arr[i].end = arr[i].start;
+      }
+    }
+
+    // --- Phase 2: anchor clustering → time nodes ---
+    // Each box contributes a START anchor and an END anchor. Anchors within
+    // ALIGN_EPSILON across DIFFERENT columns share one node, so cross-column
+    // simultaneous events line up on a single row. Two rules keep every later
+    // constraint edge pointing forward (src node < dst node), which is what makes
+    // the longest-path pass valid and overlap-free:
+    //   • column guard — a cluster never holds two anchors from the same column;
+    //   • forward guard — an anchor only joins a cluster whose index is greater
+    //     than the previous anchor's index in the same column. Clusters are
+    //     created in ascending time order, so node index ↑ with time. The guard
+    //     therefore guarantees, per lane, start₀ < end₀ < start₁ < end₁ < …
+    // Among eligible clusters we pick the EARLIEST so a true simultaneous-start
+    // row absorbs every lane, rather than each lane peeling into the next row.
+    const ALIGN_EPSILON = 60; // ms; above batch-dispatch jitter, well under a deliberate stagger
+    const anchors = [];
+    for (const b of boxes) {
+      b._startAnchor = { time: b.start, col: b.col, seq: b._seq, kind: 0 };
+      b._endAnchor = { time: b.end, col: b.col, seq: b._seq, kind: 1 };
+      anchors.push(b._startAnchor, b._endAnchor);
+    }
+    anchors.sort((a, b) => a.time - b.time || a.col - b.col || a.seq - b.seq || a.kind - b.kind);
+
+    const clusters = []; // { time (rep = min), cols:Set }
+    const lastNodeForCol = new Map();
+    for (const a of anchors) {
+      const floor = lastNodeForCol.has(a.col) ? lastNodeForCol.get(a.col) : -1;
+      let chosen = -1;
+      // Scan recent clusters (descending index) while still within the time
+      // window; remember the earliest eligible one.
+      for (let c = clusters.length - 1; c > floor && c >= 0; c--) {
+        const cl = clusters[c];
+        if (a.time - cl.time > ALIGN_EPSILON) break;
+        if (!cl.cols.has(a.col)) chosen = c;
+      }
+      if (chosen >= 0) {
+        clusters[chosen].cols.add(a.col);
+        a.node = chosen;
+      } else {
+        a.node = clusters.length;
+        clusters.push({ time: a.time, cols: new Set([a.col]) });
+      }
+      lastNodeForCol.set(a.col, a.node);
+    }
+    const N = clusters.length;
+    const times = clusters.map(c => c.time);
+
+    // adjacency: adj[u] = [{to, w}], every edge forward (to > u by construction)
+    const adj = Array.from({ length: N }, () => []);
+    function addEdge(s, d, w) {
+      if (s == null || d == null || s >= d || w <= 0) return;
+      adj[s].push({ to: d, w });
+    }
+
+    // Edge 1: monotonic spine between consecutive nodes. Idle gaps (long real time
+    // with no box spanning them) collapse to a zigzag break.
+    const breakSpine = [];
+    for (let i = 0; i < N - 1; i++) {
+      let w = 0;
+      const gap = times[i + 1] - times[i];
+      if (gap > C.ZIGZAG_MIN_CUT) {
+        const spanned = boxes.some(b => b.start <= times[i] && b.end >= times[i + 1]);
+        if (!spanned) { w = GAP_COLLAPSE_HEIGHT; breakSpine.push(i); }
+      }
+      adj[i].push({ to: i + 1, w });
+    }
+
+    // Edge 2: end-alignment / stretch — bottom is at least `height` below the top.
+    for (const b of boxes) {
+      addEdge(b._startAnchor.node, b._endAnchor.node, b.height);
+    }
+
+    // Edge 3: same-column stacking — each box clears the previous one in its lane.
+    for (const arr of colBoxes.values()) {
+      for (let i = 0; i < arr.length - 1; i++) {
+        const a = arr[i], n = arr[i + 1];
+        addEdge(a._startAnchor.node, n._startAnchor.node, a.height + C.MIN_GAP);
+        addEdge(a._endAnchor.node, n._startAnchor.node, C.MIN_GAP);
+      }
+    }
+
+    // Edge 4: merge-point hooks (PostToolUse/Agent on main) sit below the column
+    // they close — the parallel barrier resumes main only after the lane finished.
+    if (postHookClosedCol) {
+      for (const b of boxes) {
+        const closedCol = postHookClosedCol.get(b.interaction.id);
+        if (closedCol == null) continue;
+        const arr = colBoxes.get(closedCol);
+        if (!arr) continue;
+        let latest = null;
+        for (const cb of arr) {
+          if (cb.start < b.start && (latest == null || cb.end > latest.end)) latest = cb;
+        }
+        if (latest) addEdge(latest._endAnchor.node, b._startAnchor.node, C.MIN_GAP);
+      }
+    }
+
+    // --- Phase 3: longest-path relaxation (node order is topological order) ---
+    const yAt = new Array(N).fill(TOP);
+    for (let i = 0; i < N; i++) {
+      const yi = yAt[i];
+      for (const e of adj[i]) {
+        if (yi + e.w > yAt[e.to]) yAt[e.to] = yi + e.w;
+      }
+    }
+
+    // Record break markers now that node Ys are known.
+    for (const i of breakSpine) {
+      breaks.push({
+        y: (yAt[i] + yAt[i + 1]) / 2,
+        elapsedBefore: times[i],
+        elapsedAfter: times[i + 1],
+      });
+    }
+
+    // --- Phase 4: place boxes; build layout in original interaction order ---
+    const layout = [];
+    let finalBottom = TOP;
     for (let idx = 0; idx < interactions.length; idx++) {
       const interaction = interactions[idx];
       const elapsed = interaction.timestamp - sessionStart;
-
-      if (_foldedHookIds.has(interaction.id) || _clampedHookIds.has(interaction.id)) {
+      const b = boxByIdx.get(idx);
+      if (!b) {
         layout.push({ id: interaction.id, x: 0, y: 0, width: 0, height: 0, col: 0, interaction, elapsed, idx });
         continue;
       }
-
-      const col = columnFor.get(interaction.id) || 0;
-      const height = computeNodeHeight(interaction);
-      const x = C.RULER_WIDTH + col * (availWidth + C.COLUMN_GAP);
-
-      // Advance to a new start-row when this element starts more than the
-      // epsilon after the current row began. Same-row elements reuse the
-      // baseline (and therefore align).
-      if (rowStartElapsed === null || (elapsed - rowStartElapsed) > C.COHORT_EPSILON_MS) {
-        if (rowStartElapsed !== null) {
-          if ((elapsed - prevElapsed) > C.ZIGZAG_MIN_CUT) {
-            // Long real-time pause: zigzag break, re-anchor to the deepest content.
-            const breakY = globalBottom + C.MIN_GAP + GAP_COLLAPSE_HEIGHT / 2;
-            breaks.push({ y: breakY, elapsedBefore: prevElapsed, elapsedAfter: elapsed });
-            rowBaseline = breakY + GAP_COLLAPSE_HEIGHT / 2;
-          } else {
-            rowBaseline += ROW_STEP;
-          }
-        }
-        // Never let a row sit above the main-thread spine's current bottom.
-        const mainBottom = colBottoms.get(0);
-        if (mainBottom != null) rowBaseline = Math.max(rowBaseline, mainBottom + C.MIN_GAP);
-        rowStartElapsed = elapsed;
-      }
-
-      let y = rowBaseline;
-      const colBottom = colBottoms.get(col);
-      if (colBottom != null) y = Math.max(y, colBottom + C.MIN_GAP);
-
-      // For merge-point hooks (PostToolUse/Agent), also respect the closed column bottom
-      if (postHookClosedCol) {
-        const closedCol = postHookClosedCol.get(interaction.id);
-        if (closedCol != null && colBottoms.has(closedCol)) {
-          y = Math.max(y, colBottoms.get(closedCol) + C.MIN_GAP);
-        }
-      }
-
-      const entryBottom = y + height;
-      layout.push({ id: interaction.id, x, y, width: availWidth, height, col, interaction, elapsed, idx, timeBottom: entryBottom });
-      colBottoms.set(col, entryBottom);
-      if (entryBottom > globalBottom) globalBottom = entryBottom;
-      prevElapsed = elapsed;
+      const top = yAt[b._startAnchor.node];
+      const bottom = yAt[b._endAnchor.node];
+      const height = Math.max(b.height, bottom - top);
+      const x = C.RULER_WIDTH + b.col * (availWidth + C.COLUMN_GAP);
+      const timeBottom = top + height;
+      layout.push({ id: interaction.id, x, y: top, width: availWidth, height, col: b.col, interaction, elapsed, idx, timeBottom });
+      if (timeBottom > finalBottom) finalBottom = timeBottom;
     }
 
-    // Cohorts (for merge-bus routing). The start-row model already aligns
-    // parallel starts, so no separate snap pass is needed.
+    // Cohorts (for merge-bus routing). Starts are already time-aligned.
     const cohorts = buildCohorts(layout, columnSegments);
 
-    // Monotonic elapsed→Y interpolation for ruler and connectors
-    const yPoints = layout.filter(item => item.height > 0)
-      .map(item => ({ elapsed: item.elapsed, y: item.y }))
-      .sort((a, b) => a.elapsed - b.elapsed);
-    for (let i = 1; i < yPoints.length; i++) {
-      if (yPoints[i].y < yPoints[i - 1].y) yPoints[i].y = yPoints[i - 1].y;
-    }
+    // Exact monotonic elapsed→Y interpolation over the node map (ruler + connectors).
     function elapsedToY(t) {
-      if (yPoints.length === 0) return C.HEADER_HEIGHT + 8;
-      if (t <= yPoints[0].elapsed) return yPoints[0].y;
-      if (t >= yPoints[yPoints.length - 1].elapsed) return yPoints[yPoints.length - 1].y;
-      for (let i = 0; i < yPoints.length - 1; i++) {
-        if (yPoints[i].elapsed <= t && t <= yPoints[i + 1].elapsed) {
-          const dt = yPoints[i + 1].elapsed - yPoints[i].elapsed;
-          if (dt === 0) return yPoints[i].y;
-          const frac = (t - yPoints[i].elapsed) / dt;
-          return yPoints[i].y + frac * (yPoints[i + 1].y - yPoints[i].y);
+      if (N === 0) return TOP;
+      if (t <= times[0]) return yAt[0];
+      if (t >= times[N - 1]) return yAt[N - 1];
+      for (let i = 0; i < N - 1; i++) {
+        if (times[i] <= t && t <= times[i + 1]) {
+          const dt = times[i + 1] - times[i];
+          if (dt === 0) return yAt[i];
+          return yAt[i] + ((t - times[i]) / dt) * (yAt[i + 1] - yAt[i]);
         }
       }
-      return yPoints[yPoints.length - 1].y;
-    }
-
-    let finalBottom = C.HEADER_HEIGHT + 8;
-    for (const item of layout) {
-      if (item.y + item.height > finalBottom) finalBottom = item.y + item.height;
+      return yAt[N - 1];
     }
 
     const cohortAgentGroups = cohorts.map(group => group.map(ci => ci.seg.agentId));
@@ -871,8 +989,25 @@
     for (let ci = 0; ci < cohortGroups.length; ci++) {
       for (const aid of cohortGroups[ci]) cohortIdxForAgent.set(aid, ci);
     }
-    // Per-cohort accumulator: tributaries (one per lane) + the common main target.
+    // Per-cohort accumulators. Members of a cohort (agents that started together)
+    // fork/merge through a shared hub circle instead of each drawing its own arc.
     const cohortMerge = new Map();
+    const cohortFork = new Map();
+    const HUB_R = 8;       // hub circle radius
+    const HUB_GAP = 16;    // gap between the hub and the nearest lane edge
+
+    // Smooth S-curve whose END tangent matches the dominant travel direction, so
+    // an `orient:auto` arrowhead always points ALONG the visible line at the tip.
+    // Horizontally-dominant connectors get horizontal control handles (tangent
+    // horizontal at the ends); vertically-dominant ones get vertical handles.
+    function sCurve(x0, y0, x1, y1) {
+      if (Math.abs(x1 - x0) >= Math.abs(y1 - y0)) {
+        const mx = (x0 + x1) / 2;
+        return `M${x0},${y0} C${mx},${y0} ${mx},${y1} ${x1},${y1}`;
+      }
+      const my = (y0 + y1) / 2;
+      return `M${x0},${y0} C${x0},${my} ${x1},${my} ${x1},${y1}`;
+    }
 
     const layoutById = new Map();
     const colEntries = new Map();
@@ -885,6 +1020,87 @@
 
     const hookEntryById = new Map();
     for (const me of mainEntries) hookEntryById.set(me.id, me);
+
+    // toolUseId → the exact tool-call ROW (center point) that issued it, across
+    // every LLM turn in any column. A subagent forks from the row of the Agent/
+    // Workflow tool call that spawned it, keyed precisely by id, not by proximity.
+    const toolCallRowById = new Map();
+    for (const item of layout) {
+      const it = item.interaction;
+      if (it.isHook || it.isMcp || item.height <= 0) continue;
+      const tools = extractToolCalls(it);
+      for (let ti = 0; ti < tools.length; ti++) {
+        if (!tools[ti].id) continue;
+        toolCallRowById.set(tools[ti].id, {
+          x: item.x + item.width / 2,
+          y: item.y + D3_CONST.MIN_ENTRY_HEIGHT + ti * D3_CONST.TOOL_HEIGHT + D3_CONST.TOOL_HEIGHT / 2,
+        });
+      }
+    }
+    // toolUseId → its PostToolUse/Agent (or /Workflow) hook entry on main. A
+    // subagent merges back into the exact PostToolUse row for the same toolUseId.
+    const postRowById = new Map();
+    for (const me of mainEntries) {
+      const it = me.interaction;
+      if (it.isHook && /PostToolUse/i.test(it.hookEvent || '') && it.toolUseId) {
+        postRowById.set(it.toolUseId, { x: me.x + me.width / 2, y: me.y + me.height / 2 });
+      }
+    }
+    // The toolUseId of the tool call that spawned this segment. The PreToolUse
+    // start hook carries it directly; the SubagentStop end hook carries it on
+    // subagent.toolUseId. Either resolves to the same Agent/Workflow tool call.
+    function segToolUseId(seg) {
+      if (seg.startHookId) {
+        const tuid = layoutById.get(seg.startHookId)?.interaction?.toolUseId;
+        if (tuid) return tuid;
+      }
+      if (seg.endHookId) {
+        const endInt = layoutById.get(seg.endHookId)?.interaction;
+        if (endInt?.toolUseId) return endInt.toolUseId;
+        if (endInt?.subagent?.toolUseId) return endInt.subagent.toolUseId;
+      }
+      return null;
+    }
+    const segSpawnRow = (seg) => { const t = segToolUseId(seg); return t ? toolCallRowById.get(t) || null : null; };
+    const segMergeRow = (seg) => { const t = segToolUseId(seg); return t ? postRowById.get(t) || null : null; };
+
+    // Workflow cohort → spawning Workflow tool call.
+    // A Workflow() tool call fans out a batch of workflow-subagents that all start
+    // together (one cohort). Anchor that cohort's fork to the exact Workflow tool
+    // row in its parent turn, instead of the generic "nearest main entry above".
+    // The SubagentStart hooks carry no toolUseId, so we pair by order: the k-th
+    // workflow cohort (in start-time order) ↔ the k-th Workflow tool call.
+    const subagentByAgentId = new Map();
+    for (const seg of columnSegments || []) {
+      if (seg.agentId && seg.subagent) subagentByAgentId.set(seg.agentId, seg.subagent);
+    }
+    const isWorkflowCohort = (ci) => {
+      const aids = cohortGroups[ci] || [];
+      return aids.length > 0 && aids.every(aid => subagentByAgentId.get(aid)?.agentType === 'workflow-subagent');
+    };
+    const workflowCallOrigins = [];
+    for (const me of mainEntries) {
+      if (me.interaction.isHook || me.interaction.isMcp) continue;
+      const tools = extractToolCalls(me.interaction);
+      for (let ti = 0; ti < tools.length; ti++) {
+        if (tools[ti].name !== 'Workflow') continue;
+        workflowCallOrigins.push({
+          x: me.x + me.width / 2,
+          y: me.y + D3_CONST.MIN_ENTRY_HEIGHT + ti * D3_CONST.TOOL_HEIGHT + D3_CONST.TOOL_HEIGHT / 2,
+        });
+      }
+    }
+    const workflowCohortSet = new Set();
+    const cohortOriginOverride = new Map();
+    {
+      let k = 0;
+      for (let ci = 0; ci < cohortGroups.length; ci++) {
+        if (!isWorkflowCohort(ci)) continue;
+        workflowCohortSet.add(ci);
+        if (k < workflowCallOrigins.length) cohortOriginOverride.set(ci, workflowCallOrigins[k]);
+        k++;
+      }
+    }
 
     for (const seg of columnSegments || []) {
         const entries = (colEntries.get(seg.col) || []).filter(item => {
@@ -904,8 +1120,14 @@
         // Fork arrow
         let forkOriginY = bgTop;
         let forkOriginX = D3_CONST.RULER_WIDTH + colWidth / 2;
+        const spawnRow = segSpawnRow(seg);
         const startHookEntry = seg.startHookId ? hookEntryById.get(seg.startHookId) : null;
-        if (startHookEntry) {
+        if (spawnRow) {
+          // Best signal: the exact Agent/Workflow tool-call row that spawned this
+          // subagent, resolved by toolUseId.
+          forkOriginX = spawnRow.x;
+          forkOriginY = spawnRow.y;
+        } else if (startHookEntry) {
           forkOriginY = startHookEntry.y + startHookEntry.height / 2;
           forkOriginX = startHookEntry.x + startHookEntry.width / 2;
         } else if (seg.startHookId && _foldedHookIds.has(seg.startHookId)) {
@@ -933,19 +1155,50 @@
 
         // Fork: arc upward, ending at center of subagent top border
         const forkTargetX = bgLeft + (colWidth + 8) / 2;
-        const forkBow = Math.max(20, Math.abs(forkTargetX - forkOriginX) * 0.2);
-        const forkTopY = Math.min(forkOriginY, bgTop) - forkBow;
-        connectors.push({
-          type: 'fork', col: seg.col,
-          path: `M${forkOriginX},${forkOriginY} C${forkOriginX},${forkTopY} ${forkTargetX},${forkTopY} ${forkTargetX},${bgTop}`,
-          color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
-        });
+        const forkCohortIdx = cohortIdxForAgent.get(seg.agentId);
+        if (forkCohortIdx != null) {
+          // Cohort member: stash this lane's entry point and the common origin
+          // (where the fork leaves main). The hub + spokes are emitted after the
+          // loop so all lanes share one bent arrow into a single circle.
+          // Prefer the exact spawning tool-call row (resolved by toolUseId);
+          // fall back to the order-paired Workflow row, then the generic origin.
+          const override = spawnRow || cohortOriginOverride.get(forkCohortIdx);
+          const isWf = workflowCohortSet.has(forkCohortIdx);
+          if (!cohortFork.has(forkCohortIdx)) {
+            cohortFork.set(forkCohortIdx, {
+              spokes: [],
+              originX: override ? override.x : forkOriginX,
+              originY: override ? override.y : forkOriginY,
+              originFixed: !!override,
+              workflow: isWf,
+              color,
+            });
+          }
+          const cf = cohortFork.get(forkCohortIdx);
+          // Use the earliest (highest) origin so the bent arrow starts from the
+          // spawning point above every lane — unless we have an exact spawning
+          // tool-call origin (Workflow row), which is authoritative.
+          if (!cf.originFixed && forkOriginY < cf.originY) { cf.originY = forkOriginY; cf.originX = forkOriginX; }
+          cf.spokes.push({ x: forkTargetX, top: bgTop, color });
+        } else {
+          connectors.push({
+            type: 'fork', col: seg.col,
+            path: sCurve(forkOriginX, forkOriginY, forkTargetX, bgTop),
+            color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
+          });
+        }
 
         // Merge arrow: only when the segment actually ended (has endHookId)
         if (seg.endHookId) {
           let mergeTargetY = null;
           let mergeTargetX = D3_CONST.RULER_WIDTH + colWidth / 2;
-          if (hookEntry) {
+          const mergeRow = segMergeRow(seg);
+          if (mergeRow) {
+            // Best signal: the PostToolUse row for this segment's spawning tool
+            // call, keyed by toolUseId.
+            mergeTargetX = mergeRow.x;
+            mergeTargetY = mergeRow.y;
+          } else if (hookEntry) {
             mergeTargetY = hookEntry.y + hookEntry.height / 2;
             mergeTargetX = hookEntry.x + hookEntry.width / 2;
           } else if (_foldedHookIds.has(seg.endHookId)) {
@@ -977,7 +1230,7 @@
               // Cohort member: stash this lane's exit point; the join bus and the
               // single shared arrow to main are emitted after the loop.
               if (!cohortMerge.has(cohortIdx)) {
-                cohortMerge.set(cohortIdx, { tribs: [], targetY: mergeTargetY, targetX: mergeTargetX });
+                cohortMerge.set(cohortIdx, { tribs: [], targetY: mergeTargetY, targetX: mergeTargetX, workflow: workflowCohortSet.has(cohortIdx) });
               }
               const cm = cohortMerge.get(cohortIdx);
               // Use the lowest (latest-finishing) lane's target — a parallel
@@ -985,11 +1238,9 @@
               if (mergeTargetY > cm.targetY) { cm.targetY = mergeTargetY; cm.targetX = mergeTargetX; }
               cm.tribs.push({ x: bgCenterX, bottom: bgBottom, color });
             } else {
-              const mergeBow = Math.max(20, Math.abs(bgCenterX - mergeTargetX) * 0.2);
-              const mergeBotY = Math.max(bgBottom, mergeTargetY) + mergeBow;
               connectors.push({
                 type: 'merge', col: seg.col,
-                path: `M${bgCenterX},${bgBottom} C${bgCenterX},${mergeBotY} ${mergeTargetX},${mergeBotY} ${mergeTargetX},${mergeTargetY}`,
+                path: sCurve(bgCenterX, bgBottom, mergeTargetX, mergeTargetY),
                 color, opacity: 0.6, strokeWidth: 2.5, agentId: seg.agentId,
               });
             }
@@ -1004,43 +1255,72 @@
         });
     }
 
-    // Emit cohort join buses. Each lane's tributary leaves from its OWN box
-    // bottom and runs to a shared horizontal bus; a single arrow then drops
-    // from the bus into main. Early-finishing lanes show a visible gap down to
-    // the bus — the barrier wait made literal.
+    // Emit cohort FORK hubs. A single bent arrow leaves main and ends at a
+    // bold-bordered hub circle centered above the lane entry points; straight
+    // spokes then run from the hub down into each lane's top.
+    for (const cf of cohortFork.values()) {
+      if (cf.spokes.length === 0) continue;
+      const xs = cf.spokes.map(s => s.x);
+      const hubX = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const spokeTop = Math.min(...cf.spokes.map(s => s.top));
+      const hubY = spokeTop - HUB_GAP - HUB_R;
+      const color = cf.color;
+      const wf = cf.workflow;
+      // Bent arrow from main's origin into the hub circle. Workflow arrows connect
+      // to the circle CENTER (covered by the filled circle drawn on top); others
+      // stop at the circle's top edge.
+      const hubTopY = hubY - HUB_R;
+      const arrowEndY = wf ? hubY : hubTopY;
+      connectors.push({
+        type: 'fork', col: 0,
+        path: sCurve(cf.originX, cf.originY, hubX, arrowEndY),
+        color, opacity: wf ? 0.95 : 0.6, strokeWidth: wf ? 3.5 : 2.5, dashed: wf,
+      });
+      // Straight spokes from the hub to each lane entry point. Workflow spokes
+      // start at the circle CENTER (covered by the filled circle); others at its
+      // bottom edge.
+      const forkSpokeY = wf ? hubY : hubY + HUB_R;
+      for (const s of cf.spokes) {
+        connectors.push({
+          type: 'hub-spoke', col: 0,
+          path: `M${hubX},${forkSpokeY} L${s.x},${s.top}`,
+          color: s.color, opacity: wf ? 0.75 : 0.5, strokeWidth: wf ? 3 : 2, dashed: wf,
+        });
+      }
+      connectors.push({ type: 'hub', col: 0, cx: hubX, cy: hubY, r: HUB_R, color, filled: wf });
+    }
+
+    // Emit cohort MERGE hubs. Straight spokes run from each lane's bottom up to a
+    // bold-bordered hub circle centered below the lanes; a single bent arrow then
+    // drops from the hub into main.
     for (const cm of cohortMerge.values()) {
       if (cm.tribs.length === 0) continue;
-      const busBottom = Math.max(...cm.tribs.map(t => t.bottom));
-      const busY = Math.max(busBottom, cm.targetY) - 18;
       const xs = cm.tribs.map(t => t.x);
-      const busLeft = Math.min(...xs);
-      const busRight = Math.max(...xs);
-      const busColor = cm.tribs[0].color;
-      // Tributaries: each box bottom curves down to the bus (no arrowhead).
+      const hubX = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const spokeBottom = Math.max(...cm.tribs.map(t => t.bottom));
+      const hubY = spokeBottom + HUB_GAP + HUB_R;
+      const color = cm.tribs[0].color;
+      const wf = cm.workflow;
+      // Straight spokes from each lane bottom to the hub circle. Workflow spokes
+      // end at the circle CENTER (covered by the filled circle); others at its
+      // top edge.
+      const mergeSpokeY = wf ? hubY : hubY - HUB_R;
       for (const t of cm.tribs) {
-        const midY = (t.bottom + busY) / 2;
         connectors.push({
-          type: 'merge-trib', col: 0,
-          path: `M${t.x},${t.bottom} C${t.x},${midY} ${t.x},${midY} ${t.x},${busY}`,
-          color: t.color, opacity: 0.5, strokeWidth: 2,
+          type: 'hub-spoke', col: 0,
+          path: `M${t.x},${t.bottom} L${hubX},${mergeSpokeY}`,
+          color: t.color, opacity: wf ? 0.75 : 0.5, strokeWidth: wf ? 3 : 2, dashed: wf,
         });
       }
-      // The horizontal bus line.
-      if (busRight - busLeft > 1) {
-        connectors.push({
-          type: 'merge-trib', col: 0,
-          path: `M${busLeft},${busY} L${busRight},${busY}`,
-          color: busColor, opacity: 0.5, strokeWidth: 2,
-        });
-      }
-      // Single arrow from the bus down into main.
-      const busMidX = (busLeft + busRight) / 2;
-      const dropY = (busY + cm.targetY) / 2;
+      // Single bent arrow from the hub down into main. Workflow arrows start from
+      // the circle CENTER (covered by the filled circle); others from its bottom edge.
+      const arrowStartY = wf ? hubY : hubY + HUB_R;
       connectors.push({
         type: 'merge', col: 0,
-        path: `M${busMidX},${busY} C${busMidX},${dropY} ${cm.targetX},${dropY} ${cm.targetX},${cm.targetY}`,
-        color: busColor, opacity: 0.6, strokeWidth: 2.5,
+        path: sCurve(hubX, arrowStartY, cm.targetX, cm.targetY),
+        color, opacity: wf ? 0.95 : 0.6, strokeWidth: wf ? 3.5 : 2.5, dashed: wf,
       });
+      connectors.push({ type: 'hub', col: 0, cx: hubX, cy: hubY, r: HUB_R, color, filled: wf });
     }
 
     return connectors;
