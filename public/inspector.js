@@ -637,6 +637,14 @@
     const sel = state.selection;
     if (_splitMode && _splitInteractions.has(interactionId)) {
       appendSSEToDetail(event, interaction);
+    } else if (_splitMode && _liveMode && event.eventType === 'message_start'
+               && (interaction.status === 'streaming' || interaction.status === 'pending')
+               && !interaction.isHook && !interaction.isMcp
+               && interaction.instanceId === _splitGroupInstance()) {
+      // A new parallel streamer began after split mode was already active —
+      // give it its own pane so all concurrent interactions stay visible.
+      addSplitPane(interaction);
+      appendSSEToDetail(event, interaction);
     } else if (sel?.type === 'turn' && sel.id === interactionId) {
       if (event.eventType === 'message_start' && !_splitMode && _liveMode) {
         _trySplitMode(interactionId);
@@ -871,8 +879,15 @@
 
   // --- Split mode: parallel streaming detail panes ---
 
+  function _splitGroupInstance() {
+    for (const id of _splitInteractions) {
+      const i = state.interactions.find(x => x.id === id);
+      if (i) return i.instanceId;
+    }
+    return undefined;
+  }
+
   function _findParallelStreamers(interactionId) {
-    if (!_d3State) return [];
     const source = state.interactions.find(i => i.id === interactionId);
     const sourceInstance = source?.instanceId;
     return state.interactions.filter(i =>
@@ -1898,6 +1913,7 @@
         el = buildD3TurnEl(interaction, num, isSub);
       }
 
+      if (interaction.deleted) el.classList.add('turn-deleted');
       el.style.transform = `translate(${item.x}px, ${item.y}px)`;
       el.style.width = item.width + 'px';
       if (item.height > D3_CONST.MIN_ENTRY_HEIGHT) el.style.minHeight = item.height + 'px';
@@ -2091,6 +2107,7 @@
       el = buildD3TurnEl(interaction, num, isSub);
     }
 
+    if (interaction.deleted) el.classList.add('turn-deleted');
     el.style.width = colWidth + 'px';
     if (height > D3_CONST.MIN_ENTRY_HEIGHT) el.style.minHeight = height + 'px';
     el.style.opacity = '0';
@@ -3720,8 +3737,13 @@
           } else {
             appendTurnToTimeline(msg.interaction);
           }
-          if (_liveMode) {
+          if (_liveMode && !_splitMode) {
+            // While split mode is active, the panes ARE the live view — auto-selecting
+            // each new interaction (incl. hooks) would tear the split down. New parallel
+            // streamers get their own pane via the message_start SSE routing instead.
             select({ type: 'turn', id: msg.interaction.id });
+            scrollTimelineToBottom();
+          } else if (_liveMode) {
             scrollTimelineToBottom();
           }
         }
@@ -3892,6 +3914,19 @@
         _allHistoryLoaded = true;
         const loadAllBtn = document.querySelector('.tl-load-all-btn');
         if (loadAllBtn) { loadAllBtn.classList.add('active'); loadAllBtn.style.opacity = ''; }
+        break;
+      }
+
+      case 'inspector:turnsDeleted': {
+        const ids = new Set(msg.ids || []);
+        if (ids.size) {
+          for (const i of state.interactions) {
+            if (ids.has(i.id)) i.deleted = true;
+          }
+          for (const id of ids) {
+            document.querySelectorAll(`.turn-group[data-turn-id="${CSS.escape(id)}"]`).forEach(g => g.classList.add('turn-deleted'));
+          }
+        }
         break;
       }
 

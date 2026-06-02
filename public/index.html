@@ -44,7 +44,9 @@
         <button class="header-tab header-tab-config" data-view="capabilities">Tools &amp; MCP</button>
       </nav>
     </div>
+    <div id="toastContainer" class="toast-container"></div>
     <div class="header-actions">
+      <button id="toastBellBtn" class="toast-bell-btn" title="Notifications">&#128276;<span id="toastBadge" class="toast-badge hidden">0</span></button>
       <button id="proUpdateBtn" class="pro-update-btn" style="display:none" title="Update pro to latest version">&#8593; Update</button>
       <button id="proHeaderBtn" class="pro-header-btn" title="VistaClair Pro">PRO</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
@@ -133,12 +135,20 @@
         <button class="modal-close cli-settings-cancel">&times;</button>
       </div>
       <div class="modal-body">
+        <div id="cliAuthHint" class="cli-auth-hint hidden"></div>
         <h4 style="margin:0 0 10px">Model Mapping</h4>
         <p style="margin:0 0 12px;font-size:12px;opacity:0.7">Map incoming Claude model families to any configured model. Applied per-request before global proxy rules (e.g. the Model Override rule). Leave as "Default" to pass through unchanged. Only models with an API key configured are selectable.</p>
         <div style="display:flex;flex-direction:column;gap:8px">
           <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Opus</span><select data-map="opus" style="flex:1;padding:4px 6px"></select></label>
           <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Sonnet</span><select data-map="sonnet" style="flex:1;padding:4px 6px"></select></label>
           <label style="display:flex;align-items:center;gap:8px"><span style="width:60px;font-weight:600">Haiku</span><select data-map="haiku" style="flex:1;padding:4px 6px"></select></label>
+        </div>
+        <h4 style="margin:18px 0 10px">Session</h4>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="cli-settings-open-dir" style="padding:6px 12px;cursor:pointer;text-align:left">Open interaction directory</button>
+          <p style="margin:0;font-size:12px;opacity:0.7">Open this CLI's folder under <code>./interactions</code> in a new Directories tab.</p>
+          <button class="cli-settings-remove-turn" style="padding:6px 12px;cursor:pointer;text-align:left">Remove last interaction turn</button>
+          <p style="margin:0;font-size:12px;opacity:0.7">Roll the session back one user/assistant turn (e.g. after a safeguard violation), then resume so you can continue in the CLI tab.</p>
         </div>
       </div>
       <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px">
@@ -1338,6 +1348,11 @@ jq -r '.tool_input.command' |
         <button class="cap-modal-close" id="dirPickerClose">&times;</button>
       </div>
       <div class="cap-modal-body" style="padding:0">
+        <div class="dir-picker-recent hidden" id="dirPickerRecent">
+          <div class="dir-picker-recent-header">Recent directories</div>
+          <div class="dir-picker-recent-list" id="dirPickerRecentList"></div>
+        </div>
+        <div class="dir-picker-browse-label">Browse</div>
         <div class="dir-picker-breadcrumbs" id="dirPickerBreadcrumbs"></div>
         <div class="dir-picker-list" id="dirPickerList"></div>
         <div class="dir-picker-new hidden" id="dirPickerNew">
@@ -1373,6 +1388,7 @@ jq -r '.tool_input.command' |
   </div>
 
   <script src="core.js"></script>
+  <script src="toast.js"></script>
   <script src="wide-layout.js"></script>
   <script src="inspector.js"></script>
   <script src="cli.js"></script>

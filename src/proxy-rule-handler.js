@@ -305,6 +305,7 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
       instanceId: `rule-gen-${Date.now()}`,
       expectFile: targetPath,
       allowedTools: [...caps.KNOWN_TOOLS],
+      anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
     }).then(({ exitCode, stderr, fileExists }) => {
       if (!fileExists) {
         const claudeErr = describeClaudeError(exitCode, stderr);
@@ -396,6 +397,7 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
       instanceId: `rule-edit-${Date.now()}`,
       expectFile: targetPath,
       allowedTools: [...caps.KNOWN_TOOLS],
+      anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
     }).then(({ exitCode, stderr, fileExists }) => {
       if (!fileExists) {
         const claudeErr = describeClaudeError(exitCode, stderr);

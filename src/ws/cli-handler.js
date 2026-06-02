@@ -127,13 +127,25 @@ function handleMessage(ws, msg, bc) {
       if (msg.tabId) {
         const session = mgr.get(msg.tabId);
         const models = caps.listModels(PROJECT_ROOT);
+        // Record a freshly-detected subscription (e.g. after the user ran /login
+        // in a CLI tab) so the UI can prompt for an auth preference.
+        caps.noteSubscriptionState(PROJECT_ROOT);
+        const sessId = session && session.sessId;
         send({
           type: 'cli:settingsData',
           tabId: msg.tabId,
           settings: session ? session.getSettings() : {},
           models,
           hasSubscription: caps.hasClaudeSubscription(),
+          needsAuthChoice: caps.needsClaudeAuthChoice(PROJECT_ROOT),
+          interactionsDir: sessId ? path.join(DATA_HOME, 'interactions', sessId) : null,
         });
+      }
+      break;
+    case 'cli:removeLastTurn':
+      if (msg.tabId) {
+        const result = mgr.removeLastInteractionTurn(msg.tabId);
+        send({ type: 'cli:lastTurnRemoved', tabId: msg.tabId, ok: result.ok, reason: result.reason || null });
       }
       break;
     case 'cli:requestScrollback':

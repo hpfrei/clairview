@@ -337,6 +337,7 @@ const addonCtx = {
   dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT,
   cliSessionManager, spawnClaude, buildClaudeArgs,
   secretStore: require('./src/secret-store'),
+  resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
 };
 if (proModule) {
   try {

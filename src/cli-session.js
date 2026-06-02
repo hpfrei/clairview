@@ -112,6 +112,9 @@ class CliSession {
       extraEnv: { GIT_CEILING_DIRECTORIES: cwd },
       isolated: this.isolated,
       autoMemory: this.autoMemory,
+      // Interactive sessions prefer the subscription (allowed); fall back to the
+      // API key only when no subscription is active.
+      anthropicApiKey: caps.getInteractiveAuth(DATA_HOME),
     });
 
     this._scrollback = '';

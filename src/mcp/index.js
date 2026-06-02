@@ -501,6 +501,7 @@ Use the Write tool to create the file. Write ONLY valid JavaScript (no markdown 
       instanceId: `mcp-edit-${Date.now()}`,
       expectFile: targetPath,
       allowedTools: [...caps.KNOWN_TOOLS],
+      anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
     }).then(({ exitCode, stderr, fileExists, source }) => {
       if (!fileExists) {
         const claudeErr = describeClaudeError(exitCode, stderr);

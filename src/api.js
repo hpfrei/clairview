@@ -44,6 +44,20 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     }
   });
 
+  // ── GET /api/recent-dirs — recently used CLI directories ──────────
+  router.get('/recent-dirs', (req, res) => {
+    if (!cliSessionManager) return res.json({ dirs: [] });
+    res.json({ dirs: cliSessionManager.getRecentDirs() });
+  });
+
+  // ── DELETE /api/recent-dirs — remove one recent directory ─────────
+  router.delete('/recent-dirs', (req, res) => {
+    const { path: dirPath } = req.body || {};
+    if (!dirPath) return res.status(400).json({ error: 'path is required' });
+    if (cliSessionManager) cliSessionManager.deleteRecentDir(dirPath);
+    res.json({ ok: true });
+  });
+
   // ── GET /api/browse-files — filesystem browser with file metadata ──
   router.get('/browse-files', (req, res) => {
     const requestedPath = req.query.path || os.homedir();

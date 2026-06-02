@@ -33,6 +33,7 @@ const state = {
   editingHook: null,
   models: [],
   providers: [],
+  claudeAuth: { pref: null, hasSubscription: false, needsChoice: false },
   editingModel: null,
   mcpServers: [],
   serverRestarting: false,
@@ -1102,11 +1103,13 @@ function handleMessage(msg) {
     case 'interaction:complete':
     case 'interaction:error':
     case 'interaction:enriched':
+    case 'interaction:detail':
     case 'interaction:sseEvents':
     case 'cleared':
     case 'inspector:instancesCleared':
     case 'inspector:sessionLoaded':
     case 'inspector:allLoaded':
+    case 'inspector:turnsDeleted':
       window.inspectorModule?.handleMessage(msg);
       break;
 
@@ -1152,6 +1155,7 @@ function handleMessage(msg) {
     case 'hook:list':
     case 'model:list':
     case 'provider:list':
+    case 'prefs:claudeAuth':
       window.capabilitiesModule?.handleMessage(msg);
       break;
 

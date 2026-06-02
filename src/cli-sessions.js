@@ -5,6 +5,8 @@ const CliSession = require('./cli-session');
 const { readJSON, writeJSON, DATA_HOME, PACKAGE_ROOT } = require('./utils');
 
 const HISTORY_FILE = path.join(DATA_HOME, 'data', 'cli-history.json');
+const RECENT_DIRS_FILE = path.join(DATA_HOME, 'data', 'cli-recent-dirs.json');
+const MAX_RECENT_DIRS = 12;
 
 function deleteFullSessionData(store, sessId, cwd, isolated) {
   store.deleteSessionData(sessId);
@@ -30,6 +32,50 @@ function deleteFullSessionData(store, sessId, cwd, isolated) {
       }
     }
   } catch {}
+}
+
+// Roll the native Claude transcript (what `--resume` reads) back by one turn:
+// drop the last genuine user prompt and everything after it (its assistant
+// replies, tool calls/results, and trailing metadata). A .bak is kept in case
+// the rollback needs to be undone. Returns { ok, reason?, cutTimestamp? } where
+// cutTimestamp is the epoch-ms time of the removed user prompt, used to flag the
+// matching inspector interactions.
+function rollbackTranscript(cwd, sessId, isolated) {
+  if (!cwd || !sessId) return { ok: false, reason: 'no-session' };
+  const configDir = (isolated === true)
+    ? path.join(cwd, '.claude')
+    : path.join(os.homedir(), '.claude');
+  const slug = cwd.replace(/\//g, '-');
+  const jsonlPath = path.join(configDir, 'projects', slug, `${sessId}.jsonl`);
+
+  let raw;
+  try { raw = fs.readFileSync(jsonlPath, 'utf8'); } catch { return { ok: false, reason: 'no-transcript' }; }
+
+  const lines = raw.split('\n');
+  let targetIdx = -1;
+  let targetTs = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    let o;
+    try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (o.type !== 'user' || o.isMeta || o.isSidechain) continue;
+    const content = o.message && o.message.content;
+    const isPrompt = typeof content === 'string'
+      || (Array.isArray(content) && !content.some(b => b && b.type === 'tool_result'));
+    if (isPrompt) { targetIdx = i; targetTs = o.timestamp || null; }
+  }
+  if (targetIdx < 0) return { ok: false, reason: 'no-user-turn' };
+
+  let out = lines.slice(0, targetIdx).join('\n');
+  if (out.length && !out.endsWith('\n')) out += '\n';
+  try {
+    fs.writeFileSync(jsonlPath + '.bak', raw);
+    fs.writeFileSync(jsonlPath, out);
+  } catch (e) {
+    return { ok: false, reason: 'write-failed' };
+  }
+  const cutTimestamp = targetTs ? Date.parse(targetTs) : null;
+  return { ok: true, cutTimestamp: Number.isFinite(cutTimestamp) ? cutTimestamp : null };
 }
 
 class CliSessionManager {
@@ -100,7 +146,9 @@ class CliSessionManager {
   saveToHistory(entry) {
     const history = this._loadHistory();
     const sessId = entry.sessId || `sess-${Date.now()}`;
+    const existing = history.find(h => h.id === sessId);
     const deduped = history.filter(h => h.id !== sessId);
+    const now = Date.now();
     deduped.unshift({
       id: sessId,
       cwd: entry.cwd,
@@ -108,33 +156,92 @@ class CliSessionManager {
       settings: entry.settings || {},
       isolated: entry.isolated === true,
       autoMemory: entry.autoMemory === true,
-      savedAt: Date.now(),
+      startedAt: existing?.startedAt || now,
+      savedAt: now,
     });
     writeJSON(HISTORY_FILE, deduped);
+    this.recordRecentDir(entry.cwd);
   }
 
   getSavedSessions() {
     const history = this._loadHistory();
+    const runningIds = new Set();
+    for (const session of this.sessions.values()) {
+      if (session.sessId && session.running) runningIds.add(session.sessId);
+    }
     for (const entry of history) {
-      entry.jsonlSize = this._getJsonlSize(entry);
+      const stat = this._getJsonlStat(entry);
+      entry.jsonlSize = stat.size;
+      entry.lastInteractionAt = stat.mtime || entry.savedAt;
+      entry.lastEntrySize = stat.lastEntrySize;
+      if (!entry.startedAt) entry.startedAt = entry.savedAt;
+      entry.isRunning = runningIds.has(entry.id);
     }
     return history;
   }
 
-  _getJsonlSize(entry) {
+  _getJsonlStat(entry) {
     const configDir = (entry.isolated === true)
       ? path.join(entry.cwd, '.claude')
       : path.join(os.homedir(), '.claude');
     const slug = entry.cwd.replace(/\//g, '-');
     const jsonlPath = path.join(configDir, 'projects', slug, `${entry.id}.jsonl`);
     try {
-      return fs.statSync(jsonlPath).size;
+      const st = fs.statSync(jsonlPath);
+      return { size: st.size, mtime: st.mtimeMs, lastEntrySize: this._getLastEntrySize(jsonlPath, st.size) };
     } catch {
-      return 0;
+      return { size: 0, mtime: 0, lastEntrySize: 0 };
     }
   }
 
+  // Byte length of the final non-empty line (the last interaction) in a .jsonl session log.
+  _getLastEntrySize(jsonlPath, fileSize) {
+    if (!fileSize) return 0;
+    const READ = Math.min(fileSize, 256 * 1024);
+    let fd;
+    try {
+      fd = fs.openSync(jsonlPath, 'r');
+      const buf = Buffer.alloc(READ);
+      fs.readSync(fd, buf, 0, READ, fileSize - READ);
+      const text = buf.toString('utf8');
+      const lines = text.split('\n').filter(l => l.length > 0);
+      if (!lines.length) return 0;
+      return Buffer.byteLength(lines[lines.length - 1], 'utf8');
+    } catch {
+      return 0;
+    } finally {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+    }
+  }
+
+  // --- Recent directories ---
+
+  _loadRecentDirs() {
+    const dirs = readJSON(RECENT_DIRS_FILE, []);
+    return Array.isArray(dirs) ? dirs : [];
+  }
+
+  recordRecentDir(cwd) {
+    if (!cwd) return;
+    const now = Date.now();
+    const dirs = this._loadRecentDirs().filter(d => d.path !== cwd);
+    dirs.unshift({ path: cwd, lastUsedAt: now });
+    writeJSON(RECENT_DIRS_FILE, dirs.slice(0, MAX_RECENT_DIRS));
+  }
+
+  getRecentDirs() {
+    return this._loadRecentDirs();
+  }
+
+  deleteRecentDir(dirPath) {
+    const dirs = this._loadRecentDirs().filter(d => d.path !== dirPath);
+    writeJSON(RECENT_DIRS_FILE, dirs);
+  }
+
   deleteSavedSession(id) {
+    for (const session of this.sessions.values()) {
+      if (session.sessId === id && session.running) return;
+    }
     const history = this._loadHistory();
     const entry = history.find(s => s.id === id);
     const filtered = history.filter(s => s.id !== id);
@@ -288,6 +395,25 @@ class CliSessionManager {
     if (opts.prompt && opts.autoSubmit) {
       session.writeWhenReady(opts.prompt + '\n');
     }
+  }
+
+  // Roll a CLI session back one user/assistant turn: truncate the native
+  // transcript (what `--resume` reads) so the last turn no longer counts toward
+  // context, and flag the matching inspector interactions as deleted (kept for
+  // viewing, struck through in the timeline). The running process is left alone.
+  removeLastInteractionTurn(tabId) {
+    const session = this.sessions.get(tabId);
+    if (!session || !session.sessId || !session.cwd) return { ok: false, reason: 'no-session' };
+    const sessId = session.sessId;
+
+    const result = rollbackTranscript(session.cwd, sessId, session.isolated);
+    if (!result.ok) return result;
+
+    const deletedIds = this.store.markSessionTurnDeleted(sessId, result.cutTimestamp);
+    if (deletedIds.length) {
+      this.broadcaster.broadcast({ type: 'inspector:turnsDeleted', sessId, instanceId: `cli-${sessId}`, ids: deletedIds });
+    }
+    return { ok: true, deletedCount: deletedIds.length };
   }
 
   onExit(tabId, callback) {

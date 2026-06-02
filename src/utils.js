@@ -162,9 +162,12 @@ function prepareLocalConfigDir(cwd) {
  * (instance-scoped), isolated config dir, auto-memory toggle, and the
  * VISTACLAIR_* handshake vars. Shared by spawnClaude and spawnClaudePty.
  */
-function buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory }) {
+function buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory, anthropicApiKey }) {
   const env = { ...process.env, ...extraEnv };
   delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+  // Only set the API key when one is explicitly provided (headless / -p mode).
+  // When absent, leave env untouched so the spawn runs as-is (subscription OAuth).
+  if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
   if (proxyPort) {
     env.ANTHROPIC_BASE_URL = `http://localhost:${proxyPort}/i/${encodeURIComponent(instanceId)}`;
   } else {
@@ -196,9 +199,9 @@ function _trackProcess(instanceId, proc, sourceContext, cwd, autoMemory) {
   };
 }
 
-function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory }) {
+function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceId, sourceContext, extraEnv, isolated, autoMemory, anthropicApiKey }) {
   if (!instanceId) throw new Error('spawnClaude requires instanceId');
-  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory });
+  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory, anthropicApiKey });
   const proc = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   proc.on('exit', _trackProcess(instanceId, proc, sourceContext, cwd, autoMemory));
   return proc;
@@ -207,9 +210,9 @@ function spawnClaude(args, { cwd, proxyPort, dashboardPort, authToken, instanceI
 /**
  * Spawn `claude` in interactive PTY mode with the proxy URL injected.
  */
-function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated, autoMemory }) {
+function spawnClaudePty(args, { cwd, proxyPort, instanceId, sourceContext, cols, rows, dashboardPort, authToken, extraEnv, isolated, autoMemory, anthropicApiKey }) {
   if (!instanceId) throw new Error('spawnClaudePty requires instanceId');
-  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory });
+  const env = buildClaudeEnv({ cwd, proxyPort, dashboardPort, authToken, instanceId, extraEnv, isolated, autoMemory, anthropicApiKey });
 
   const ptyProc = getPty().spawn('claude', args, {
     name: 'xterm-256color',
@@ -287,10 +290,11 @@ function runClaudeArtifactTask({
   allowedTools,
   permissionMode = 'bypassPermissions',
   timeoutMs = 300000,
+  anthropicApiKey,
 }) {
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs({ permissionMode, allowedTools });
-    const proc = spawnClaude(args, { cwd, proxyPort, instanceId });
+    const proc = spawnClaude(args, { cwd, proxyPort, instanceId, anthropicApiKey });
 
     const timer = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch {}

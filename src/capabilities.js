@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { ensureDir, safeJoin } = require('./utils');
+const { ensureDir, safeJoin, readJSON, writeJSON } = require('./utils');
 const secretStore = require('./secret-store');
 
 const KNOWN_TOOLS = [
@@ -489,8 +489,106 @@ function hasClaudeSubscription() {
   try {
     const credsPath = path.join(os.homedir(), '.claude', '.credentials.json');
     const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-    return !!(creds?.claudeAiOauth?.accessToken);
+    const oauth = creds?.claudeAiOauth;
+    if (!oauth?.accessToken) return false;
+    // Treat an expired OAuth token as no active subscription so headless runs
+    // fall back to the API key (Anthropic disallows -p on a subscription anyway).
+    if (oauth.expiresAt && Date.now() >= oauth.expiresAt) return false;
+    return true;
   } catch { return false; }
+}
+
+// Resolve the Anthropic API key for headless (-p) spawns: the key pasted into
+// the Models page (encrypted secrets store) takes precedence, then a key already
+// present in the server's environment. Returns '' when none is configured.
+function getAnthropicApiKey(baseDir) {
+  try {
+    const key = readSecrets(baseDir)?.providerKeys?.anthropic;
+    if (key) return key;
+  } catch {}
+  return process.env.ANTHROPIC_API_KEY || '';
+}
+
+// --- App preferences (small global key-value store) ---
+// Persisted at DATA_HOME/data/app-prefs.json. Holds the user's Claude auth
+// choice and a record of whether a subscription has ever been detected.
+function appPrefsPath(baseDir) {
+  return path.join(baseDir, 'data', 'app-prefs.json');
+}
+
+function readAppPrefs(baseDir) {
+  const p = readJSON(appPrefsPath(baseDir), {});
+  return (p && typeof p === 'object') ? p : {};
+}
+
+function writeAppPrefs(baseDir, prefs) {
+  writeJSON(appPrefsPath(baseDir), prefs);
+}
+
+// The user's preferred auth for Claude calls. '' / unset means "not chosen yet".
+// Valid values: 'apikey' | 'subscription'.
+function getClaudeAuthPref(baseDir) {
+  const v = readAppPrefs(baseDir).claudeAuth;
+  return (v === 'apikey' || v === 'subscription') ? v : '';
+}
+
+function setClaudeAuthPref(baseDir, value) {
+  if (value !== 'apikey' && value !== 'subscription') return false;
+  const prefs = readAppPrefs(baseDir);
+  prefs.claudeAuth = value;
+  writeAppPrefs(baseDir, prefs);
+  return true;
+}
+
+// Record (once) that a subscription has been seen, so the UI can prompt the user
+// to choose a preference the first time after they run `/login`. Returns true if
+// the prefs were changed (i.e. this is a newly observed subscription).
+function noteSubscriptionState(baseDir) {
+  const active = hasClaudeSubscription();
+  const prefs = readAppPrefs(baseDir);
+  if (active && !prefs.subscriptionSeen) {
+    prefs.subscriptionSeen = true;
+    writeAppPrefs(baseDir, prefs);
+    return true;
+  }
+  return false;
+}
+
+// True when a subscription is active but the user has not yet chosen how they
+// want Claude calls authenticated. Drives the one-time "choose auth" prompt.
+function needsClaudeAuthChoice(baseDir) {
+  return hasClaudeSubscription() && !getClaudeAuthPref(baseDir);
+}
+
+// Decide which Anthropic API key (if any) a HEADLESS `claude -p` spawn should use.
+// Returns the key string to inject, or '' to run on the subscription OAuth.
+//
+// Default is the API key: Anthropic does NOT permit `claude -p` on a Max/Pro
+// subscription, and doing so may result in account bans. Subscription-headless
+// is therefore an explicit, gated opt-in.
+//
+// authMode (per-call flag from ai.prompt; undefined => default):
+//   'apikey' / default -> always use the API key
+//   'subscription'     -> ONLY honored when the stored user preference is also
+//                         'subscription' AND a subscription is active; otherwise
+//                         falls back to the API key.
+function resolveHeadlessAuth(baseDir, authMode) {
+  const apiKey = getAnthropicApiKey(baseDir);
+  if (authMode === 'subscription'
+      && getClaudeAuthPref(baseDir) === 'subscription'
+      && hasClaudeSubscription()) {
+    return ''; // run on subscription OAuth (opt-in feature)
+  }
+  return apiKey;
+}
+
+// Decide auth for INTERACTIVE (PTY) sessions. These always PREFER the
+// subscription when one is active (interactive use is allowed on a
+// subscription); the API key is only used as a fallback when there is no
+// active subscription. Returns the key string to inject, or '' for OAuth.
+function getInteractiveAuth(baseDir) {
+  if (hasClaudeSubscription()) return '';
+  return getAnthropicApiKey(baseDir);
 }
 
 function listModels(baseDir) {
@@ -1088,4 +1186,12 @@ module.exports = {
   readProxyRuleSource,
   isValidRuleId,
   hasClaudeSubscription,
+  getAnthropicApiKey,
+  resolveHeadlessAuth,
+  getInteractiveAuth,
+  readAppPrefs,
+  getClaudeAuthPref,
+  setClaudeAuthPref,
+  noteSubscriptionState,
+  needsClaudeAuthChoice,
 };

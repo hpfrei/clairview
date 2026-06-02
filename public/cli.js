@@ -392,17 +392,33 @@
         const parts = sess.cwd.replace(/\/+$/, '').split('/');
         const dirName = parts[parts.length - 1] || sess.cwd;
         const mappings = formatModelMap(sess.settings?.modelMap);
-        const age = formatAge(sess.savedAt);
+        const lastAt = sess.lastInteractionAt || sess.savedAt;
+        const age = formatAge(lastAt);
         const displayTitle = sess.title || dirName;
 
         const item = document.createElement('div');
         item.className = 'cli-new-menu-item cli-new-menu-session';
+        if (sess.isRunning) item.classList.add('cli-new-menu-session-running');
         item.title = sess.cwd;
 
         const info = document.createElement('div');
         info.className = 'cli-new-menu-session-info';
-        info.innerHTML = `<span class="cli-new-menu-dir">${escHtml(displayTitle)}</span><span class="cli-new-menu-age">${escHtml(age)}</span>`;
+        const runningTag = sess.isRunning ? '<span class="cli-new-menu-running">running</span>' : '';
+        info.innerHTML = `<span class="cli-new-menu-dir">${escHtml(displayTitle)}</span>${runningTag}<span class="cli-new-menu-age">${escHtml(age)}</span>`;
         item.appendChild(info);
+
+        const timeRow = document.createElement('div');
+        timeRow.className = 'cli-new-menu-time-row';
+        const startedEl = document.createElement('span');
+        startedEl.className = 'cli-new-menu-time';
+        startedEl.innerHTML = `<span class="cli-new-menu-time-lbl">started</span> ${escHtml(formatDateTime(sess.startedAt))}`;
+        timeRow.appendChild(startedEl);
+        const lastEl = document.createElement('span');
+        lastEl.className = 'cli-new-menu-time';
+        const lastSizeStr = sess.lastEntrySize ? ` · ${formatBytes(sess.lastEntrySize)}` : '';
+        lastEl.innerHTML = `<span class="cli-new-menu-time-lbl">last</span> ${escHtml(formatDateTime(lastAt))}${escHtml(lastSizeStr)}`;
+        timeRow.appendChild(lastEl);
+        item.appendChild(timeRow);
 
         const metaRow = document.createElement('div');
         metaRow.className = 'cli-new-menu-meta-row';
@@ -435,16 +451,18 @@
           item.appendChild(gaugeLine);
         }
 
-        const del = document.createElement('span');
-        del.className = 'cli-new-menu-del';
-        del.textContent = '×';
-        del.title = 'Remove';
-        del.addEventListener('click', (e) => {
-          e.stopPropagation();
-          sendWs({ type: 'cli:deleteSavedSession', sessionId: sess.id });
-          item.remove();
-        });
-        item.appendChild(del);
+        if (!sess.isRunning) {
+          const del = document.createElement('span');
+          del.className = 'cli-new-menu-del';
+          del.textContent = '×';
+          del.title = 'Remove';
+          del.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sendWs({ type: 'cli:deleteSavedSession', sessionId: sess.id });
+            item.remove();
+          });
+          item.appendChild(del);
+        }
 
         item.addEventListener('click', () => {
           closeNewMenu();
@@ -502,6 +520,24 @@
     return `${days}d ago`;
   }
 
+  function formatDateTime(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (sameDay) return time;
+    const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `${date} ${time}`;
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '0 B';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
   function contextGauge(bytes) {
     if (!bytes) return '';
     const MAX_BYTES = 300 * 1024;
@@ -530,10 +566,64 @@
     const newNameInput = document.getElementById('dirPickerNewName');
     const newOkBtn = document.getElementById('dirPickerNewOk');
     const newCancelBtn = document.getElementById('dirPickerNewCancel');
+    const recentEl = document.getElementById('dirPickerRecent');
+    const recentListEl = document.getElementById('dirPickerRecentList');
 
     let currentDir = '';
     let resolve;
     const promise = new Promise(r => { resolve = r; });
+
+    async function loadRecent() {
+      try {
+        const resp = await fetch('/api/recent-dirs');
+        const data = await resp.json();
+        renderRecent(data.dirs || []);
+      } catch {
+        renderRecent([]);
+      }
+    }
+
+    function renderRecent(dirs) {
+      recentListEl.innerHTML = '';
+      if (!dirs.length) { recentEl.classList.add('hidden'); return; }
+      recentEl.classList.remove('hidden');
+      dirs.forEach(d => {
+        const parts = d.path.replace(/\/+$/, '').split('/');
+        const name = parts[parts.length - 1] || d.path;
+        const row = document.createElement('div');
+        row.className = 'dir-picker-recent-item';
+        row.title = d.path;
+
+        const pick = document.createElement('div');
+        pick.className = 'dir-picker-recent-pick';
+        pick.innerHTML = `<span class="dir-picker-recent-icon">📁</span><span class="dir-picker-recent-name">${escHtml(name)}</span><span class="dir-picker-recent-path">${escHtml(d.path)}</span>`;
+        pick.addEventListener('click', () => {
+          cleanup();
+          resolve({ dir: d.path, isolated: isolatedCheckbox.checked, autoMemory: autoMemoryCheckbox.checked });
+        });
+        row.appendChild(pick);
+
+        const del = document.createElement('span');
+        del.className = 'dir-picker-recent-del';
+        del.textContent = '×';
+        del.title = 'Remove from recent';
+        del.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          row.remove();
+          try {
+            await fetch('/api/recent-dirs', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: d.path }),
+            });
+          } catch {}
+          if (!recentListEl.children.length) recentEl.classList.add('hidden');
+        });
+        row.appendChild(del);
+
+        recentListEl.appendChild(row);
+      });
+    }
 
     async function loadDir(dirPath) {
       listEl.innerHTML = '<div class="dir-picker-empty">Loading...</div>';
@@ -648,12 +738,31 @@
     newNameInput.addEventListener('keydown', onNewKey);
 
     modal.classList.remove('hidden');
+    loadRecent();
     loadDir('');
 
     return promise;
   }
 
   // --- Settings modal ---
+  // On a newly spawned CLI tab with no active Claude subscription, remind the user
+  // that running /login takes effect only in a NEW tab (this tab snapshotted creds
+  // at spawn time). Shown at most once per page load.
+  let _noSubToastShown = false;
+  function maybeNotifyNoSubscription() {
+    if (_noSubToastShown) return;
+    const ca = state.claudeAuth || {};
+    if (ca.hasSubscription) return;
+    _noSubToastShown = true;
+    window.dashboard.showToast?.({
+      sender: 'CLI',
+      title: 'No Claude subscription detected',
+      message: 'Run /login in this tab to activate your Max/Pro subscription, then open a NEW CLI tab for it to take effect (this session already started without it).',
+      level: 'warning',
+      duration: 12000,
+    });
+  }
+
   function openSettings(tabId) {
     if (!settingsModal) return;
     const tab = tabs.get(tabId);
@@ -662,8 +771,21 @@
     settingsModal.classList.remove('hidden');
   }
 
-  function populateSettings(tabId, settings, models, hasSubscription) {
+  function populateSettings(tabId, settings, models, hasSubscription, interactionsDir) {
     if (!settingsModal || settingsModal._tabId !== tabId) return;
+    settingsModal._interactionsDir = interactionsDir || null;
+    const openDirBtn = settingsModal.querySelector('.cli-settings-open-dir');
+    if (openDirBtn) openDirBtn.disabled = !interactionsDir;
+    const hint = document.getElementById('cliAuthHint');
+    if (hint) {
+      if (hasSubscription) {
+        hint.className = 'cli-auth-hint cli-auth-hint-ok';
+        hint.innerHTML = 'Claude subscription active &mdash; interactive sessions use it automatically.';
+      } else {
+        hint.className = 'cli-auth-hint cli-auth-hint-warn';
+        hint.innerHTML = 'No Claude subscription detected. Run <code>/login</code> in this CLI tab to activate your Max/Pro subscription for interactive sessions. Without a subscription, sessions fall back to the Anthropic API key.';
+      }
+    }
     const modelMap = settings.modelMap || { opus: null, sonnet: null, haiku: null };
     const hasAuth = (m) => !!m.apiKey || (hasSubscription && m.providerKey === 'anthropic');
     const isRetired = (m) => m.lifecycle === 'retired';
@@ -716,6 +838,25 @@
     el.addEventListener('click', () => settingsModal.classList.add('hidden'));
   });
   settingsModal?.querySelector('.cli-settings-save')?.addEventListener('click', saveSettings);
+
+  settingsModal?.querySelector('.cli-settings-open-dir')?.addEventListener('click', () => {
+    const dir = settingsModal._interactionsDir;
+    if (!dir) return;
+    const dirs = window.directoriesModule;
+    if (dirs?.openPath) {
+      switchView('directories');
+      dirs.openPath(dir);
+      settingsModal.classList.add('hidden');
+    }
+  });
+
+  settingsModal?.querySelector('.cli-settings-remove-turn')?.addEventListener('click', () => {
+    const tabId = settingsModal._tabId;
+    if (!tabId) return;
+    if (!confirm('Remove the last interaction turn? It will be struck through and no longer count toward the session context going forward. You can still click it to view the response.')) return;
+    sendWs({ type: 'cli:removeLastTurn', tabId });
+    settingsModal.classList.add('hidden');
+  });
 
   // --- Message handler ---
   function handleMessage(msg) {
@@ -818,17 +959,43 @@
           const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, isolated: pendingIsolated === true, autoMemory: pendingAutoMemory === true };
           if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
           sendWs(spawnMsg);
+          maybeNotifyNoSubscription();
         }
         break;
       }
       case 'cli:settingsData': {
-        populateSettings(msg.tabId, msg.settings || {}, msg.models || [], msg.hasSubscription);
+        populateSettings(msg.tabId, msg.settings || {}, msg.models || [], msg.hasSubscription, msg.interactionsDir);
         break;
       }
       case 'cli:savedSessions': {
         if (state._showNewMenu) {
           state._showNewMenu = false;
           showNewMenu(msg.sessions || []);
+        }
+        break;
+      }
+      case 'cli:lastTurnRemoved': {
+        if (msg.ok) {
+          if (msg.tabId) switchTab(msg.tabId);
+          window.dashboard.showToast?.({
+            sender: 'CLI',
+            title: 'Last interaction turn removed',
+            message: 'The last turn was rolled back and no longer counts toward context. You can continue in the CLI tab.',
+            level: 'success',
+          });
+        } else {
+          const reasons = {
+            'no-session': 'No running session for this tab.',
+            'no-transcript': 'No session transcript was found to roll back.',
+            'no-user-turn': 'No user turn was found to remove.',
+            'write-failed': 'Could not write the rolled-back transcript.',
+          };
+          window.dashboard.showToast?.({
+            sender: 'CLI',
+            title: 'Could not remove last turn',
+            message: reasons[msg.reason] || ('Failed' + (msg.reason ? ': ' + msg.reason : '') + '.'),
+            level: 'error',
+          });
         }
         break;
       }

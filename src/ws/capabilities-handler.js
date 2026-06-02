@@ -8,7 +8,7 @@ const { buildClaudeArgs, spawnClaude, createStreamJsonParser, describeClaudeErro
 
 const PROJECT_ROOT = DATA_HOME;
 
-const PREFIXES = ['skill:', 'agent:', 'hook:', 'model:', 'provider:'];
+const PREFIXES = ['skill:', 'agent:', 'hook:', 'model:', 'provider:', 'prefs:'];
 
 function handleMessage(ws, msg, bc) {
   const send = (data) => ws.send(JSON.stringify(data));
@@ -127,7 +127,31 @@ function handleMessage(ws, msg, bc) {
       }
       break;
     }
+
+    // --- Preferences (Claude auth choice) ---
+    case 'prefs:get':
+      caps.noteSubscriptionState(PROJECT_ROOT);
+      send({ type: 'prefs:claudeAuth', ...claudeAuthState() });
+      break;
+    case 'prefs:claudeAuth:set': {
+      const ok = caps.setClaudeAuthPref(PROJECT_ROOT, msg.value);
+      if (!ok) {
+        send({ type: 'chat:error', text: `Invalid Claude auth preference: ${msg.value}` });
+        break;
+      }
+      bc.broadcast({ type: 'prefs:claudeAuth', ...claudeAuthState() });
+      break;
+    }
   }
+}
+
+// Snapshot of the Claude auth decision for the frontend.
+function claudeAuthState() {
+  return {
+    pref: caps.getClaudeAuthPref(PROJECT_ROOT) || null,
+    hasSubscription: caps.hasClaudeSubscription(),
+    needsChoice: caps.needsClaudeAuthChoice(PROJECT_ROOT),
+  };
 }
 
 // Two-step model refresh: scan provider /models APIs, then have Claude update pricing.
@@ -150,6 +174,7 @@ function handleModelRefresh(ws, bc) {
       cwd: PROJECT_ROOT,
       proxyPort: bc._proxyPort,
       instanceId: `pricing-${Date.now()}`,
+      anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
     });
 
     let resultText = '';
