@@ -5614,9 +5614,6 @@ aside#timeline.parallel-mode {
   display: flex;
   flex-direction: column;
 }
-.tl-nodes-layer > .turn-group > .tool-entries {
-  margin-top: auto;
-}
 .tl-nodes-layer > .turn-group.subagent-group,
 .tl-nodes-layer > .turn-group.sidechain-group {
   margin-left: 0;

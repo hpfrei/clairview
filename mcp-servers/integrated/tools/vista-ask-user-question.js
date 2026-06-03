@@ -26,7 +26,7 @@ export default function register(server) {
       return new Promise((resolve) => {
         const timeout = setTimeout(() => {
           resolve({ content: [{ type: "text", text: JSON.stringify({ cancelled: true }) }] });
-        }, 600000);
+        }, 4 * 60 * 60 * 1000);
 
         const req = http.request({
           hostname: "127.0.0.1",
