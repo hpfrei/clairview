@@ -87,14 +87,21 @@ const proxyServer = http.createServer(proxyApp);
 
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
-dashboardApp.set('trust proxy', false);
+dashboardApp.set('trust proxy', 'loopback')  // proxies (nginx/ngrok/cloudflared) all run on localhost
 dashboardApp.use(express.json({ limit: '50mb' }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
 // Auth: cookie parser helper
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-function isLoopback(req) { return LOOPBACK.has(req.socket?.remoteAddress); }
-function isLoopbackSocket(socket) { return LOOPBACK.has(socket.remoteAddress); }
+// Truly-local: loopback socket AND not forwarded by a local proxy. Since nginx,
+// ngrok, and cloudflared all run on this host, the socket peer is always loopback;
+// the X-Forwarded-For header is what distinguishes proxied external traffic.
+function isLoopback(req) {
+  return LOOPBACK.has(req.socket?.remoteAddress) && !req.headers['x-forwarded-for'];
+}
+function isLoopbackSocket(socket, req) {
+  return LOOPBACK.has(socket.remoteAddress) && !req?.headers?.['x-forwarded-for'];
+}
 
 function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -304,7 +311,7 @@ store.setBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
-  const internal = isLoopbackSocket(socket) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN);
+  const internal = isLoopbackSocket(socket, req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN);
   const token = getTokenFromCookies(req.headers.cookie);
   if (!internal && !safeEqual(token, AUTH_TOKEN)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
