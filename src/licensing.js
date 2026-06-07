@@ -173,6 +173,20 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
     return parsed.toString();
   }
 
+  function npmInstall(dir) {
+    if (!fs.existsSync(path.join(dir, 'package.json'))) return;
+    const { execFileSync } = require('child_process');
+    console.log(`[pro] Installing dependencies in ${path.basename(dir)}...`);
+    try {
+      execFileSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'pipe', timeout: 600000 });
+      console.log(`[pro] Dependencies installed in ${path.basename(dir)}`);
+    } catch (err) {
+      const detail = (err.stderr || err.stdout || err.message || '').toString().trim().split('\n').slice(-5).join('\n');
+      console.error(`[pro] npm install failed in ${path.basename(dir)}: ${detail}`);
+      throw new Error(`Dependency install failed in ${path.basename(dir)}. Run 'npm install' there manually.`);
+    }
+  }
+
   function installPro(response, licenseKey) {
     const { execFileSync } = require('child_process');
     const creds = response.gitCredentials
@@ -191,6 +205,10 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
         throw err;
       }
     }
+    // Always install/refresh deps: a prior run may have cloned but failed here,
+    // leaving the module unloadable (Cannot find module ...) and the GUI stuck
+    // in a needsRestart loop.
+    npmInstall(proDir);
 
     if (response.extras) {
       for (const extra of response.extras) {
@@ -201,7 +219,13 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
             execFileSync('git', ['clone', extraUrl, extra.name], { cwd: dataHome, stdio: 'pipe', timeout: 60000 });
           } catch (e) {
             if (!extra.optional) throw e;
+            continue;
           }
+        }
+        try {
+          npmInstall(dir);
+        } catch (e) {
+          if (!extra.optional) throw e;
         }
       }
     }
@@ -342,6 +366,7 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
     validateLicense,
     fetchProductInfo,
     installPro,
+    npmInstall,
     checkProUpdates,
     createLicenseRouter,
     get proUpdateAvailable() { return proUpdateAvailable; },

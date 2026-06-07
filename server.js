@@ -25,7 +25,7 @@ if (isDev && !process.env.DEV_LICENCING_SERVER) {
   process.exit(1);
 }
 const licensing = createLicensing({ dataHome: DATA_HOME, isDev });
-const { proDir, validateLicense, fetchProductInfo, checkProUpdates } = licensing;
+const { proDir, validateLicense, fetchProductInfo, checkProUpdates, npmInstall } = licensing;
 const ruleHandler = require('./src/proxy-rule-handler');
 const createApiRouter = require('./src/api');
 
@@ -59,7 +59,21 @@ if (fs.existsSync(proDir)) {
   proLicenseValid = result.valid;
   if (proLicenseValid) {
     try { proModule = require('./vistaclair-pro'); } catch (e) {
-      console.error('  Pro: failed to load:', e.message);
+      // Self-heal installs that were cloned before deps were installed (older
+      // installer) or whose install was interrupted — otherwise the GUI loops
+      // on needsRestart forever (installed && licensed && !loaded).
+      if (e.code === 'MODULE_NOT_FOUND') {
+        console.error('  Pro: missing dependencies, installing...');
+        try {
+          npmInstall(proDir);
+          proModule = require('./vistaclair-pro');
+          console.log('  Pro: dependencies installed');
+        } catch (e2) {
+          console.error('  Pro: dependency install failed:', e2.message);
+        }
+      } else {
+        console.error('  Pro: failed to load:', e.message);
+      }
     }
   } else {
     console.log(`  Pro: license invalid (${result.reason}) — running in free mode`);
