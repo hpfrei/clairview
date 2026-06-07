@@ -120,7 +120,7 @@ class DashboardBroadcaster {
 
       // CLI tabs init — send tab metadata only; scrollback is loaded on demand
       if (this.cliSessionManager) {
-        ws.send(JSON.stringify({ type: 'cli:tabs', tabs: this.cliSessionManager.list() }));
+        ws.send(JSON.stringify({ type: 'cli:tabs', bootId: this.cliSessionManager.bootId, tabs: this.cliSessionManager.list() }));
       }
 
       ws.on('message', (data) => {

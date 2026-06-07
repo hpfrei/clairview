@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const CliSession = require('./cli-session');
 const { readJSON, writeJSON, DATA_HOME, PACKAGE_ROOT } = require('./utils');
 
@@ -86,6 +87,11 @@ class CliSessionManager {
     this.opts = opts;
     this.sessions = new Map();
     this._exitCallbacks = new Map();
+    // Per-process identity. Tab IDs embed this so they can never collide with
+    // tab IDs minted by a previous server process, and clients use it to detect
+    // a restart on any reconnect (even a seamless one without a page reload).
+    this.bootId = crypto.randomUUID().slice(0, 8);
+    this._tabSeq = 0;
   }
 
   _createSession(tabId) {
@@ -340,9 +346,14 @@ class CliSessionManager {
   }
 
   nextTabId() {
-    let i = 1;
-    while (this.sessions.has(`tab-${i}`)) i++;
-    return `tab-${i}`;
+    // Embed the per-process bootId and a monotonic counter so a tab ID is
+    // unique across restarts. A stale client tab from a previous process can
+    // therefore never be re-bound to a session in this process by key collision.
+    let id;
+    do {
+      id = `tab-${this.bootId}-${++this._tabSeq}`;
+    } while (this.sessions.has(id));
+    return id;
   }
 
   rename(tabId, title) {
@@ -421,7 +432,7 @@ class CliSessionManager {
   }
 
   broadcastTabs() {
-    this.broadcaster.broadcast({ type: 'cli:tabs', tabs: this.list() });
+    this.broadcaster.broadcast({ type: 'cli:tabs', bootId: this.bootId, tabs: this.list() });
   }
 }
 

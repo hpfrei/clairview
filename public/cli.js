@@ -24,6 +24,12 @@
   function _loadOpenTabs() {
     try { return JSON.parse(sessionStorage.getItem('cli-open-tabs') || 'null'); } catch { return null; }
   }
+  function _loadBootId() {
+    try { return sessionStorage.getItem('cli-server-boot-id') || null; } catch { return null; }
+  }
+  function _saveBootId(id) {
+    try { if (id) sessionStorage.setItem('cli-server-boot-id', id); } catch {}
+  }
 
   function getTheme() {
     return { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#a0a0ff', selectionBackground: 'rgba(160,160,255,0.3)' };
@@ -771,6 +777,14 @@
     settingsModal.classList.remove('hidden');
   }
 
+  // Compact "$in/$out per 1M tokens" tag for a model option, or '' if unpriced.
+  function fmtPrice(m) {
+    const inC = m.inputCostPerMTok, outC = m.outputCostPerMTok;
+    if (typeof inC !== 'number' && typeof outC !== 'number') return '';
+    const f = (v) => typeof v === 'number' ? `$${v % 1 === 0 ? v : v.toFixed(2)}` : '$?';
+    return `${f(inC)}/${f(outC)} per 1M`;
+  }
+
   function populateSettings(tabId, settings, models, hasSubscription, interactionsDir) {
     if (!settingsModal || settingsModal._tabId !== tabId) return;
     settingsModal._interactionsDir = interactionsDir || null;
@@ -807,14 +821,20 @@
         opt.value = m.name;
         let label = m.label || m.name;
         if (m.isNew) label += ' (new)';
-        if (isRetired(m)) { opt.disabled = true; label += ' (retired)'; }
-        else if (m.lifecycle === 'deprecated') label += m.retiresAt ? ` (retiring ${m.retiresAt})` : ' (deprecated)';
-        else if (!hasAuth(m)) { opt.disabled = true; label += ' (no key)'; }
+        const price = fmtPrice(m);
+        if (price) label += `  [${price}]`;
+        if (isRetired(m)) { opt.disabled = true; label += ' — unavailable (retired)'; }
+        else if (m.disabled) { opt.disabled = true; label += ' — unavailable (disabled)'; }
+        else if (!hasAuth(m)) { opt.disabled = true; label += ' — unavailable (no API key)'; }
+        else if (m.lifecycle === 'deprecated') label += m.retiresAt ? ` (deprecated, retiring ${m.retiresAt})` : ' (deprecated)';
         opt.textContent = label;
         if (modelMap[family] === m.name) opt.selected = true;
         sel.appendChild(opt);
       });
     });
+
+    const showThinking = settingsModal.querySelector('[data-setting="showThinking"]');
+    if (showThinking) showThinking.checked = !!settings.showThinking;
   }
 
   function saveSettings() {
@@ -826,7 +846,8 @@
       const sel = settingsModal.querySelector(`[data-map="${family}"]`);
       modelMap[family] = sel?.value || null;
     });
-    const settings = { modelMap };
+    const showThinking = settingsModal.querySelector('[data-setting="showThinking"]');
+    const settings = { modelMap, showThinking: !!showThinking?.checked };
     if (tab) tab.settings = { ...tab.settings, ...settings };
     sendWs({ type: 'cli:settings', tabId, settings });
     settingsModal.classList.add('hidden');
@@ -908,7 +929,7 @@
         break;
       }
       case 'cli:tabs': {
-        handleTabList(msg.tabs || []);
+        handleTabList(msg.tabs || [], msg.bootId || null);
         break;
       }
       case 'cli:newTab': {
@@ -1005,7 +1026,44 @@
     }
   }
 
-  function handleTabList(serverTabs) {
+  // Queue saved sessions for staggered re-spawn (resume by sessId). Used by both
+  // page-reload-after-restart and seamless-reconnect-after-restart recovery.
+  function _beginRestartRecovery(entries) {
+    _respawnQueue.length = 0;
+    for (const entry of (entries || [])) {
+      if (!entry || !entry.cwd || !entry.sessId) continue;
+      _respawnQueue.push(entry);
+    }
+    if (_respawnQueue.length > 0) sendWs({ type: 'cli:newTab' });
+  }
+
+  // Dispose all client-side terminals without telling the server (it no longer
+  // has these sessions) and without clearing inspector instances (the sessions
+  // are about to be resumed by sessId, so their history must survive).
+  function _teardownAllTabsLocal() {
+    for (const [tabId, tab] of tabs) {
+      dismissAskOverlay(tabId);
+      _scrollbackLoaded.delete(tabId);
+      try { tab.terminal.dispose(); } catch {}
+      tab._resizeObserver?.disconnect();
+      tab.wrap?.remove();
+    }
+    tabs.clear();
+    activeTabId = null;
+    for (const timer of _pendingRemoval.values()) clearTimeout(timer);
+    _pendingRemoval.clear();
+  }
+
+  function handleTabList(serverTabs, bootId) {
+    // A changed bootId means we are talking to a different server process than
+    // the one we last synced with — i.e. the server restarted. This is detected
+    // on ANY reconnect, including a seamless one with no page reload, which the
+    // _firstTabSync guard alone would miss (and which caused stale tabs to be
+    // re-bound to unrelated new sessions).
+    const knownBootId = _loadBootId();
+    const restarted = !!(knownBootId && bootId && knownBootId !== bootId);
+    if (bootId) _saveBootId(bootId);
+
     if (_firstTabSync) {
       _firstTabSync = false;
       const prev = _loadOpenTabs();
@@ -1017,25 +1075,30 @@
             sendWs({ type: 'cli:closeTab', tabId: st.tabId });
           }
         }
-        serverTabs = serverTabs.filter(st => prevSet.has(st.tabId));
+        const ourServerTabs = serverTabs.filter(st => prevSet.has(st.tabId));
 
-        if (serverTabs.length > 0) {
+        if (ourServerTabs.length > 0) {
           // Server still has our tabs (page refresh without server restart)
-          for (const st of serverTabs) {
+          for (const st of ourServerTabs) {
             if (!tabs.has(st.tabId)) createTab(st.tabId);
           }
+          serverTabs = ourServerTabs;
         } else {
-          // Server has none of our tabs (server restarted) — stagger re-spawns
-          for (const entry of prev) {
-            if (!entry.cwd || !entry.sessId) continue;
-            _respawnQueue.push(entry);
-          }
-          if (_respawnQueue.length > 0) {
-            sendWs({ type: 'cli:newTab' });
-          }
+          // Server has none of our tabs (server restarted) — resume from sessId
+          _beginRestartRecovery(prev);
           return;
         }
       }
+    } else if (restarted) {
+      // Seamless reconnect to a restarted server (no page reload). Tear down the
+      // now-orphaned terminals and resume each session by its sessId so a stale
+      // tab can never display another session's content.
+      const source = tabs.size > 0
+        ? Array.from(tabs.entries()).map(([tabId, t]) => ({ tabId, cwd: t.cwd, sessId: t.sessId, title: t.title, settings: t.settings, isolated: t.isolated, autoMemory: t.autoMemory }))
+        : (_loadOpenTabs() || []);
+      _teardownAllTabsLocal();
+      _beginRestartRecovery(source);
+      return;
     }
 
     const serverIds = new Set(serverTabs.map(t => t.tabId));

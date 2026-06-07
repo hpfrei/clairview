@@ -63,7 +63,7 @@ const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
 // Maps providerKey → adapter name (used for model scanning and auto-adding)
 const PROVIDER_ADAPTER_MAP = {
   anthropic: 'anthropic',
-  openai: 'openai',
+  openai: 'openai-responses',
   google: 'gemini',
   deepseek: 'openai',
   moonshot: 'openai',
@@ -507,6 +507,18 @@ function getAnthropicApiKey(baseDir) {
     if (key) return key;
   } catch {}
   return process.env.ANTHROPIC_API_KEY || '';
+}
+
+// Resolve a provider's API key from the encrypted secrets store (Models page).
+// Used by app-bridge to give apps first-class audio/image capabilities (OpenAI,
+// Google) without per-app key setup. Returns '' when none is configured.
+function getProviderKey(baseDir, providerKey) {
+  if (!providerKey) return '';
+  try {
+    const key = readSecrets(baseDir)?.providerKeys?.[providerKey];
+    if (key) return key;
+  } catch {}
+  return '';
 }
 
 // --- App preferences (small global key-value store) ---
@@ -1187,6 +1199,7 @@ module.exports = {
   isValidRuleId,
   hasClaudeSubscription,
   getAnthropicApiKey,
+  getProviderKey,
   resolveHeadlessAuth,
   getInteractiveAuth,
   readAppPrefs,

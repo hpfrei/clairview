@@ -356,6 +356,13 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     // --- Tab-level model override (applies before global proxy rules) ---
     const { tabModelDef } = resolveTabModel(body, cliSettings);
 
+    // --- Tab-level "show thinking" (Opus 4.7/4.8 omit thinking text by
+    // default; opt in to summarized reasoning so the CLI can render it) ---
+    if (cliSettings && cliSettings.showThinking && body.thinking && typeof body.thinking === 'object'
+        && body.thinking.type !== 'disabled' && !body.thinking.display) {
+      body.thinking.display = 'summarized';
+    }
+
     const instCtx = getInstanceContext(req.instanceId);
     const interaction = {
       id: generateId(),

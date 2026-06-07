@@ -11,7 +11,8 @@
 //     contractVersion, id, productSlug,
 //     router,                 // express.Router mounted after auth
 //     clientModules: [{ styles, scripts }],
-//     authExemptPaths: [...],  // public route prefixes (e.g. OAuth callbacks)
+//     authExemptPaths: [...],     // public route prefixes (e.g. OAuth callbacks)
+//     authExemptPatterns: [...],  // public route RegExps (e.g. per-app telegram mini-app assets)
 //     handleUpgrade(req, socket, head) -> bool,
 //     shutdown(), update(),    // optional lifecycle hooks
 //     _module,                 // raw module handle (licensing/lifecycle)
@@ -52,6 +53,9 @@ function isAuthExempt(reqPath) {
   for (const a of addons) {
     for (const p of a.authExemptPaths || []) {
       if (reqPath === p || reqPath.startsWith(p + '/')) return true;
+    }
+    for (const rx of a.authExemptPatterns || []) {
+      try { if (rx.test(reqPath)) return true; } catch {}
     }
   }
   return false;

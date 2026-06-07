@@ -338,6 +338,7 @@ const addonCtx = {
   cliSessionManager, spawnClaude, buildClaudeArgs,
   secretStore: require('./src/secret-store'),
   resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
+  resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
 };
 if (proModule) {
   try {

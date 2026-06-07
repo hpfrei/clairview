@@ -222,13 +222,13 @@ class OpenAIProvider extends BaseProvider {
 
   _injectWebSearch(openaiBody, tools, modelDef) {
     switch (modelDef.providerKey) {
-      case 'openai':
-        tools.push({ type: 'web_search' });
-        break;
       case 'moonshot':
         tools.push({ type: 'builtin_function', function: { name: '$web_search' } });
         break;
-      // deepseek, ollama, custom: silently dropped (no native web search support)
+      // openai: the { type: 'web_search' } built-in tool is only valid on the
+      // Responses API; this adapter uses /chat/completions, which rejects it
+      // (400: supported types are 'function' and 'custom'). Drop it silently.
+      // deepseek, ollama, custom: no native web search support — also dropped.
     }
   }
 
