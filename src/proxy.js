@@ -185,6 +185,26 @@ function estimateInputTokens(body) {
   return Math.max(1, Math.ceil(chars / 4));
 }
 
+// Resolve body.model against the model registry for callers that don't use a
+// CLI tab modelMap — e.g. app ai.prompt spawns (`claude -p --model <name>`),
+// which set body.model to a registry name/id but carry no tab override. Returns
+// a non-Anthropic modelDef to route through the translation path, or null to
+// fall through to the Anthropic passthrough. Anthropic (claude-*) models always
+// passthrough, so they short-circuit before any disk read to keep the CLI hot
+// path fast.
+function resolveRegistryModel(modelRef) {
+  if (!modelRef || /^claude-/i.test(modelRef)) return null;
+  let model;
+  try {
+    const models = caps.listModels(PROJECT_ROOT);
+    model = models.find(m => m.name === modelRef) || models.find(m => m.modelId === modelRef);
+  } catch { return null; }
+  if (!model) return null;
+  if (model.lifecycle === 'retired' || model.disabled) return null;
+  if (model.providerKey === 'anthropic' || model.provider === 'anthropic') return null;
+  return model;
+}
+
 function sendProxyError(res, err) {
   if (res.headersSent) {
     try { res.end(); } catch {}
@@ -440,8 +460,10 @@ function createProxyRouter(store, broadcaster, targetUrl) {
       interaction: sanitizeForDashboard(interaction),
     });
 
-    // --- Check for model translation (tab-level non-Anthropic override) ---
-    const modelDef = tabModelDef;
+    // --- Check for model translation ---
+    // Tab-level modelMap override wins; otherwise resolve body.model against the
+    // registry so non-CLI callers (app ai.prompt) reach the right provider too.
+    const modelDef = tabModelDef || resolveRegistryModel(body.model);
     const provider = modelDef ? getProvider(modelDef.provider) : null;
 
     if (modelDef && !provider && modelDef.provider !== 'anthropic') {
@@ -773,7 +795,7 @@ function createProxyRouter(store, broadcaster, targetUrl) {
     if (isCliInstance && createProxyRouter._cliSettingsGetter) {
       cliSettings = createProxyRouter._cliSettingsGetter(req.instanceId);
     }
-    const { tabModelDef } = resolveTabModel(body, cliSettings);
+    const tabModelDef = resolveTabModel(body, cliSettings).tabModelDef || resolveRegistryModel(body.model);
 
     // Apply proxy rules (tool filtering, etc.)
     for (const rule of getEnabledRules()) {

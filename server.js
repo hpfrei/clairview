@@ -360,6 +360,12 @@ const addonCtx = {
   secretStore: require('./src/secret-store'),
   resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
   resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
+  listModels: () => caps.listModels(DATA_HOME),
+  claudeAuthInfo: () => ({
+    hasSubscription: caps.hasClaudeSubscription(),
+    pref: caps.getClaudeAuthPref(DATA_HOME),
+    needsChoice: caps.needsClaudeAuthChoice(DATA_HOME),
+  }),
 };
 if (proModule) {
   try {
