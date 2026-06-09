@@ -240,19 +240,38 @@ dashboardApp.post('/api/ask', async (req, res) => {
   const { instanceId, formData, questions } = req.body;
   const askId = `ask-${Date.now()}-${++askSeq}`;
   const ctx = instanceId ? getInstanceContext(instanceId) : null;
-  const tabId = ctx?.tabId || '__default__';
+  const tabId = ctx?.tabId || null;
+  const session = instanceId ? cliSessionManager.getByInstanceId(instanceId) : null;
+  const title = session?.title || null;
+  const cwd = session?.cwd || null;
 
   const promise = new Promise((resolve, reject) => {
     pendingQuestions.set(askId, { formData: formData || {}, questions: questions || [], resolve, reject, ctx });
   });
 
+  // If the MCP tool gives up (4h timeout) it destroys the socket; reject the
+  // pending question and tell clients to close the stale modal. Listen on the
+  // response, not the request: req 'close' fires as soon as the body is read.
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    const pending = pendingQuestions.get(askId);
+    if (pending) {
+      pendingQuestions.delete(askId);
+      if (pending.reject) pending.reject(new Error('Question timed out'));
+      broadcaster.broadcast({ type: 'ask:timeout', askId });
+    }
+  });
+
   broadcaster.broadcast({
     type: 'ask:question',
+    askId,
     toolUseIds: [askId],
     forms: [{ toolUseId: askId, formData: formData || {}, questions: questions || [] }],
-    ...(tabId !== '__default__' ? { tabId } : {}),
+    title,
+    cwd,
+    ...(tabId ? { tabId } : {}),
   });
-  console.log(`[api/ask] Broadcasting ask:question askId=${askId} tabId=${tabId}`);
+  console.log(`[api/ask] Broadcasting ask:question askId=${askId} tabId=${tabId || '(none)'}`);
 
   try {
     const answer = await promise;

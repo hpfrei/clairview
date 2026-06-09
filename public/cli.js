@@ -8,7 +8,8 @@
 
   const tabs = new Map();
   let activeTabId = null;
-  const pendingAskOverlays = new Map();
+  const pendingAskOverlays = new Map(); // askId -> { overlayEl, tabId }
+  let _askCascade = 0;
   let _firstTabSync = true;
   const _respawnQueue = [];
   const _scrollbackLoaded = new Set();
@@ -233,7 +234,8 @@
 
     for (const [tabId, tab] of tabs) {
       const btn = document.createElement('button');
-      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (pendingAskOverlays.has(tabId) ? ' has-pending-ask' : '');
+      const hasPendingAsk = Array.from(pendingAskOverlays.values()).some(p => p.tabId === tabId);
+      btn.className = 'view-tab' + (tabId === activeTabId ? ' active' : '') + (hasPendingAsk ? ' has-pending-ask' : '');
       btn.dataset.tabId = tabId;
 
       const label = document.createElement('span');
@@ -332,7 +334,7 @@
   }
 
   function removeTab(tabId) {
-    dismissAskOverlay(tabId);
+    dismissAskModalsForTab(tabId);
     _scrollbackLoaded.delete(tabId);
     const tab = tabs.get(tabId);
     if (tab) {
@@ -1042,7 +1044,7 @@
   // are about to be resumed by sessId, so their history must survive).
   function _teardownAllTabsLocal() {
     for (const [tabId, tab] of tabs) {
-      dismissAskOverlay(tabId);
+      dismissAskModalsForTab(tabId);
       _scrollbackLoaded.delete(tabId);
       try { tab.terminal.dispose(); } catch {}
       tab._resizeObserver?.disconnect();
@@ -1142,15 +1144,78 @@
 
   // --- AskUserQuestion overlay ---
 
-  function showAskOverlay(tabId, forms) {
-    const tab = tabs.get(tabId);
-    if (!tab) return;
-    dismissAskOverlay(tabId);
+  function getAskLayer() {
+    let layer = document.getElementById('ask-modal-layer');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = 'ask-modal-layer';
+      document.body.appendChild(layer);
+    }
+    return layer;
+  }
 
-    const overlay = document.createElement('div');
-    overlay.className = 'cli-ask-overlay';
+  function makeAskDraggable(modal, handle) {
+    let startX = 0, startY = 0, baseLeft = 0, baseTop = 0, dragging = false;
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button, input, textarea, select, a')) return;
+      dragging = true;
+      const rect = modal.getBoundingClientRect();
+      baseLeft = rect.left;
+      baseTop = rect.top;
+      startX = e.clientX;
+      startY = e.clientY;
+      modal.style.left = baseLeft + 'px';
+      modal.style.top = baseTop + 'px';
+      modal.style.transform = 'none';
+      handle.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const maxLeft = window.innerWidth - 60;
+      const maxTop = window.innerHeight - 40;
+      const left = Math.min(Math.max(0, baseLeft + (e.clientX - startX)), maxLeft);
+      const top = Math.min(Math.max(0, baseTop + (e.clientY - startY)), maxTop);
+      modal.style.left = left + 'px';
+      modal.style.top = top + 'px';
+    });
+    const end = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      try { handle.releasePointerCapture(e.pointerId); } catch {}
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  function showAskModal(askId, forms, meta) {
+    dismissAskModal(askId);
+    meta = meta || {};
+
+    const layer = getAskLayer();
     const modal = document.createElement('div');
     modal.className = 'cli-ask-modal';
+
+    // Cascade each new modal so multiple are all visible.
+    const offset = (_askCascade++ % 6) * 28;
+    modal.style.left = `calc(50% + ${offset}px)`;
+    modal.style.top = `${80 + offset}px`;
+
+    const header = document.createElement('div');
+    header.className = 'cli-ask-header';
+    const folder = meta.cwd ? meta.cwd.split('/').filter(Boolean).pop() : null;
+    const titleText = meta.title || folder || 'Question';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'cli-ask-header-title';
+    titleEl.textContent = titleText;
+    header.appendChild(titleEl);
+    if (meta.cwd) {
+      const pathEl = document.createElement('span');
+      pathEl.className = 'cli-ask-header-path';
+      pathEl.textContent = meta.cwd;
+      header.appendChild(pathEl);
+    }
+    modal.appendChild(header);
 
     const isSingle = forms.length === 1;
     const binders = [];
@@ -1184,16 +1249,17 @@
         panel.className = 'cli-ask-form-panel' + (idx === 0 ? ' active' : '');
         panel.classList.add('ask-external-submit');
       }
+      if (isSingle && !f.formData.cancelLabel) f.formData.cancelLabel = 'Cancel';
       panel.innerHTML = askFormBuildHTML(f.formData);
 
       const binder = askFormBind(panel, f.formData, isSingle ? {
         onSubmit: (answer, files) => {
           sendWs({ type: 'ask:answer', toolUseId: f.toolUseId, answer, files });
-          dismissAskOverlay(tabId);
+          dismissAskModal(askId);
         },
         onCancel: () => {
           sendWs({ type: 'ask:answer', toolUseId: f.toolUseId, answer: [{ id: '_cancelled', question: '', answer: 'cancelled' }] });
-          dismissAskOverlay(tabId);
+          dismissAskModal(askId);
         },
       } : {
         onSubmit: () => {},
@@ -1216,7 +1282,7 @@
           binder.disableForm();
           sendWs({ type: 'ask:answer', toolUseId: form.toolUseId, answer: [{ id: '_cancelled', question: '', answer: 'cancelled' }] });
         }
-        dismissAskOverlay(tabId);
+        dismissAskModal(askId);
       });
       footer.appendChild(cancelBtn);
 
@@ -1242,45 +1308,48 @@
           sendWs({ type: 'ask:answer', toolUseId: form.toolUseId, answer, files });
           binder.disableForm();
         }
-        dismissAskOverlay(tabId);
+        dismissAskModal(askId);
       });
       footer.appendChild(submitBtn);
       modal.appendChild(footer);
     }
 
-    overlay.appendChild(modal);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.querySelector('.cli-ask-modal')?.scrollTo(0, 0);
-    });
-    tab.wrap.appendChild(overlay);
-    pendingAskOverlays.set(tabId, { overlayEl: overlay });
+    makeAskDraggable(modal, header);
+    layer.appendChild(modal);
+    pendingAskOverlays.set(askId, { overlayEl: modal, tabId: meta.tabId || null });
     renderTabStrip();
   }
 
-  function dismissAskOverlay(tabId) {
-    const pending = pendingAskOverlays.get(tabId);
+  function dismissAskModal(askId) {
+    const pending = pendingAskOverlays.get(askId);
     if (pending) {
       pending.overlayEl.remove();
-      pendingAskOverlays.delete(tabId);
+      pendingAskOverlays.delete(askId);
       renderTabStrip();
     }
+  }
+
+  function dismissAskModalsForTab(tabId) {
+    for (const [askId, pending] of pendingAskOverlays) {
+      if (pending.tabId === tabId) {
+        pending.overlayEl.remove();
+        pendingAskOverlays.delete(askId);
+      }
+    }
+    renderTabStrip();
   }
 
   function handleAskMessage(msg) {
     switch (msg.type) {
       case 'ask:question': {
-        const tabId = msg.tabId;
-        if (!tabId || !tabs.has(tabId)) return;
-        showAskOverlay(tabId, msg.forms || []);
-        if (activeTabId !== tabId) switchTab(tabId);
-        // Also switch to the CLI view if we're on another view
-        if (typeof switchView === 'function') switchView('claude');
-        else document.querySelector('[data-view="claude"]')?.click();
+        const askId = msg.askId || (msg.toolUseIds && msg.toolUseIds[0]);
+        if (!askId) return;
+        showAskModal(askId, msg.forms || [], { title: msg.title, cwd: msg.cwd, tabId: msg.tabId });
         break;
       }
       case 'ask:answered':
       case 'ask:timeout': {
-        if (msg.tabId) dismissAskOverlay(msg.tabId);
+        if (msg.askId) dismissAskModal(msg.askId);
         break;
       }
     }

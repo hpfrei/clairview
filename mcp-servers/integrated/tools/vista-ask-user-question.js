@@ -25,6 +25,9 @@ export default function register(server) {
 
       return new Promise((resolve) => {
         const timeout = setTimeout(() => {
+          // Destroy the socket so the dashboard's req.on('close') fires and it
+          // can broadcast ask:timeout to dismiss the stale modal.
+          try { req.destroy(); } catch {}
           resolve({ content: [{ type: "text", text: JSON.stringify({ cancelled: true }) }] });
         }, 4 * 60 * 60 * 1000);
 

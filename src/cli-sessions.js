@@ -384,6 +384,13 @@ class CliSessionManager {
     return null;
   }
 
+  getByInstanceId(instanceId) {
+    for (const session of this.sessions.values()) {
+      if (session.instanceId === instanceId) return session;
+    }
+    return null;
+  }
+
   launchSession(tabId, opts = {}) {
     const session = this.getOrCreate(tabId);
     if (opts.title !== undefined) session.title = opts.title;

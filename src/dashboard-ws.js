@@ -188,6 +188,7 @@ class DashboardBroadcaster {
                 answer = processUploadedFiles(msg.toolUseId, msg.files, answer);
               }
               pending.resolve(answer);
+              this.broadcast({ type: 'ask:answered', askId: msg.toolUseId });
             }
           // --- MCP Tools ---
           } else if (msg.type === 'mcp:bridge:call') {
