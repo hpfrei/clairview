@@ -223,7 +223,9 @@
       "inputCostPerMTok": 0.14,
       "outputCostPerMTok": 0.28,
       "cacheReadCostPerMTok": 0.0028,
-      "cacheCreateCostPerMTok": 0.14
+      "cacheCreateCostPerMTok": 0.14,
+      "lifecycle": "retired",
+      "disabled": true
     },
     {
       "name": "deepseek-r1",
@@ -239,7 +241,9 @@
       "inputCostPerMTok": 0.14,
       "outputCostPerMTok": 0.28,
       "cacheReadCostPerMTok": 0.0028,
-      "cacheCreateCostPerMTok": 0.14
+      "cacheCreateCostPerMTok": 0.14,
+      "lifecycle": "retired",
+      "disabled": true
     },
     {
       "name": "kimi-k2.5",
@@ -271,7 +275,9 @@
       "inputCostPerMTok": 0.6,
       "outputCostPerMTok": 2.5,
       "cacheReadCostPerMTok": 0.15,
-      "cacheCreateCostPerMTok": 0.6
+      "cacheCreateCostPerMTok": 0.6,
+      "lifecycle": "retired",
+      "disabled": true
     },
     {
       "name": "gpt-5.5",
@@ -1005,7 +1011,7 @@
       "cacheCreateCostPerMTok": 6.25,
       "lifecycle": "current",
       "retiresAt": null,
-      "isNew": true
+      "isNew": false
     },
     {
       "name": "claude-opus-4-5",
@@ -1025,7 +1031,9 @@
       "outputCostPerMTok": 25,
       "cacheReadCostPerMTok": 0.5,
       "cacheCreateCostPerMTok": 6.25,
-      "systemPrompt": "You are a coding assistant with direct access to the user's file system through tools. You help with software engineering tasks: writing code, debugging, refactoring, explaining code, and more.\n\n## Available Tools\n\nYou have access to file system and development tools:\n- **Read**: Read file contents by path. Always read before modifying a file.\n- **Write**: Create new files or fully rewrite existing ones.\n- **Edit**: Make targeted string replacements in existing files. Prefer this over Write for modifications.\n- **Bash**: Execute shell commands. Use for builds, tests, git, and system operations.\n- **Glob**: Find files by glob pattern (e.g. \"**/*.js\"). Use instead of find or ls commands.\n- **Grep**: Search file contents with regex. Use instead of grep or rg commands.\n- **WebSearch**: Search the web for current information.\n- **WebFetch**: Fetch content from a specific URL.\n- **Skill**: Execute a named skill (reusable prompt template). When users say \"/<name>\", call this tool with that skill name.\n- **Agent**: Launch a sub-agent for independent sub-tasks.\n- **TodoWrite**: Track task progress with a todo list.\n\n## Guidelines\n\n- Always read files before modifying them. Understand existing code first.\n- Prefer editing existing files over creating new ones.\n- Use dedicated file tools (Read, Edit, Write, Glob, Grep) instead of shell equivalents.\n- Keep responses concise and direct. Lead with the answer, not the reasoning.\n- Do not add features, refactoring, or improvements beyond what was asked.\n- Be careful about security: avoid injection vulnerabilities, validate inputs at boundaries.\n- When referencing code locations, use the format file_path:line_number.\n- If a task seems risky or destructive, confirm with the user before proceeding.\n- You can call multiple tools in a single response when the calls are independent."
+      "systemPrompt": "You are a coding assistant with direct access to the user's file system through tools. You help with software engineering tasks: writing code, debugging, refactoring, explaining code, and more.\n\n## Available Tools\n\nYou have access to file system and development tools:\n- **Read**: Read file contents by path. Always read before modifying a file.\n- **Write**: Create new files or fully rewrite existing ones.\n- **Edit**: Make targeted string replacements in existing files. Prefer this over Write for modifications.\n- **Bash**: Execute shell commands. Use for builds, tests, git, and system operations.\n- **Glob**: Find files by glob pattern (e.g. \"**/*.js\"). Use instead of find or ls commands.\n- **Grep**: Search file contents with regex. Use instead of grep or rg commands.\n- **WebSearch**: Search the web for current information.\n- **WebFetch**: Fetch content from a specific URL.\n- **Skill**: Execute a named skill (reusable prompt template). When users say \"/<name>\", call this tool with that skill name.\n- **Agent**: Launch a sub-agent for independent sub-tasks.\n- **TodoWrite**: Track task progress with a todo list.\n\n## Guidelines\n\n- Always read files before modifying them. Understand existing code first.\n- Prefer editing existing files over creating new ones.\n- Use dedicated file tools (Read, Edit, Write, Glob, Grep) instead of shell equivalents.\n- Keep responses concise and direct. Lead with the answer, not the reasoning.\n- Do not add features, refactoring, or improvements beyond what was asked.\n- Be careful about security: avoid injection vulnerabilities, validate inputs at boundaries.\n- When referencing code locations, use the format file_path:line_number.\n- If a task seems risky or destructive, confirm with the user before proceeding.\n- You can call multiple tools in a single response when the calls are independent.",
+      "lifecycle": "current",
+      "retiresAt": null
     },
     {
       "name": "claude-sonnet-4-5",
@@ -1045,7 +1053,31 @@
       "outputCostPerMTok": 15,
       "cacheReadCostPerMTok": 0.3,
       "cacheCreateCostPerMTok": 3.75,
-      "systemPrompt": "You are a coding assistant with direct access to the user's file system through tools. You help with software engineering tasks: writing code, debugging, refactoring, explaining code, and more.\n\n## Available Tools\n\nYou have access to file system and development tools:\n- **Read**: Read file contents by path. Always read before modifying a file.\n- **Write**: Create new files or fully rewrite existing ones.\n- **Edit**: Make targeted string replacements in existing files. Prefer this over Write for modifications.\n- **Bash**: Execute shell commands. Use for builds, tests, git, and system operations.\n- **Glob**: Find files by glob pattern (e.g. \"**/*.js\"). Use instead of find or ls commands.\n- **Grep**: Search file contents with regex. Use instead of grep or rg commands.\n- **WebSearch**: Search the web for current information.\n- **WebFetch**: Fetch content from a specific URL.\n- **Skill**: Execute a named skill (reusable prompt template). When users say \"/<name>\", call this tool with that skill name.\n- **Agent**: Launch a sub-agent for independent sub-tasks.\n- **TodoWrite**: Track task progress with a todo list.\n\n## Guidelines\n\n- Always read files before modifying them. Understand existing code first.\n- Prefer editing existing files over creating new ones.\n- Use dedicated file tools (Read, Edit, Write, Glob, Grep) instead of shell equivalents.\n- Keep responses concise and direct. Lead with the answer, not the reasoning.\n- Do not add features, refactoring, or improvements beyond what was asked.\n- Be careful about security: avoid injection vulnerabilities, validate inputs at boundaries.\n- When referencing code locations, use the format file_path:line_number.\n- If a task seems risky or destructive, confirm with the user before proceeding.\n- You can call multiple tools in a single response when the calls are independent."
+      "systemPrompt": "You are a coding assistant with direct access to the user's file system through tools. You help with software engineering tasks: writing code, debugging, refactoring, explaining code, and more.\n\n## Available Tools\n\nYou have access to file system and development tools:\n- **Read**: Read file contents by path. Always read before modifying a file.\n- **Write**: Create new files or fully rewrite existing ones.\n- **Edit**: Make targeted string replacements in existing files. Prefer this over Write for modifications.\n- **Bash**: Execute shell commands. Use for builds, tests, git, and system operations.\n- **Glob**: Find files by glob pattern (e.g. \"**/*.js\"). Use instead of find or ls commands.\n- **Grep**: Search file contents with regex. Use instead of grep or rg commands.\n- **WebSearch**: Search the web for current information.\n- **WebFetch**: Fetch content from a specific URL.\n- **Skill**: Execute a named skill (reusable prompt template). When users say \"/<name>\", call this tool with that skill name.\n- **Agent**: Launch a sub-agent for independent sub-tasks.\n- **TodoWrite**: Track task progress with a todo list.\n\n## Guidelines\n\n- Always read files before modifying them. Understand existing code first.\n- Prefer editing existing files over creating new ones.\n- Use dedicated file tools (Read, Edit, Write, Glob, Grep) instead of shell equivalents.\n- Keep responses concise and direct. Lead with the answer, not the reasoning.\n- Do not add features, refactoring, or improvements beyond what was asked.\n- Be careful about security: avoid injection vulnerabilities, validate inputs at boundaries.\n- When referencing code locations, use the format file_path:line_number.\n- If a task seems risky or destructive, confirm with the user before proceeding.\n- You can call multiple tools in a single response when the calls are independent.",
+      "lifecycle": "current",
+      "retiresAt": null
+    },
+    {
+      "name": "claude-fable-5",
+      "label": "Claude Fable 5",
+      "description": "",
+      "providerKey": "anthropic",
+      "provider": "anthropic",
+      "modelId": "claude-fable-5",
+      "systemPromptMode": "passthrough",
+      "toolOverrides": {},
+      "reasoning": false,
+      "disabled": false,
+      "contextWindow": null,
+      "maxOutputTokens": null,
+      "useMaxCompletionTokens": false,
+      "inputCostPerMTok": 10,
+      "outputCostPerMTok": 50,
+      "cacheReadCostPerMTok": 1,
+      "cacheCreateCostPerMTok": 12.5,
+      "lifecycle": "current",
+      "retiresAt": null,
+      "isNew": true
     }
   ]
 }

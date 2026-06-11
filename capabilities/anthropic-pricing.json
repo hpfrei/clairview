@@ -1,41 +1,63 @@
 {
+  "claude-fable-5": {
+    "label": "Claude Fable 5",
+    "lifecycle": "current",
+    "inputCostPerMTok": 10,
+    "outputCostPerMTok": 50,
+    "cacheReadCostPerMTok": 1.0,
+    "cacheCreateCostPerMTok": 12.5
+  },
   "claude-opus-4-8": {
+    "label": "Claude Opus 4.8",
+    "lifecycle": "current",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
     "cacheCreateCostPerMTok": 6.25
   },
   "claude-opus-4-7": {
+    "label": "Claude Opus 4.7",
+    "lifecycle": "current",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
     "cacheCreateCostPerMTok": 6.25
   },
   "claude-opus-4-6": {
+    "label": "Claude Opus 4.6",
+    "lifecycle": "current",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
     "cacheCreateCostPerMTok": 6.25
   },
   "claude-opus-4-5": {
+    "label": "Claude Opus 4.5",
+    "lifecycle": "current",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
     "cacheCreateCostPerMTok": 6.25
   },
   "claude-sonnet-4-6": {
+    "label": "Claude Sonnet 4.6",
+    "lifecycle": "current",
     "inputCostPerMTok": 3,
     "outputCostPerMTok": 15,
     "cacheReadCostPerMTok": 0.3,
     "cacheCreateCostPerMTok": 3.75
   },
   "claude-sonnet-4-5": {
+    "label": "Claude Sonnet 4.5",
+    "lifecycle": "current",
     "inputCostPerMTok": 3,
     "outputCostPerMTok": 15,
     "cacheReadCostPerMTok": 0.3,
     "cacheCreateCostPerMTok": 3.75
   },
   "claude-haiku-4-5": {
+    "label": "Claude Haiku 4.5",
+    "lifecycle": "current",
     "inputCostPerMTok": 1,
     "outputCostPerMTok": 5,
     "cacheReadCostPerMTok": 0.1,
