@@ -778,7 +778,9 @@
       const col = columnFor.get(interaction.id) || 0;
       const height = computeNodeHeight(interaction);
       const start = interaction.timestamp - sessionStart;
-      let end = start + (interaction.timing?.duration || 0);
+      // Hooks render as fixed-height chips; ignore their recorded duration so a
+      // PostToolUse waiting on parallel agents never stretches or spans idle gaps.
+      let end = interaction.isHook ? start : start + (interaction.timing?.duration || 0);
       const clamped = interaction._clampedHooks;
       if (clamped) {
         for (const h of clamped) {
@@ -945,7 +947,7 @@
       }
       const top = yAt[b._startAnchor.node];
       const bottom = yAt[b._endAnchor.node];
-      const height = Math.max(b.height, bottom - top);
+      const height = interaction.isHook ? b.height : Math.max(b.height, bottom - top);
       const x = C.RULER_WIDTH + b.col * (availWidth + C.COLUMN_GAP);
       const timeBottom = top + height;
       layout.push({ id: interaction.id, x, y: top, width: availWidth, height, col: b.col, interaction, elapsed, idx, timeBottom });
