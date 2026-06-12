@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const caps = require('./capabilities');
-const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, PACKAGE_ROOT, DATA_HOME } = require('./utils');
+const { buildCliArgs, spawnClaudePty, sanitizeForDashboard, killGracefully, PACKAGE_ROOT, DATA_HOME } = require('./utils');
 
 const INTERACTIONS_DIR = path.join(DATA_HOME, 'interactions');
 
@@ -259,14 +259,9 @@ class CliSession {
 
   kill() {
     if (this.pty) {
-      try { this.pty.kill('SIGTERM'); } catch {}
       const pid = this.pty.pid;
       this.pty = null;
-      if (pid) {
-        setTimeout(() => {
-          try { process.kill(pid, 0); process.kill(pid, 'SIGKILL'); } catch {}
-        }, 3000);
-      }
+      if (pid) killGracefully(pid);
     }
     this.status = 'idle';
     this._cleanupMcpConfig();

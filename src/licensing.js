@@ -106,7 +106,8 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
       if (response.valid && response.signature) {
         // Fetch and cache public key if we don't have it or if it changed
         if (!stored.signingKey) {
-          try { stored.signingKey = await fetchSigningKey(); } catch {}
+          try { stored.signingKey = await fetchSigningKey(); }
+          catch (err) { console.warn('  Pro: signing-key fetch failed:', err.message); }
         }
         if (stored.signingKey && verifySignature(response.signedFields, response.signature, stored.signingKey)) {
           stored.lastValidation = response.signedFields;
@@ -317,7 +318,8 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
         const { execSync } = require('child_process');
         if (!fs.existsSync(proDir)) return res.json({ ok: false, error: 'Pro not installed' });
         const before = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-        try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); } catch {}
+        try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); }
+        catch (err) { console.warn('  Pro: git pull failed during update:', err.message); }
         const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
         const pro = lifecycle.getPro();
         if (pro?.update) await pro.update();

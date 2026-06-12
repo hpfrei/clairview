@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { ensureDir, safeJoin, readJSON, writeJSON } = require('./utils');
+const { ensureDir, safeJoin, readJSON, writeJSON, tryRm } = require('./utils');
 const secretStore = require('./secret-store');
 
 const KNOWN_TOOLS = [
@@ -374,7 +374,8 @@ function readSecrets(baseDir) {
   // read (mirrors the inline migration in readModelsFile), so keys never linger
   // in plaintext after the new code first runs.
   if (!fs.existsSync(encPath) && fs.existsSync(legacyPath)) {
-    try { writeSecrets(baseDir, s); } catch {}
+    try { writeSecrets(baseDir, s); }
+    catch (err) { console.warn('  Secrets: migration to encrypted store failed:', err.message); }
   }
   return s;
 }
@@ -783,7 +784,7 @@ function deleteProxyRule(baseDir, id) {
   rules.splice(idx, 1);
   saveProxyRulesManifest(baseDir, rules);
   const file = path.join(proxyRulesDir(baseDir), `${id}.js`);
-  try { fs.unlinkSync(file); } catch {}
+  tryRm(file);
   return true;
 }
 

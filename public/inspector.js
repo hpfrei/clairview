@@ -130,14 +130,31 @@
 
   function cliInstanceLabel(instanceId) {
     const info = knownInstances.get(instanceId);
-    const tabId = info?.tabId;
+    const cliTabs = window.cliModule?.tabs;
+    // Resolve the live CLI tab that owns this instance. Prefer a current match by
+    // instanceId (the stored info.tabId can go stale when tabs are added/removed),
+    // then fall back to the stored tabId only if it's still a real tab.
+    let tabId = null;
+    if (cliTabs) {
+      for (const [id, t] of cliTabs) {
+        if (t.instanceId === instanceId) { tabId = id; break; }
+      }
+    }
+    if (!tabId && info?.tabId && cliTabs?.has(info.tabId)) tabId = info.tabId;
     if (tabId && window.cliModule?.computeTabLabel) {
       const label = window.cliModule.computeTabLabel(tabId);
+      // computeTabLabel returns the raw tabId only when it can't derive a name;
+      // treat that as "no label" and fall through to the cwd basename below.
       if (label && label !== tabId) return label.replace(/^>/, '');
     }
-    if (!info?.cwd) return instanceId;
-    const parts = info.cwd.replace(/\/+$/, '').split('/');
-    return parts[parts.length - 1] || info.cwd;
+    const cwd = info?.cwd || (tabId && cliTabs?.get(tabId)?.cwd);
+    if (cwd) {
+      const parts = cwd.replace(/\/+$/, '').split('/');
+      return parts[parts.length - 1] || cwd;
+    }
+    // Last resort: a CLI session with no resolvable tab or cwd. Show a clean
+    // generic label rather than the internal cli-<uuid> instanceId.
+    return 'CLI';
   }
 
   function instanceDisplayLabel(instanceId) {

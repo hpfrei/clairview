@@ -27,6 +27,24 @@ const DATA_HOME = (function resolveDataHome() {
   return PACKAGE_ROOT;
 })();
 
+// SIGTERM now, SIGKILL after graceMs if still alive. `target` is a process
+// object (ChildProcess/pty) or a raw pid.
+function killGracefully(target, graceMs = 3000) {
+  const byPid = typeof target === 'number';
+  const send = (sig) => {
+    if (byPid) { process.kill(target, 0); process.kill(target, sig); }
+    else target.kill(sig);
+  };
+  try { send('SIGTERM'); } catch {}
+  const t = setTimeout(() => { try { send('SIGKILL'); } catch {} }, graceMs);
+  if (t.unref) t.unref();
+}
+
+// Best-effort removal of a file/dir that may not exist.
+function tryRm(p) {
+  try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
+}
+
 let counter = 0;
 
 const MIME_TYPES = {
@@ -296,10 +314,7 @@ function runClaudeArtifactTask({
     const args = buildClaudeArgs({ permissionMode, allowedTools });
     const proc = spawnClaude(args, { cwd, proxyPort, instanceId, anthropicApiKey });
 
-    const timer = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-    }, timeoutMs);
+    const timer = setTimeout(() => killGracefully(proc), timeoutMs);
 
     let stderr = '';
     proc.stdout.on('data', () => {});
@@ -678,6 +693,8 @@ module.exports = {
   isClaudeAuthError,
   describeClaudeError,
   safeJoin,
+  killGracefully,
+  tryRm,
   MIME_TYPES,
   PACKAGE_ROOT,
   DATA_HOME,

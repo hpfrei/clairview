@@ -463,6 +463,7 @@ killStalePortProcesses();
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
   dashboardServer.listen(DASHBOARD_PORT, () => {
+    mcp.autoStart();
     console.log('');
     console.log('  Claude Code API Proxy running.');
     console.log('');

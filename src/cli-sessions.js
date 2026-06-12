@@ -3,7 +3,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const CliSession = require('./cli-session');
-const { readJSON, writeJSON, DATA_HOME, PACKAGE_ROOT } = require('./utils');
+const { readJSON, writeJSON, tryRm, DATA_HOME, PACKAGE_ROOT } = require('./utils');
 
 const HISTORY_FILE = path.join(DATA_HOME, 'data', 'cli-history.json');
 const RECENT_DIRS_FILE = path.join(DATA_HOME, 'data', 'cli-recent-dirs.json');
@@ -19,18 +19,16 @@ function deleteFullSessionData(store, sessId, cwd, isolated) {
   const slug = cwd.replace(/\//g, '-');
   const projectDir = path.join(configDir, 'projects', slug);
 
-  try { fs.unlinkSync(path.join(projectDir, `${sessId}.jsonl`)); } catch {}
-  try { fs.rmSync(path.join(projectDir, sessId), { recursive: true, force: true }); } catch {}
-  try { fs.rmSync(path.join(configDir, 'file-history', sessId), { recursive: true, force: true }); } catch {}
-  try { fs.rmSync(path.join(configDir, 'tasks', sessId), { recursive: true, force: true }); } catch {}
-  try { fs.rmSync(path.join(configDir, 'session-env', sessId), { recursive: true, force: true }); } catch {}
+  tryRm(path.join(projectDir, `${sessId}.jsonl`));
+  tryRm(path.join(projectDir, sessId));
+  tryRm(path.join(configDir, 'file-history', sessId));
+  tryRm(path.join(configDir, 'tasks', sessId));
+  tryRm(path.join(configDir, 'session-env', sessId));
 
   const todosDir = path.join(configDir, 'todos');
   try {
     for (const f of fs.readdirSync(todosDir)) {
-      if (f.startsWith(sessId + '-')) {
-        try { fs.unlinkSync(path.join(todosDir, f)); } catch {}
-      }
+      if (f.startsWith(sessId + '-')) tryRm(path.join(todosDir, f));
     }
   } catch {}
 }
@@ -186,6 +184,16 @@ class CliSessionManager {
     return history;
   }
 
+  _transcriptExists(cwd, sessId, isolated) {
+    if (!cwd || !sessId) return false;
+    const configDir = (isolated === true)
+      ? path.join(cwd, '.claude')
+      : path.join(os.homedir(), '.claude');
+    const slug = cwd.replace(/\//g, '-');
+    const jsonlPath = path.join(configDir, 'projects', slug, `${sessId}.jsonl`);
+    try { return fs.statSync(jsonlPath).size > 0; } catch { return false; }
+  }
+
   _getJsonlStat(entry) {
     const configDir = (entry.isolated === true)
       ? path.join(entry.cwd, '.claude')
@@ -313,7 +321,7 @@ class CliSessionManager {
       }
       if (session.sessId) {
         this.store.deleteSessionData(session.sessId);
-        try { fs.rmSync(path.join(PACKAGE_ROOT, 'uploads', session.sessId), { recursive: true, force: true }); } catch {}
+        tryRm(path.join(PACKAGE_ROOT, 'uploads', session.sessId));
       }
       session.kill();
       this.sessions.delete(tabId);
@@ -399,12 +407,18 @@ class CliSessionManager {
 
     let resumeSessionId;
     if (opts.spawnOpts?.resume) {
-      if (session.sessId) {
+      const cwd = opts.cwd || session.cwd;
+      if (session.sessId && this._transcriptExists(cwd, session.sessId, session.isolated)) {
         resumeSessionId = session.sessId;
       } else if (opts.cwd) {
         const history = this._loadHistory();
         const match = history.find(h => h.cwd === opts.cwd);
-        if (match) resumeSessionId = match.id;
+        // Only resume if Claude's native transcript actually exists — otherwise
+        // `claude --resume <id>` exits immediately ("No conversation found"),
+        // which the client reads as the tab dying right after it opened.
+        if (match && this._transcriptExists(opts.cwd, match.id, match.isolated)) {
+          resumeSessionId = match.id;
+        }
       }
     }
 

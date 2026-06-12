@@ -21,9 +21,8 @@ function init(options) {
 
   // Ensure the integrated server directory exists
   servers.ensureIntegratedServer();
-
-  // Auto-start after a short delay (let WebSocket server bind first)
-  setTimeout(() => autoStart(), 500);
+  // Auto-start happens when server.js calls autoStart() from its listen
+  // callback — an explicit ready signal instead of a timing guess.
 }
 
 function onConnect(ws) {
@@ -652,4 +651,4 @@ function handleBridgeReport(report) {
   }
 }
 
-module.exports = { init, shutdown, handleBridgeReport, broadcastToolList, markNeedsRestart };
+module.exports = { init, autoStart, shutdown, handleBridgeReport, broadcastToolList, markNeedsRestart };

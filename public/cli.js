@@ -206,26 +206,44 @@
     }
   }
 
-  function computeTabLabel(tabId) {
-    const tab = tabs.get(tabId);
+  // Base label for a tab, ignoring collisions: an explicit title if set,
+  // otherwise the cwd basename, otherwise the raw tabId.
+  function _baseLabel(tab, tabId) {
     if (tab?.title) return tab.title;
     if (!tab?.cwd) return tabId;
     const parts = tab.cwd.replace(/\/+$/, '').split('/');
-    const basename = parts[parts.length - 1] || tab.cwd;
-    const sameDir = [];
+    return parts[parts.length - 1] || tab.cwd;
+  }
+
+  // Assign a stable disambiguation number within a base-label group. A tab keeps
+  // the number it was first given for as long as its base label is unchanged, so
+  // deleting a sibling never renumbers the survivors (1 renders bare, 2 → "-2").
+  // The number is only (re)assigned when a tab has none yet or its base changed.
+  function _assignLabelNum(tabId, base) {
+    const tab = tabs.get(tabId);
+    if (!tab) return 1;
+    if (tab._labelBase === base && tab._labelNum) return tab._labelNum;
+    const taken = new Set();
     for (const [id, t] of tabs) {
-      if (t.title) continue;
-      if (!t.cwd) continue;
-      const p = t.cwd.replace(/\/+$/, '').split('/');
-      if ((p[p.length - 1] || t.cwd) === basename) sameDir.push(id);
+      if (id === tabId) continue;
+      if (t._labelBase === base && t._labelNum) taken.add(t._labelNum);
     }
-    let name = basename;
-    if (sameDir.length > 1) {
-      sameDir.sort();
-      const idx = sameDir.indexOf(tabId);
-      if (idx > 0) name = `${basename}-${idx + 1}`;
-    }
-    return name;
+    let n = 1;
+    while (taken.has(n)) n++;
+    tab._labelBase = base;
+    tab._labelNum = n;
+    return n;
+  }
+
+  // Display label with collision disambiguation. Any two CLI tabs (titled or
+  // cwd-derived) that resolve to the same base share a numbering: the first
+  // keeps the bare name, the rest get stable `-2`, `-3`, … suffixes. Only CLI
+  // tabs live in `tabs`, so inspector tabs can never be folded into this.
+  function computeTabLabel(tabId) {
+    const tab = tabs.get(tabId);
+    const base = _baseLabel(tab, tabId);
+    const n = _assignLabelNum(tabId, base);
+    return n > 1 ? `${base}-${n}` : base;
   }
 
   function renderTabStrip() {

@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const caps = require('./capabilities');
-const { describeClaudeError, ensureDir, generateId, runClaudeArtifactTask, DATA_HOME } = require('./utils');
+const { describeClaudeError, ensureDir, generateId, runClaudeArtifactTask, tryRm, DATA_HOME } = require('./utils');
 
 const PROJECT_ROOT = DATA_HOME;
 
@@ -266,8 +266,8 @@ function generateProxyRule(description) {
     const targetPath = path.join(rulesDir, `${id}.js`);
     const metaPath = path.join(rulesDir, `${id}.meta.json`);
 
-    try { fs.unlinkSync(targetPath); } catch {}
-    try { fs.unlinkSync(metaPath); } catch {}
+    tryRm(targetPath);
+    tryRm(metaPath);
 
     const prompt = `You are creating a proxy rule for VistaClair — a middleware function that intercepts Anthropic API requests flowing through the proxy.
 
@@ -329,11 +329,11 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
           if (meta.name) name = meta.name;
           if (meta.slug) slug = meta.slug;
         } catch {}
-        try { fs.unlinkSync(metaPath); } catch {}
+        tryRm(metaPath);
       }
 
       const source = fs.readFileSync(targetPath, 'utf-8');
-      try { fs.unlinkSync(targetPath); } catch {}
+      tryRm(targetPath);
 
       resolve({ id, name, slug, source });
     }).catch((err) => {
@@ -353,7 +353,7 @@ function editProxyRule(id, description) {
     const rulesDir = path.join(PROJECT_ROOT, 'capabilities', 'proxy-rules');
     const targetPath = path.join(rulesDir, `${id}.js`);
     const metaPath = path.join(rulesDir, `${id}.meta.json`);
-    try { fs.unlinkSync(metaPath); } catch {}
+    tryRm(metaPath);
 
     const prompt = `You are editing an existing proxy rule for VistaClair.
 
@@ -424,7 +424,7 @@ Use the Write tool to create both files. Write ONLY valid JavaScript (no markdow
           if (meta.name) name = meta.name;
           if (meta.slug) slug = meta.slug;
         } catch {}
-        try { fs.unlinkSync(metaPath); } catch {}
+        tryRm(metaPath);
       }
 
       const source = fs.readFileSync(targetPath, 'utf-8');
