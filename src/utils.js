@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 let _pty;
@@ -75,6 +76,35 @@ function generateId() {
  * Build CLI args from a profile/capabilities object.
  * Returns the base args array (caller adds --resume, --mcp-config, etc.).
  */
+// Linux caps a single argv string at MAX_ARG_STRLEN (128 KiB); a prompt over
+// that makes exec fail with E2BIG and the CLI dies instantly. Pass big prompts
+// via the --…-file flag variants instead. Files are content-hashed (stable name
+// per prompt, no churn) and stale ones are swept opportunistically.
+const PROMPT_ARG_LIMIT = 100 * 1024;
+const PROMPT_FILE_DIR = () => path.join(DATA_HOME, 'data', 'prompt-args');
+
+function _promptArg(args, flag, prompt) {
+  if (Buffer.byteLength(prompt) <= PROMPT_ARG_LIMIT) {
+    args.push(flag, prompt);
+    return;
+  }
+  const dir = PROMPT_FILE_DIR();
+  ensureDir(dir);
+  const hash = crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
+  const file = path.join(dir, `${hash}.txt`);
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, prompt);
+    const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        const p = path.join(dir, f);
+        if (p !== file && fs.statSync(p).mtimeMs < cutoff) tryRm(p);
+      }
+    } catch {}
+  }
+  args.push(`${flag}-file`, file);
+}
+
 /**
  * Append the flag block shared verbatim by headless (buildClaudeArgs) and
  * interactive (buildCliArgs) arg builders: model, effort, slash-commands,
@@ -87,8 +117,8 @@ function _appendProfileTail(args, p) {
   if (p.bare) args.push('--bare');
   if (p.maxTurns) args.push('--max-turns', String(p.maxTurns));
   if (p.maxBudgetUsd) args.push('--max-budget-usd', String(p.maxBudgetUsd));
-  if (p.appendSystemPrompt) args.push('--append-system-prompt', p.appendSystemPrompt);
-  if (p.systemPrompt) args.push('--system-prompt', p.systemPrompt);
+  if (p.appendSystemPrompt) _promptArg(args, '--append-system-prompt', p.appendSystemPrompt);
+  if (p.systemPrompt) _promptArg(args, '--system-prompt', p.systemPrompt);
   return args;
 }
 
