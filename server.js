@@ -379,6 +379,7 @@ const addonCtx = {
   secretStore: require('./src/secret-store'),
   resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
   resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
+  setProviderKey: (providerKey, apiKey) => caps.setProviderKey(DATA_HOME, providerKey, apiKey),
   listModels: () => caps.listModels(DATA_HOME),
   claudeAuthInfo: () => ({
     hasSubscription: caps.hasClaudeSubscription(),

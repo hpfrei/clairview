@@ -522,6 +522,18 @@ function getProviderKey(baseDir, providerKey) {
   return '';
 }
 
+// Persist a provider's API key into the encrypted secrets store. Passing an
+// empty value clears it. Used for standalone keys that aren't tied to a model
+// provider on the Models page (e.g. the Google Translate key for ai.translate).
+function setProviderKey(baseDir, providerKey, apiKey) {
+  if (!providerKey) return false;
+  const secrets = readSecrets(baseDir);
+  if (apiKey) secrets.providerKeys[providerKey] = apiKey;
+  else delete secrets.providerKeys[providerKey];
+  writeSecrets(baseDir, secrets);
+  return true;
+}
+
 // --- App preferences (small global key-value store) ---
 // Persisted at DATA_HOME/data/app-prefs.json. Holds the user's Claude auth
 // choice and a record of whether a subscription has ever been detected.
@@ -1201,6 +1213,7 @@ module.exports = {
   hasClaudeSubscription,
   getAnthropicApiKey,
   getProviderKey,
+  setProviderKey,
   resolveHeadlessAuth,
   getInteractiveAuth,
   readAppPrefs,

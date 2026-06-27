@@ -583,7 +583,8 @@
       case 'video': {
         const video = document.createElement('video');
         video.controls = true;
-        video.src = url;
+        video.preload = 'metadata';
+        video.src = '/api/video-stream?path=' + encodeURIComponent(filePath);
         content.appendChild(video);
         break;
       }
@@ -694,6 +695,22 @@
         img.alt = entry.name;
         img.loading = 'lazy';
         thumb.appendChild(img);
+      } else if (category === 'video') {
+        thumb.classList.add('dir-preview-thumb-video');
+        const mosaic = document.createElement('div');
+        mosaic.className = 'dir-video-mosaic';
+        for (let t = 0; t < 4; t++) {
+          const ti = document.createElement('img');
+          ti.loading = 'lazy';
+          ti.src = '/api/video-thumb?i=' + t + '&path=' + encodeURIComponent(fullPath);
+          ti.alt = '';
+          mosaic.appendChild(ti);
+        }
+        thumb.appendChild(mosaic);
+        const play = document.createElement('div');
+        play.className = 'dir-video-play';
+        play.textContent = '▶';
+        thumb.appendChild(play);
       } else if (category === 'text') {
         const pre = document.createElement('pre');
         pre.textContent = 'Loading...';

@@ -4,8 +4,142 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 const express = require('express');
-const { MIME_TYPES } = require('./utils');
+const { MIME_TYPES, DATA_HOME, ensureDir } = require('./utils');
+
+const VIDEO_THUMB_DIR = path.join(DATA_HOME, 'data', 'video-thumbs');
+const VIDEO_FASTSTART_DIR = path.join(DATA_HOME, 'data', 'video-faststart');
+const THUMB_COUNT = 4;
+const THUMB_WIDTH = 160;
+
+function cacheKey(resolved, stat) {
+  return crypto.createHash('sha1').update(`${resolved}:${stat.mtimeMs}:${stat.size}`).digest('hex');
+}
+
+function runCmd(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', d => { out += d; });
+    child.stderr.on('data', d => { err += d; });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code === 0) resolve(out);
+      else reject(new Error(`${cmd} exited ${code}: ${err.slice(0, 500)}`));
+    });
+  });
+}
+
+async function probeDuration(file) {
+  const out = await runCmd('ffprobe', [
+    '-v', 'error', '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1', file,
+  ]);
+  const d = parseFloat(out.trim());
+  return Number.isFinite(d) && d > 0 ? d : 0;
+}
+
+// Generate THUMB_COUNT JPEG frames evenly spaced through the video, cached on disk.
+const thumbInFlight = new Map();
+async function ensureThumbs(file, key) {
+  const last = path.join(VIDEO_THUMB_DIR, `${key}_${THUMB_COUNT - 1}.jpg`);
+  if (fs.existsSync(last)) return;
+  if (thumbInFlight.has(key)) return thumbInFlight.get(key);
+  const job = (async () => {
+    ensureDir(VIDEO_THUMB_DIR);
+    const duration = await probeDuration(file);
+    for (let i = 0; i < THUMB_COUNT; i++) {
+      const out = path.join(VIDEO_THUMB_DIR, `${key}_${i}.jpg`);
+      if (fs.existsSync(out)) continue;
+      // Sample at 10%, 30%, 50%, 70% of duration (fallback to 0 if unknown).
+      const t = duration ? duration * (0.1 + (i * 0.2)) : 0;
+      await runCmd('ffmpeg', [
+        '-ss', String(t), '-i', file,
+        '-frames:v', '1', '-vf', `scale=${THUMB_WIDTH}:-2`,
+        '-q:v', '5', '-y', out,
+      ]);
+    }
+  })();
+  thumbInFlight.set(key, job);
+  try { await job; } finally { thumbInFlight.delete(key); }
+}
+
+// Return true if the mp4 'moov' box precedes 'mdat' (i.e. already faststart).
+function isFaststart(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(16);
+    let pos = 0;
+    while (pos + 8 <= size) {
+      const n = fs.readSync(fd, buf, 0, 16, pos);
+      if (n < 8) break;
+      let boxSize = buf.readUInt32BE(0);
+      const type = buf.toString('ascii', 4, 8);
+      let headerSize = 8;
+      if (boxSize === 1) { boxSize = Number(buf.readBigUInt64BE(8)); headerSize = 16; }
+      else if (boxSize === 0) { boxSize = size - pos; }
+      if (type === 'moov') return true;
+      if (type === 'mdat') return false;
+      if (boxSize < headerSize) break;
+      pos += boxSize;
+    }
+  } catch { /* fall through */ }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+  return false;
+}
+
+// Remux to a faststart copy (moov moved to front), cached on disk. Returns the
+// path to serve: the cached copy, or the original if it is already faststart.
+const faststartInFlight = new Map();
+async function ensureFaststart(file, key) {
+  if (isFaststart(file)) return file;
+  const out = path.join(VIDEO_FASTSTART_DIR, `${key}.mp4`);
+  if (fs.existsSync(out)) return out;
+  if (faststartInFlight.has(key)) return faststartInFlight.get(key);
+  const job = (async () => {
+    ensureDir(VIDEO_FASTSTART_DIR);
+    const tmp = path.join(VIDEO_FASTSTART_DIR, `${key}.tmp.mp4`);
+    try {
+      await runCmd('ffmpeg', ['-i', file, '-c', 'copy', '-movflags', '+faststart', '-y', tmp]);
+      fs.renameSync(tmp, out);
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch {}
+      throw e;
+    }
+    return out;
+  })();
+  faststartInFlight.set(key, job);
+  try { return await job; } finally { faststartInFlight.delete(key); }
+}
+
+// Stream a file with HTTP range support.
+function streamFile(req, res, file, mime) {
+  const size = fs.statSync(file).size;
+  const range = req.headers.range;
+  if (range) {
+    const match = range.match(/bytes=(\d+)-(\d*)/);
+    if (match) {
+      const start = parseInt(match[1], 10);
+      const end = match[2] ? parseInt(match[2], 10) : size - 1;
+      res.writeHead(206, {
+        'Content-Type': mime,
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': end - start + 1,
+      });
+      fs.createReadStream(file, { start, end }).pipe(res);
+      return;
+    }
+  }
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Length', size);
+  res.setHeader('Accept-Ranges', 'bytes');
+  fs.createReadStream(file).pipe(res);
+}
 
 function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authToken, cliSessionManager }) {
   const router = express.Router();
@@ -19,7 +153,7 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     try {
       const entries = fs.readdirSync(resolved, { withFileTypes: true });
       const dirs = entries
-        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        .filter(e => e.isDirectory())
         .map(e => e.name)
         .sort();
       res.json({ current: resolved, parent: path.dirname(resolved), dirs });
@@ -68,7 +202,6 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
       const dirents = fs.readdirSync(resolved, { withFileTypes: true });
       const entries = [];
       for (const d of dirents) {
-        if (d.name.startsWith('.')) continue;
         try {
           const fullPath = path.join(resolved, d.name);
           const stat = fs.statSync(fullPath);
@@ -78,7 +211,6 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
               const children = fs.readdirSync(fullPath, { withFileTypes: true });
               let count = 0, oldest = Infinity, newest = 0;
               for (const c of children) {
-                if (c.name.startsWith('.')) continue;
                 try {
                   const cStat = fs.statSync(path.join(fullPath, c.name));
                   count++;
@@ -120,29 +252,48 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
       if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' });
       const ext = path.extname(resolved).toLowerCase();
       const mime = MIME_TYPES[ext] || 'application/octet-stream';
-      const size = stat.size;
+      streamFile(req, res, resolved, mime);
+    } catch (err) {
+      res.status(404).json({ error: 'File not found', path: resolved });
+    }
+  });
 
-      const range = req.headers.range;
-      if (range) {
-        const match = range.match(/bytes=(\d+)-(\d*)/);
-        if (match) {
-          const start = parseInt(match[1], 10);
-          const end = match[2] ? parseInt(match[2], 10) : size - 1;
-          res.writeHead(206, {
-            'Content-Type': mime,
-            'Content-Range': `bytes ${start}-${end}/${size}`,
-            'Accept-Ranges': 'bytes',
-            'Content-Length': end - start + 1,
-          });
-          fs.createReadStream(resolved, { start, end }).pipe(res);
-          return;
-        }
+  // ── GET /api/video-thumb — one cached ffmpeg frame from a video ────
+  router.get('/video-thumb', async (req, res) => {
+    const filePath = req.query.path;
+    const idx = Math.max(0, Math.min(THUMB_COUNT - 1, parseInt(req.query.i, 10) || 0));
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+    const resolved = path.resolve(filePath);
+    try {
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' });
+      const key = cacheKey(resolved, stat);
+      await ensureThumbs(resolved, key);
+      const thumb = path.join(VIDEO_THUMB_DIR, `${key}_${idx}.jpg`);
+      if (!fs.existsSync(thumb)) return res.status(404).json({ error: 'No thumbnail' });
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      streamFile(req, res, thumb, 'image/jpeg');
+    } catch (err) {
+      res.status(500).json({ error: 'Thumbnail failed' });
+    }
+  });
+
+  // ── GET /api/video-stream — faststart mp4 for instant playback ─────
+  router.get('/video-stream', async (req, res) => {
+    const filePath = req.query.path;
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+    const resolved = path.resolve(filePath);
+    try {
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' });
+      const ext = path.extname(resolved).toLowerCase();
+      const mime = MIME_TYPES[ext] || 'application/octet-stream';
+      let serve = resolved;
+      if (ext === '.mp4' || ext === '.mov' || ext === '.m4v') {
+        try { serve = await ensureFaststart(resolved, cacheKey(resolved, stat)); }
+        catch { serve = resolved; }
       }
-
-      res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Length', size);
-      res.setHeader('Accept-Ranges', 'bytes');
-      fs.createReadStream(resolved).pipe(res);
+      streamFile(req, res, serve, mime);
     } catch (err) {
       res.status(404).json({ error: 'File not found', path: resolved });
     }
