@@ -20,8 +20,6 @@ const state = {
   ws: null,
   reconnectDelay: 1000,
   // Capabilities
-  capabilities: null,
-  knownTools: [],
   knownSkills: [],
   agents: [],
   hooks: [],
@@ -401,10 +399,6 @@ const statsEl = document.getElementById('footerStats');
 
 // Centralized settings state sync — called once, modules just re-render
 function syncSettings(msg) {
-  if (msg.capabilities) {
-    state.capabilities = msg.capabilities;
-  }
-  if (msg.knownTools) state.knownTools = msg.knownTools;
   if (msg.knownSkills) state.knownSkills = msg.knownSkills;
   if (msg.hookEvents) state.hookEvents = msg.hookEvents;
   if (msg.matcherEvents) state.matcherEvents = msg.matcherEvents;
@@ -1236,19 +1230,6 @@ document.getElementById('refNav').addEventListener('click', e => {
   document.querySelectorAll('.ref-panel').forEach(p => p.classList.remove('active'));
   const target = document.getElementById('ref-' + section);
   if (target) target.classList.add('active');
-});
-
-document.getElementById('refFilter').addEventListener('click', e => {
-  const btn = e.target.closest('.ref-filter-btn');
-  if (!btn) return;
-  const cat = btn.dataset.cat;
-
-  document.querySelectorAll('.ref-filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-
-  document.querySelectorAll('#ref-tools .ref-category').forEach(section => {
-    section.style.display = (cat === 'all' || section.dataset.cat === cat) ? '' : 'none';
-  });
 });
 
 document.addEventListener('keydown', e => {

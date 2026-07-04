@@ -1,4 +1,5 @@
 const servers = require('./servers');
+const claudeTools = require('./claude-tools');
 const registrar = require('./registrar');
 const logs = require('./logs');
 const caps = require('../capabilities');
@@ -30,6 +31,9 @@ function onConnect(ws) {
   send({ type: 'mcp:tool:list', tools: servers.listTools() });
   send({ type: 'mcp:status', status: serverRunning ? 'running' : 'stopped', needsRestart });
   send({ type: 'mcp:meta', meta: servers.readMeta() });
+  claudeTools.probeClaudeTools().then(tools => {
+    if (ws.readyState === ws.OPEN) send({ type: 'mcp:claude-tools', tools });
+  });
 }
 
 function broadcastToolList() {
@@ -56,6 +60,12 @@ function handleMessage(ws, msg, bc) {
       // --- Tool CRUD ---
       case 'mcp:tool:list':
         send({ type: 'mcp:tool:list', tools: servers.listTools() });
+        break;
+
+      case 'mcp:claude-tools':
+        claudeTools.probeClaudeTools().then(tools => {
+          if (ws.readyState === ws.OPEN) send({ type: 'mcp:claude-tools', tools });
+        });
         break;
 
       case 'mcp:tool:save': {

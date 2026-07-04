@@ -78,34 +78,19 @@ Available templates in this skill directory:
   // --- Capability stats ---
 
   function updateCapabilityStats() {
-    const c = state.capabilities;
-    if (!c) return;
-    const enabled = state.knownTools.length - (c.disabledTools?.length || 0);
-    const countEl = document.getElementById('capToolCount');
-    if (countEl) countEl.textContent = `${enabled}/${state.knownTools.length}`;
     const builtinSkills = state.knownSkills?.length || 0;
     const customSkills = state.skills?.length || 0;
-    const totalSkills = builtinSkills + customSkills;
     const skillCountEl = document.getElementById('capSkillCount');
-    if (skillCountEl) skillCountEl.textContent = c.disableSlashCommands ? '0' : totalSkills;
+    if (skillCountEl) skillCountEl.textContent = builtinSkills + customSkills;
     const agentCountEl = document.getElementById('capAgentCount');
     if (agentCountEl) agentCountEl.textContent = state.agents.length;
     const hookCountEl = document.getElementById('capHookCount');
     if (hookCountEl) hookCountEl.textContent = state.hooks.length;
-    const mcpCountEl = document.getElementById('capMcpCount');
-    if (mcpCountEl) mcpCountEl.textContent = state.mcpServers?.length || 0;
   }
 
   // --- Skills Panel ---
 
   function renderSkillsPanel() {
-    const disabled = state.capabilities?.disableSlashCommands;
-
-    const statusEl = document.getElementById('capSkillsStatus');
-    if (statusEl) {
-      statusEl.innerHTML = `Currently: <strong>${disabled ? 'disabled' : 'enabled'}</strong>`;
-    }
-
     const list = document.getElementById('capSkillList');
     if (list) {
       list.innerHTML = '';
@@ -127,7 +112,7 @@ Available templates in this skill directory:
       grid.innerHTML = '';
       for (const skill of (state.knownSkills || [])) {
         const card = document.createElement('div');
-        card.className = `ref-card${disabled ? ' disabled' : ''}`;
+        card.className = 'ref-card';
         card.innerHTML = `<div class="ref-card-header" onclick="toggleRef(this)">
             <span><span class="ref-name">/${skill.name}</span> <span class="ref-tag tag-sk">skill</span></span>
             <span class="ref-brief">${escHtml(skill.description)}</span>

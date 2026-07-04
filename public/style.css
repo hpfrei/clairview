@@ -715,14 +715,6 @@ aside#timeline {
   flex-shrink: 0;
   margin-left: 8px;
 }
-.entry-profile {
-  font-size: 10px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  padding: 0 4px;
-  border-radius: 3px;
-  margin-right: 4px;
-}
 .entry-endpoint-label {
   font-size: 10px;
   color: var(--yellow);
@@ -2947,43 +2939,6 @@ footer {
 
 .ref-panel.active {
   display: block;
-}
-
-/* Sub-filter bar (inside Tools) */
-.ref-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  justify-content: center;
-  margin-bottom: 20px;
-}
-
-.ref-filter-btn {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  padding: 3px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 11px;
-  transition: all 0.15s;
-}
-
-.ref-filter-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.ref-filter-btn.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* Category */
-.ref-category {
-  margin-bottom: 24px;
 }
 
 .ref-category-title {

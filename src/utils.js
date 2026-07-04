@@ -74,7 +74,8 @@ function generateId() {
 // --- Shared claude spawn utilities ---
 
 /**
- * Build CLI args from a profile/capabilities object.
+ * Build CLI args from a spawn-options object (permissionMode, allowedTools,
+ * model, effort, system prompts, limits).
  * Returns the base args array (caller adds --resume, --mcp-config, etc.).
  */
 // Linux caps a single argv string at MAX_ARG_STRLEN (128 KiB); a prompt over
@@ -111,7 +112,7 @@ function _promptArg(args, flag, prompt) {
  * interactive (buildCliArgs) arg builders: model, effort, slash-commands,
  * bare, turn/budget limits, and system-prompt flags.
  */
-function _appendProfileTail(args, p) {
+function _appendCommonFlags(args, p) {
   if (p.model) args.push('--model', p.model);
   if (p.effort) args.push('--effort', p.effort);
   if (p.disableSlashCommands) args.push('--disable-slash-commands');
@@ -123,31 +124,24 @@ function _appendProfileTail(args, p) {
   return args;
 }
 
-function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = {}) {
+function buildClaudeArgs(opts, { skipTools, outputFormat = 'stream-json' } = {}) {
   const args = ['-p'];
   if (outputFormat === 'stream-json') {
     args.push('--verbose', '--output-format', 'stream-json');
   } else if (outputFormat === 'json') {
     args.push('--output-format', 'json');
   }
-  if (!profile) return args;
-  if (profile.permissionMode && profile.permissionMode !== 'default') {
-    args.push('--permission-mode', profile.permissionMode);
+  if (!opts) return args;
+  if (opts.permissionMode && opts.permissionMode !== 'default') {
+    args.push('--permission-mode', opts.permissionMode);
   }
   if (!skipTools) {
-    if (profile.allowedTools?.length > 0) {
-      args.push('--allowedTools', ...profile.allowedTools);
+    if (opts.allowedTools?.length > 0) {
+      args.push('--allowedTools', ...opts.allowedTools);
     }
-    // Allow integrated MCP tools unless the profile explicitly disables some
-    const hasMcpDisabled = profile.disabledTools?.some(t => t.startsWith('mcp__'));
-    if (!hasMcpDisabled) {
-      args.push('--allowedTools', 'mcp__integrated__*');
-    }
-    if (profile.disabledTools?.length > 0) {
-      args.push('--disallowedTools', ...profile.disabledTools);
-    }
+    args.push('--allowedTools', 'mcp__integrated__*');
   }
-  return _appendProfileTail(args, profile);
+  return _appendCommonFlags(args, opts);
 }
 
 /**
@@ -157,16 +151,7 @@ function buildClaudeArgs(profile, { skipTools, outputFormat = 'stream-json' } = 
 function buildCliArgs(settings) {
   const args = [];
   if (!settings) return args;
-  if (settings.permissionMode && settings.permissionMode !== 'default') {
-    args.push('--permission-mode', settings.permissionMode);
-  }
-  if (settings.allowedTools?.length > 0) {
-    args.push('--allowedTools', ...settings.allowedTools);
-  }
-  if (settings.disabledTools?.length > 0) {
-    args.push('--disallowedTools', ...settings.disabledTools);
-  }
-  return _appendProfileTail(args, settings);
+  return _appendCommonFlags(args, settings);
 }
 
 /**
@@ -244,6 +229,14 @@ function _trackProcess(instanceId, proc, sourceContext, cwd, autoMemory) {
     if (entry && entry.proc === proc) {
       entry.status = 'exited';
       _broadcastInstances('exit', instanceId);
+      // One-shot headless spawns (app ai.prompt / json-repair) fire frequently
+      // (cron, memory jobs) and would accumulate in this map forever. Drop them
+      // after the exit broadcast — the inspector rebuilds their tabs from the
+      // persisted interactions, not from this live-process list.
+      const srcType = entry.sourceContext?.type;
+      if (srcType === 'ai-prompt' || srcType === 'json-repair') {
+        _activeProcesses.delete(instanceId);
+      }
     }
   };
 }

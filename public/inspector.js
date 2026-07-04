@@ -105,7 +105,7 @@
   }
 
   // --- Instance tabs ---
-  const knownInstances = new Map(); // instanceId -> { instanceId, profileName, status, spawnedAt }
+  const knownInstances = new Map(); // instanceId -> { instanceId, status, spawnedAt }
   let activeInstanceTab = 'all';
   const inspectorTabStrip = document.getElementById('inspectorTabStrip');
 
@@ -120,7 +120,7 @@
       extTabCounter++;
       activeExtTab = `ext-${extTabCounter}`;
       knownInstances.set(activeExtTab, {
-        instanceId: activeExtTab, profileName: null,
+        instanceId: activeExtTab,
         status: 'running', spawnedAt: interaction.timestamp || Date.now(), cwd: null,
       });
       renderInspectorTabStrip();
@@ -157,6 +157,23 @@
     return 'CLI';
   }
 
+  // app-<appName>-ai-<rand> → { appName } (per-call ai.prompt sessions)
+  function parseAppAiInstance(instanceId) {
+    const m = typeof instanceId === 'string' && instanceId.match(/^app-(.+)-ai-[0-9a-f]+$/);
+    return m ? { appName: m[1] } : null;
+  }
+
+  function appAiLabel(instanceId, appName) {
+    // Ordinal only when several tabs of the same app coexist, numbered by
+    // insertion order so concurrent calls read "qmd · AI 1", "qmd · AI 2".
+    const siblings = [];
+    for (const id of knownInstances.keys()) {
+      if (parseAppAiInstance(id)?.appName === appName) siblings.push(id);
+    }
+    if (siblings.length <= 1) return `${appName} · AI`;
+    return `${appName} · AI ${siblings.indexOf(instanceId) + 1}`;
+  }
+
   function instanceDisplayLabel(instanceId) {
     if (!instanceId || instanceId === 'all') return 'Others';
     // ext-1 → "Ext 1"
@@ -165,6 +182,8 @@
     // chat-tab-1 → "Chat 1"
     const chatMatch = instanceId.match(/^chat-tab-(\d+)$/);
     if (chatMatch) return `Chat ${chatMatch[1]}`;
+    const appAi = parseAppAiInstance(instanceId);
+    if (appAi) return appAiLabel(instanceId, appAi.appName);
     // cli-tab-1 → cwd-based label
     if (instanceId.startsWith('cli-')) return cliInstanceLabel(instanceId);
     return instanceId;
@@ -236,26 +255,32 @@
     // Combined "Clear inactive" button with autoclear toggle
     const hasExited = [...knownInstances.values()].some(i => i.status === 'exited');
 
-    // Autoclear: if enabled, clear exited instances immediately
+    // Autoclear: if enabled, clear exited instances immediately. App-AI tabs are
+    // exempt — the headless `claude -p` exits after every ai.prompt call, and
+    // their whole value is post-hoc timeline inspection. Manual clear still works.
     if (hasExited && _autoClearInactive && !_suppressAutoClear) {
       const exitedIds = [];
       for (const [id, info] of knownInstances) {
-        if (info.status === 'exited') exitedIds.push(id);
+        if (info.status === 'exited' && !parseAppAiInstance(id)) exitedIds.push(id);
       }
-      for (const id of exitedIds) knownInstances.delete(id);
-      if (exitedIds.length) sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
-      if (!knownInstances.has(activeInstanceTab)) {
-        const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
-        activeInstanceTab = fallback;
+      if (exitedIds.length) {
+        for (const id of exitedIds) knownInstances.delete(id);
+        sendWs({ type: 'inspector:clearInstances', instanceIds: exitedIds });
+        if (!knownInstances.has(activeInstanceTab)) {
+          const fallback = knownInstances.size > 0 ? knownInstances.keys().next().value : 'all';
+          activeInstanceTab = fallback;
+        }
+        queueMicrotask(() => renderInspectorTabStrip());
+        return;
       }
-      queueMicrotask(() => renderInspectorTabStrip());
-      return;
     }
 
     {
       const clearBtn = document.createElement('button');
       clearBtn.className = 'view-tab-action' + (_autoClearInactive ? ' autoclear-on' : '');
-      clearBtn.title = _autoClearInactive ? 'Autoclear active — inactive tabs are removed automatically' : 'Clear all inactive tabs';
+      clearBtn.title = _autoClearInactive
+        ? (hasExited ? 'Clear remaining inactive tabs (autoclear skips app AI tabs)' : 'Autoclear active — inactive tabs are removed automatically')
+        : 'Clear all inactive tabs';
 
       // Auto-toggle SVG — recycle arrows when off, check-circle when on
       const autoToggle = document.createElement('span');
@@ -278,7 +303,9 @@
       clearBtn.appendChild(autoToggle);
       clearBtn.appendChild(textSpan);
 
-      if (hasExited && !_autoClearInactive) {
+      // Manual clear works even with autoclear on — app-AI tabs are exempt from
+      // autoclear and would otherwise be unclearable.
+      if (hasExited) {
         clearBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           const exitedIds = [];
@@ -1271,13 +1298,12 @@
     el.dataset.id = interaction.id;
 
     const statusClass = badgeClass(interaction.status);
-    const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
     const model = interaction.request?.model || 'unknown';
     const shortModel = model.replace('claude-', '').split('-202')[0];
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
-    const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+    const modelLabel = escHtml(shortModel);
     let turnLabel = '';
     if (turnNum != null) {
       const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
@@ -2393,13 +2419,12 @@
     el.dataset.id = interaction.id;
 
     const statusClass = badgeClass(interaction.status);
-    const profile = interaction.profile || '';
     const stepId = interaction.stepId || '';
     const model = interaction.request?.model || 'unknown';
     const shortModel = model.replace('claude-', '').split('-202')[0];
     const durationHtml = interaction.timing?.duration ? durationGauge(interaction.timing.duration) : '--';
 
-    const modelLabel = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+    const modelLabel = escHtml(shortModel);
     let turnLabel = '';
     if (turnNum != null) {
       const turnPrefix = isSubagentTurn ? 'Turn S' : 'Turn ';
@@ -2737,8 +2762,7 @@
       if (modelSpan) {
         const model = interaction.request?.model || 'unknown';
         const shortModel = model.replace('claude-', '').split('-202')[0];
-        const profile = interaction.profile || '';
-        modelSpan.innerHTML = profile ? `<span class="entry-profile">${escHtml(profile)}</span> ${escHtml(shortModel)}` : escHtml(shortModel);
+        modelSpan.innerHTML = escHtml(shortModel);
       }
     }
   }
@@ -3684,7 +3708,7 @@
       existing.status = 'running';
     } else {
       knownInstances.set(msg.instanceId, {
-        instanceId: msg.instanceId, profileName: null,
+        instanceId: msg.instanceId,
         status: 'running', spawnedAt: Date.now(),
         cwd: msg.cwd || null, tabId: msg.tabId || null,
       });
@@ -3705,7 +3729,7 @@
           stampExtInteraction(i);
           if (i.instanceId && !knownInstances.has(i.instanceId)) {
             knownInstances.set(i.instanceId, {
-              instanceId: i.instanceId, profileName: i.profile, status: 'exited', spawnedAt: i.timestamp, cwd: null,
+              instanceId: i.instanceId, status: 'exited', spawnedAt: i.timestamp, cwd: null,
             });
           }
         }
@@ -3745,7 +3769,7 @@
         // Auto-discover instance from interaction
         if (msg.interaction.instanceId && !knownInstances.has(msg.interaction.instanceId)) {
           knownInstances.set(msg.interaction.instanceId, {
-            instanceId: msg.interaction.instanceId, profileName: msg.interaction.profile,
+            instanceId: msg.interaction.instanceId,
             status: 'running', spawnedAt: msg.interaction.timestamp, cwd: null,
           });
           renderInspectorTabStrip();
@@ -3864,7 +3888,7 @@
           for (const inst of msg.instances) {
             const existing = knownInstances.get(inst.instanceId);
             knownInstances.set(inst.instanceId, {
-              instanceId: inst.instanceId, profileName: inst.profileName,
+              instanceId: inst.instanceId,
               status: inst.status, spawnedAt: inst.spawnedAt,
               cwd: inst.cwd || existing?.cwd || null,
               tabId: inst.tabId || existing?.tabId || null,
@@ -3910,7 +3934,7 @@
         state.interactions.sort((a, b) => a.timestamp - b.timestamp);
         if (!knownInstances.has(instanceId)) {
           knownInstances.set(instanceId, {
-            instanceId, profileName: null, status: 'running',
+            instanceId, status: 'running',
             spawnedAt: toAdd[0]?.timestamp || Date.now(), cwd: null,
           });
         }
@@ -3931,7 +3955,7 @@
           for (const i of toAdd) {
             if (i.instanceId && !knownInstances.has(i.instanceId)) {
               knownInstances.set(i.instanceId, {
-                instanceId: i.instanceId, profileName: i.profile,
+                instanceId: i.instanceId,
                 status: 'exited', spawnedAt: i.timestamp, cwd: null,
               });
             }

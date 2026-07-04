@@ -6,10 +6,12 @@
   // --- State ---
   const mcp = {
     tools: [],
+    claudeTools: [],
     status: 'stopped',
     needsRestart: false,
     meta: null,
     expandedSlug: null,
+    expandedClaudeTool: null,
     liveTools: [],
     testResult: null,
     testHistory: [],
@@ -109,6 +111,10 @@
         mcp.tools = msg.tools || [];
         renderPanel();
         break;
+      case 'mcp:claude-tools':
+        mcp.claudeTools = msg.tools || [];
+        renderPanel();
+        break;
       case 'mcp:tool:saved': {
         const saved = msg.tool;
         if (saved?.slug && !mcp.expandedSlug) {
@@ -181,7 +187,8 @@
     const countEl = document.getElementById('capMcpCount');
     if (countEl) {
       const enabled = mcp.tools.filter(t => t.enabled).length;
-      countEl.textContent = enabled > 0 ? `${enabled} tool${enabled > 1 ? 's' : ''}` : '0';
+      const builtin = mcp.claudeTools.length;
+      countEl.textContent = builtin > 0 ? `${builtin}+${enabled}` : String(enabled);
     }
 
     const running = mcp.status === 'running';
@@ -189,9 +196,10 @@
     const statusLabel = mcp.status.charAt(0).toUpperCase() + mcp.status.slice(1);
 
     let html = `<div class="ref-intro">
-      <strong>MCP Tools</strong> extend Claude Code with custom tools you create. One integrated server
-      (<code>vistaclair-tools</code>) runs automatically and registers with Claude Code &mdash;
-      you just add tools below and Claude can call them like built-in ones.
+      <strong>Tools</strong> are actions Claude can request during the agentic loop.
+      <em>Built-in tools</em> ship with the Claude CLI itself (catalog read live from <code>claude mcp serve</code>);
+      <em>custom tools</em> are served by the integrated <code>vistaclair-tools</code> MCP server &mdash;
+      add tools below and Claude can call them like built-in ones.
     </div>`;
 
     // Server status bar
@@ -206,7 +214,7 @@
 
     // Tool list header
     html += `<div class="cap-section-header">
-      <span>Tools</span>
+      <span>Custom Tools</span>
       <button class="cap-new-btn" id="mcpNewTool">+ New Tool</button>
     </div>`;
 
@@ -219,6 +227,20 @@
         const bi = t.builtin;
         const isExpanded = mcp.expandedSlug === t.slug;
         html += renderToolItem(t, bi, isExpanded);
+      }
+      html += '</div>';
+    }
+
+    // Claude built-in tools (read-only, live catalog from `claude mcp serve`)
+    html += `<div class="cap-section-header" style="margin-top:16px">
+      <span>Claude Built-in Tools</span>
+    </div>`;
+    if (mcp.claudeTools.length === 0) {
+      html += '<div class="mcp-empty">Loading catalog from <code>claude mcp serve</code>&hellip;</div>';
+    } else {
+      html += '<div id="mcpClaudeToolList">';
+      for (const t of mcp.claudeTools) {
+        html += renderClaudeToolItem(t, mcp.expandedClaudeTool === t.name);
       }
       html += '</div>';
     }
@@ -278,6 +300,30 @@
     </div>`;
   }
 
+  function renderClaudeToolItem(t, isExpanded) {
+    const props = t.inputSchema?.properties || {};
+    const required = new Set(t.inputSchema?.required || []);
+    const paramSummary = Object.entries(props).map(([name, p]) =>
+      `<span class="mcp-param-chip">${escHtml(name)}<span class="mcp-param-type">${escHtml(p.type || 'string')}</span>${required.has(name) ? '' : '?'}</span>`
+    ).join(' ');
+
+    const desc = t.description || '';
+    const brief = desc.split('\n')[0].slice(0, 140);
+
+    return `<div class="mcp-tool-item${isExpanded ? ' expanded' : ''}" data-claude-tool="${escHtml(t.name)}">
+      <div class="mcp-tool-item-header">
+        <div class="mcp-tool-item-info">
+          <span class="mcp-tool-item-name">${escHtml(t.name)}</span>
+        </div>
+        <span class="cap-item-desc">${escHtml(brief)}</span>
+      </div>
+      <div class="mcp-tool-item-detail" style="display:${isExpanded ? 'block' : 'none'}">
+        ${paramSummary ? `<div class="mcp-detail-params">${paramSummary}</div>` : ''}
+        <pre class="mcp-claude-tool-desc">${escHtml(desc)}</pre>
+      </div>
+    </div>`;
+  }
+
   function renderStatusBar() {
     const bar = document.getElementById('mcpStatusBar');
     if (!bar) return;
@@ -299,6 +345,15 @@
   function attachPanelEvents(panel) {
     panel.querySelector('#mcpNewTool')?.addEventListener('click', createNewTool);
     panel.querySelector('#mcpRestart')?.addEventListener('click', () => sendWs({ type: 'mcp:restart' }));
+
+    panel.querySelector('#mcpClaudeToolList')?.addEventListener('click', (e) => {
+      if (e.target.closest('.mcp-tool-item-detail')) return;
+      const item = e.target.closest('.mcp-tool-item');
+      if (!item) return;
+      const name = item.dataset.claudeTool;
+      mcp.expandedClaudeTool = mcp.expandedClaudeTool === name ? null : name;
+      renderPanel();
+    });
 
     const list = panel.querySelector('#mcpToolList');
     if (!list) return;
