@@ -35,6 +35,11 @@ const createApiRouter = require('./src/api');
   const missing = [];
   try { require.resolve('node-pty'); } catch { missing.push('node-pty'); }
   if (missing.length === 0) return;
+  if (process.env.VISTACLAIR_SERVER === '1') {
+    // Server mode: never mutate the install at boot — install at deploy time.
+    console.warn(`Warning: missing dependencies: ${missing.join(', ')}. CLI terminal feature will be unavailable. Run: npm install ${missing.join(' ')}`);
+    return;
+  }
   console.log(`Installing missing dependencies: ${missing.join(', ')}...`);
   try {
     execFileSync('npm', ['install', '--no-save', ...missing], { cwd: __dirname, stdio: 'inherit' });
@@ -85,11 +90,24 @@ const PORT_ARG = process.argv.slice(2).find(a => /^\d+$/.test(a));
 const DASHBOARD_PORT = parseInt(PORT_ARG || process.env.DASHBOARD_PORT || '3457');
 const TARGET_URL = process.env.ANTHROPIC_TARGET_URL || 'https://api.anthropic.com';
 const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '200');
+const SERVER_MODE = process.env.VISTACLAIR_SERVER === '1';
+// Server mode: a generated token would rotate on every pm2 restart, breaking
+// internal callers (MCP tools, app-runners) that hold the old value.
+if (SERVER_MODE && !process.env.AUTH_TOKEN) {
+  console.error('Error: VISTACLAIR_SERVER=1 requires an explicit AUTH_TOKEN env variable.');
+  process.exit(1);
+}
 const AUTH_TOKEN = process.env.AUTH_TOKEN || crypto.randomUUID();
 const AUTH_TOKEN_SOURCE = process.env.AUTH_TOKEN ? 'env' : 'generated';
+const DASHBOARD_HOST = process.env.DASHBOARD_HOST || (SERVER_MODE ? '127.0.0.1' : undefined);
 
 // Shared store
 const store = new InteractionStore(MAX_HISTORY);
+
+// Telegram device-code login + dashboard sessions
+const { createTgLogin } = require('./src/tg-login');
+const tgLogin = createTgLogin({ dataHome: DATA_HOME });
+tgLogin.start();
 
 // --- Proxy server (port 3456) ---
 const proxyApp = express();
@@ -128,6 +146,26 @@ function getTokenFromCookies(cookieHeader) {
   return match ? match[1] : null;
 }
 
+function getSidFromCookies(cookieHeader) {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(/(?:^|;\s*)sid=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+function sessionFromReq(req) {
+  return tgLogin.getSession(getSidFromCookies(req.headers.cookie));
+}
+
+// The static token is only a credential for truly-local callers once TG login
+// is configured; externally, TG-issued sessions are the only way in.
+function tokenLoginAllowed(req) {
+  return isLoopback(req) || !tgLogin.configured();
+}
+
+function authCookie(name, value, extra = '') {
+  return `${name}=${value}; HttpOnly; SameSite=Lax; Path=/${SERVER_MODE ? '; Secure' : ''}${extra}`;
+}
+
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -142,8 +180,8 @@ dashboardApp.get('/login', (req, res) => {
 });
 
 dashboardApp.post('/login', authLimiter, (req, res) => {
-  if (safeEqual(req.body.token, AUTH_TOKEN)) {
-    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/`);
+  if (tokenLoginAllowed(req) && safeEqual(req.body.token, AUTH_TOKEN)) {
+    res.setHeader('Set-Cookie', authCookie('token', AUTH_TOKEN));
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
@@ -153,10 +191,38 @@ dashboardApp.post('/login', authLimiter, (req, res) => {
 dashboardApp.get('/login/auto', authLimiter, (req, res) => {
   if (!isLoopback(req)) return res.redirect('/login');
   if (safeEqual(req.query.token, AUTH_TOKEN)) {
-    res.setHeader('Set-Cookie', `token=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/`);
+    res.setHeader('Set-Cookie', authCookie('token', AUTH_TOKEN));
     return res.redirect('/');
   }
   res.redirect('/login');
+});
+
+// Telegram device-code login (unauthenticated challenge endpoints)
+dashboardApp.get('/login/tg/info', (req, res) => {
+  res.json({ configured: tgLogin.configured(), tokenLoginAllowed: tokenLoginAllowed(req) });
+});
+
+dashboardApp.post('/login/tg/start', authLimiter, (req, res) => {
+  if (!tgLogin.configured()) return res.status(404).json({ error: 'Telegram login not configured' });
+  const challenge = tgLogin.startChallenge({ ip: req.ip, ua: req.headers['user-agent'] });
+  if (!challenge) return res.status(429).json({ error: 'Too many pending logins' });
+  res.json(challenge);
+});
+
+dashboardApp.post('/login/tg/poll', (req, res) => {
+  const result = tgLogin.pollChallenge(req.body?.nonce);
+  if (result === 'pending') return res.json({ status: 'pending' });
+  if (result === 'expired') return res.json({ status: 'expired' });
+  res.setHeader('Set-Cookie', authCookie('sid', result.sid));
+  res.json({ status: 'ok' });
+});
+
+// One-time login link redemption (minted host-locally via `vistaclair login-link`)
+dashboardApp.get('/login/once', authLimiter, (req, res) => {
+  const sid = tgLogin.redeemOneTimeLink(req.query.k, { ip: req.ip, ua: req.headers['user-agent'] });
+  if (!sid) return res.redirect('/login');
+  res.setHeader('Set-Cookie', authCookie('sid', sid));
+  res.redirect('/');
 });
 
 // Hook reporter endpoint (auth via body token, no cookie needed)
@@ -297,10 +363,16 @@ dashboardApp.use((req, res, next) => {
   if (addons.isAuthExempt(req.path)) return next();
   // Allow internal requests from MCP tools (localhost + internal header)
   if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
-  const token = getTokenFromCookies(req.headers.cookie);
-  if (safeEqual(token, AUTH_TOKEN)) return next();
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ') && safeEqual(authHeader.slice(7), AUTH_TOKEN)) return next();
+  // Telegram-issued session
+  if (sessionFromReq(req)) return next();
+  // Static token: local-only once TG login is configured (external raw-token
+  // acceptance is what made a single leak equal permanent host compromise).
+  if (tokenLoginAllowed(req)) {
+    const token = getTokenFromCookies(req.headers.cookie);
+    if (safeEqual(token, AUTH_TOKEN)) return next();
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ') && safeEqual(authHeader.slice(7), AUTH_TOKEN)) return next();
+  }
   // API routes get 401 JSON; browser routes get redirect
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
@@ -345,8 +417,10 @@ store.setBroadcaster(broadcaster);
 dashboardServer.on('upgrade', (req, socket, head) => {
   // Allow internal requests from MCP tools (localhost + internal header)
   const internal = isLoopbackSocket(socket, req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN);
+  const session = tgLogin.getSession(getSidFromCookies(req.headers.cookie));
   const token = getTokenFromCookies(req.headers.cookie);
-  if (!internal && !safeEqual(token, AUTH_TOKEN)) {
+  const tokenOk = (isLoopbackSocket(socket, req) || !tgLogin.configured()) && safeEqual(token, AUTH_TOKEN);
+  if (!internal && !session && !tokenOk) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
@@ -376,6 +450,20 @@ const addonCtx = {
   broadcaster, store, authToken: AUTH_TOKEN,
   dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT,
   cliSessionManager, spawnClaude, buildClaudeArgs,
+  // Inspector session lifecycle for headless ai.prompt spawns: registering an
+  // instanceId gives its interactions a persistent per-session timeline on disk
+  // (data/interactions/<sessId>/), exactly like CLI tabs.
+  registerAiSession: (instanceId) => {
+    const sessId = crypto.randomUUID();
+    store.registerSession(instanceId, sessId);
+    return sessId;
+  },
+  unregisterAiSession: (instanceId) => {
+    const sessId = store.sessionMap.get(instanceId);
+    store.unregisterSession(instanceId);
+    // A call that failed before any request leaves an empty session dir — drop it.
+    if (sessId && !store.hasSessionContent(sessId)) store.deleteSessionData(sessId);
+  },
   secretStore: require('./src/secret-store'),
   resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
   resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
@@ -418,7 +506,9 @@ function scheduleRestart() {
     cliSessionManager.killAll();
     mcp.shutdown();
 
-    const spawnNew = () => {
+    // Server mode: pm2 supervises us — a detached child would race the pm2
+    // respawn for the ports. Just exit cleanly and let pm2 restart.
+    const spawnNew = SERVER_MODE ? () => process.exit(0) : () => {
       const child = spawn(process.argv[0], process.argv.slice(1), {
         detached: true, stdio: 'inherit', cwd: process.cwd(),
         env: { ...process.env, AUTH_TOKEN, NO_OPEN: '1' },
@@ -434,6 +524,72 @@ function scheduleRestart() {
     setTimeout(spawnNew, 2000);
   }, 300);
 }
+
+// Broadcast relay for out-of-process addon hosts (Pro app-runners). Reachable
+// only via loopback + internal header (the auth middleware admits nothing else
+// here from outside, and this re-checks to be explicit).
+dashboardApp.post('/api/internal/broadcast', (req, res) => {
+  if (!(isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN))) {
+    return res.status(403).json({ error: 'Internal only' });
+  }
+  if (!req.body || typeof req.body.type !== 'string') {
+    return res.status(400).json({ error: 'Message must have a type' });
+  }
+  broadcaster.broadcast(req.body);
+  res.json({ ok: true });
+});
+
+// --- TG login management (auth handled by middleware) ---
+dashboardApp.get('/api/tg-login/config', (req, res) => {
+  res.json(tgLogin.getConfigInfo());
+});
+
+dashboardApp.post('/api/tg-login/config', (req, res) => {
+  const { botToken, ownerUserId, sessionTtlDays } = req.body || {};
+  if (botToken !== undefined && botToken !== '' && !/^\d+:[\w-]+$/.test(String(botToken).trim())) {
+    return res.status(400).json({ error: 'Invalid bot token format' });
+  }
+  if (ownerUserId !== undefined && ownerUserId !== '' && !/^\d+$/.test(String(ownerUserId).trim())) {
+    return res.status(400).json({ error: 'Owner user id must be numeric' });
+  }
+  tgLogin.setConfig({ botToken, ownerUserId, sessionTtlDays });
+  res.json(tgLogin.getConfigInfo());
+});
+
+dashboardApp.get('/api/sessions', (req, res) => {
+  res.json({ sessions: tgLogin.listSessions(getSidFromCookies(req.headers.cookie)) });
+});
+
+dashboardApp.delete('/api/sessions/:id', (req, res) => {
+  res.json({ ok: tgLogin.revokeSession(req.params.id) });
+});
+
+dashboardApp.delete('/api/sessions', (req, res) => {
+  // "Log out everywhere" keeps the caller's own session unless ?all=1
+  tgLogin.revokeAll(req.query.all === '1' ? {} : { exceptSid: getSidFromCookies(req.headers.cookie) });
+  res.json({ ok: true });
+});
+
+dashboardApp.post('/api/logout', (req, res) => {
+  const sid = getSidFromCookies(req.headers.cookie);
+  const s = sid && tgLogin.getSession(sid);
+  if (s) tgLogin.revokeSession(s.id);
+  res.setHeader('Set-Cookie', [
+    authCookie('sid', '', '; Max-Age=0'),
+    authCookie('token', '', '; Max-Age=0'),
+  ]);
+  res.json({ ok: true });
+});
+
+// Break-glass: mint a one-time login URL. Loopback+internal-header only, so it
+// is reachable exclusively from the host itself (`vistaclair login-link`).
+dashboardApp.post('/api/tg-login/login-link', (req, res) => {
+  if (!(isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN))) {
+    return res.status(403).json({ error: 'Host-local only' });
+  }
+  const key = tgLogin.createOneTimeLink();
+  res.json({ path: `/login/once?k=${key}`, expiresInMs: 5 * 60 * 1000 });
+});
 
 // Restart endpoint (auth handled by middleware)
 dashboardApp.post('/api/restart', (req, res) => {
@@ -459,11 +615,22 @@ function killStalePortProcesses() {
     }
   } catch {}
 }
-killStalePortProcesses();
+// Server mode: pm2 owns process lifecycle — never kill by port; fail fast instead.
+if (!SERVER_MODE) killStalePortProcesses();
+
+for (const srv of [proxyServer, dashboardServer]) {
+  srv.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Error: port ${err.port} is already in use.${SERVER_MODE ? ' Another instance running? Check pm2.' : ''}`);
+      process.exit(1);
+    }
+    throw err;
+  });
+}
 
 // Start both servers (proxy on localhost only)
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
-  dashboardServer.listen(DASHBOARD_PORT, () => {
+  dashboardServer.listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
     mcp.autoStart();
     console.log('');
     console.log('  Claude Code API Proxy running.');
@@ -483,8 +650,8 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
     console.log(`    ANTHROPIC_BASE_URL=http://localhost:${PROXY_PORT} claude -p "your prompt"`);
     console.log('');
 
-    // Auto-open dashboard in the default browser (skip with NO_OPEN=1)
-    if (!process.env.NO_OPEN) {
+    // Auto-open dashboard in the default browser (skip with NO_OPEN=1 or server mode)
+    if (!process.env.NO_OPEN && !SERVER_MODE) {
       const url = `http://localhost:${DASHBOARD_PORT}/login/auto?token=${AUTH_TOKEN}`;
       const { execFile } = require('child_process');
       const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
@@ -510,6 +677,7 @@ proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
 
 // Clean shutdown: unregister MCP servers and stop running apps
 function gracefulShutdown() {
+  tgLogin.stop();
   cliSessionManager.saveAllToHistory();
   cliSessionManager.killAll();
   addons.shutdownAll();

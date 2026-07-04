@@ -74,21 +74,116 @@
       cursor: pointer;
     }
     button:hover { background: #89b4fa; }
+    #tg-panel { display: none; }
+    .tg-code {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-align: center;
+      color: #7aa2f7;
+      background: #1a1b26;
+      border: 1px solid #414868;
+      border-radius: 4px;
+      padding: 14px 0;
+      margin: 12px 0;
+      user-select: all;
+    }
+    .tg-hint { font-size: 11px; color: #565f89; line-height: 1.5; }
+    .tg-status { font-size: 11px; color: #565f89; margin-top: 12px; text-align: center; }
+    .tg-status.ok { color: #9ece6a; }
+    .spinner {
+      display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+      border: 2px solid #414868; border-top-color: #7aa2f7; border-radius: 50%;
+      animation: spin 0.9s linear infinite; vertical-align: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .alt-link { font-size: 11px; color: #565f89; margin-top: 16px; text-align: center; cursor: pointer; text-decoration: underline; }
+    .alt-link:hover { color: #7aa2f7; }
   </style>
 </head>
 <body>
-  <form class="login-box" method="POST" action="/login">
+  <div class="login-box">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><svg width="24" height="24" viewBox="0 0 64 64" fill="none"><defs><linearGradient id="vc-g" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#cc3344"/><stop offset="25%" stop-color="#c07020"/><stop offset="50%" stop-color="#1a8a3a"/><stop offset="75%" stop-color="#2255aa"/><stop offset="100%" stop-color="#7744bb"/></linearGradient></defs><ellipse cx="32" cy="32" rx="29" ry="18" fill="#fff" stroke="#aaa" stroke-width="1.5"/><circle cx="32" cy="32" r="13" fill="url(#vc-g)"/><circle cx="32" cy="32" r="5.5" fill="#1a1a2e"/><circle cx="28" cy="28" r="2.5" fill="#fff"/></svg><h1>vistaclair</h1></div>
-    <div class="subtitle">Enter your auth token to continue</div>
-    <label for="token">Auth token</label>
-    <input type="password" id="token" name="token" autocomplete="off" autofocus required>
-    <div class="error" id="error">Invalid token</div>
-    <button type="submit">Login</button>
-  </form>
+
+    <div id="tg-panel">
+      <div class="subtitle">Login via Telegram</div>
+      <div class="tg-hint">Send this code to your vistaclair login bot:</div>
+      <div class="tg-code" id="tg-code">·····</div>
+      <div class="tg-status" id="tg-status"><span class="spinner"></span>Waiting for Telegram…</div>
+      <div class="alt-link" id="show-token">Use auth token instead</div>
+    </div>
+
+    <form id="token-form" method="POST" action="/login">
+      <div class="subtitle">Enter your auth token to continue</div>
+      <label for="token">Auth token</label>
+      <input type="password" id="token" name="token" autocomplete="off" autofocus required>
+      <div class="error" id="error">Invalid token</div>
+      <button type="submit">Login</button>
+    </form>
+  </div>
   <script>
     if (location.search.includes('error=1')) {
       document.getElementById('error').classList.add('visible');
     }
+
+    (async function () {
+      const tgPanel = document.getElementById('tg-panel');
+      const tokenForm = document.getElementById('token-form');
+      const codeEl = document.getElementById('tg-code');
+      const statusEl = document.getElementById('tg-status');
+      let info;
+      try { info = await (await fetch('login/tg/info')).json(); } catch { return; }
+      if (!info.configured) return; // token form stays as-is
+
+      tgPanel.style.display = 'block';
+      if (info.tokenLoginAllowed) {
+        document.getElementById('show-token').onclick = () => {
+          tgPanel.style.display = 'none';
+          tokenForm.style.display = 'block';
+          document.getElementById('token').focus();
+        };
+      } else {
+        document.getElementById('show-token').style.display = 'none';
+      }
+      tokenForm.style.display = 'none';
+
+      let nonce = null;
+      async function newChallenge() {
+        try {
+          const res = await fetch('login/tg/start', { method: 'POST' });
+          if (!res.ok) throw new Error();
+          const ch = await res.json();
+          nonce = ch.nonce;
+          codeEl.textContent = ch.code;
+          statusEl.className = 'tg-status';
+          statusEl.innerHTML = '<span class="spinner"></span>Waiting for Telegram…';
+        } catch {
+          statusEl.textContent = 'Could not start login — retrying…';
+          setTimeout(newChallenge, 5000);
+        }
+      }
+      await newChallenge();
+
+      (async function poll() {
+        if (!nonce) return setTimeout(poll, 2000);
+        try {
+          const res = await fetch('login/tg/poll', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ nonce }),
+          });
+          const r = await res.json();
+          if (r.status === 'ok') {
+            statusEl.className = 'tg-status ok';
+            statusEl.textContent = '✓ Logged in';
+            location.href = '/';
+            return;
+          }
+          if (r.status === 'expired') { await newChallenge(); }
+        } catch {}
+        setTimeout(poll, 2000);
+      })();
+    })();
   </script>
 </body>
 </html>
