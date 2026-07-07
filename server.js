@@ -363,6 +363,8 @@ dashboardApp.use((req, res, next) => {
   if (addons.isAuthExempt(req.path)) return next();
   // Allow internal requests from MCP tools (localhost + internal header)
   if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
+  // App-tool-call uses ephemeral per-session tokens validated by its own handler
+  if (isLoopback(req) && req.path === '/api/app-tool-call') return next();
   // Telegram-issued session
   if (sessionFromReq(req)) return next();
   // Static token: local-only once TG login is configured (external raw-token
