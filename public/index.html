@@ -103,8 +103,11 @@
 
   <!-- ===== DASHBOARD VIEW ===== -->
   <main id="view-dashboard" class="hidden" style="display:none">
-    <div class="view-nav" id="inspectorTabStrip">
-      <button class="view-tab active" data-instance-id="all">All</button>
+    <div class="view-nav inspector-tab-wrapper" id="inspectorTabWrapper">
+      <div class="inspector-tab-scroll" id="inspectorTabStrip">
+        <button class="view-tab active" data-instance-id="all">All</button>
+      </div>
+      <div class="inspector-tab-pinned" id="inspectorTabPinned"></div>
     </div>
     <div class="inspector-body">
       <aside id="timeline">

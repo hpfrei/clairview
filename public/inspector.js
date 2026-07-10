@@ -321,7 +321,13 @@
         });
       }
 
-      inspectorTabStrip.appendChild(clearBtn);
+      const pinnedContainer = document.getElementById('inspectorTabPinned');
+      if (pinnedContainer) {
+        pinnedContainer.innerHTML = '';
+        pinnedContainer.appendChild(clearBtn);
+      } else {
+        inspectorTabStrip.appendChild(clearBtn);
+      }
     }
 
     updateStreamingState();

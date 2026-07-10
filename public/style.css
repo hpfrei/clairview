@@ -140,12 +140,39 @@ body.nav-loading .view-nav {
   transition: color 0.15s, background 0.15s;
 }
 .view-tab-new:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.16); }
+/* Inspector tab strip: scrollable tabs + pinned action button */
+.inspector-tab-wrapper {
+  overflow: hidden;
+  padding-right: 0;
+}
+.inspector-tab-scroll {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.inspector-tab-scroll::-webkit-scrollbar { height: 3px; }
+.inspector-tab-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.inspector-tab-pinned {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  margin-left: auto;
+  padding-right: 8px;
+}
+.inspector-tab-pinned:empty {
+  display: none;
+}
 .view-tab-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   position: relative;
-  margin-left: auto;
   padding: 3px 10px 3px 14px;
   font-size: 10px;
   font-weight: 600;

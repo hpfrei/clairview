@@ -41,7 +41,8 @@
   },
   "claude-opus-4-5": {
     "label": "Claude Opus 4.5",
-    "lifecycle": "current",
+    "lifecycle": "deprecated",
+    "retiresAt": "2026-09-14T00:00:00Z",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
@@ -65,7 +66,8 @@
   },
   "claude-sonnet-4-5": {
     "label": "Claude Sonnet 4.5",
-    "lifecycle": "current",
+    "lifecycle": "deprecated",
+    "retiresAt": "2026-09-14T00:00:00Z",
     "inputCostPerMTok": 3,
     "outputCostPerMTok": 15,
     "cacheReadCostPerMTok": 0.3,
