@@ -476,6 +476,9 @@ const addonCtx = {
     pref: caps.getClaudeAuthPref(DATA_HOME),
     needsChoice: caps.needsClaudeAuthChoice(DATA_HOME),
   }),
+  scheduleRestart: () => scheduleRestart(),
+  pendingQuestions,
+  clearPendingQuestionsForTab: createProxyRouter.clearPendingQuestionsForTab,
 };
 if (proModule) {
   try {

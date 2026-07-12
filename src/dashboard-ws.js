@@ -62,6 +62,7 @@ class DashboardBroadcaster {
     this.cliSessionManager = opts.cliSessionManager || null;
     this.mcpHandler = null; // Set externally by src/mcp/index.js
     this._pluginHandlers = [];
+    this._broadcastListeners = new Set();
 
     // Built-in domain handlers (capability CRUD + CLI terminal) registered via
     // the same plugin registry MCP/rules/Pro-apps use.
@@ -222,7 +223,17 @@ class DashboardBroadcaster {
     return true;
   }
 
+  // Observe every outbound broadcast in-process (add-ons use this to react to
+  // events like ask:question without a WS client). Returns an unsubscribe fn.
+  onBroadcast(fn) {
+    this._broadcastListeners.add(fn);
+    return () => this._broadcastListeners.delete(fn);
+  }
+
   broadcast(message) {
+    for (const fn of this._broadcastListeners) {
+      try { fn(message); } catch (err) { console.error('broadcast listener error:', err); }
+    }
     const data = JSON.stringify(message);
     for (const client of this.wss.clients) {
       if (client.readyState === WebSocket.OPEN) {

@@ -425,7 +425,11 @@ class CliSessionManager {
     this.spawn(tabId, opts.cwd, opts.cols, opts.rows, { resumeSessionId });
 
     if (opts.prompt && opts.autoSubmit) {
-      session.writeWhenReady(opts.prompt + '\n');
+      // Write the prompt and the submitting CR as separate PTY chunks: the CLI
+      // treats a chunk with an embedded newline as a paste (newline inserted,
+      // not submitted), so a trailing '\n' never fires Enter.
+      session.writeWhenReady(opts.prompt);
+      session.writeWhenReady('\r', undefined, 400);
     }
   }
 
