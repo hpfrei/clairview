@@ -45,6 +45,6 @@
     "id": "rule-req_mpww",
     "name": "content replacer",
     "slug": "Replaces every occurrence of \"mitm\" with \"superproxy\" across the system prompt, message text, tool inputs, and tool results in the request.",
-    "enabled": true
+    "enabled": false
   }
 ]
