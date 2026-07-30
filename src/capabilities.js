@@ -565,6 +565,36 @@ function setClaudeAuthPref(baseDir, value) {
   return true;
 }
 
+// Model aliases `claude --model` accepts in addition to full model names. The
+// `[1m]` variants request the 1M-context beta. Offered alongside the resolved
+// catalog so the picker covers what the CLI understands, not just what
+// models.json happens to list.
+const CLI_MODEL_ALIASES = [
+  { value: 'opus', label: 'Opus (latest)' },
+  { value: 'opus[1m]', label: 'Opus (latest, 1M context)' },
+  { value: 'sonnet', label: 'Sonnet (latest)' },
+  { value: 'sonnet[1m]', label: 'Sonnet (latest, 1M context)' },
+  { value: 'haiku', label: 'Haiku (latest)' },
+  { value: 'fable', label: 'Fable (latest)' },
+];
+
+// Model every NEW CLI tab is pinned to at spawn. Existing tabs keep whatever
+// they were spawned with — this is only consulted when a tab has no model yet.
+const CLI_MODEL_FALLBACK = 'opus';
+
+function getCliModelPref(baseDir) {
+  const v = readAppPrefs(baseDir).cliModel;
+  return (typeof v === 'string' && v.trim()) ? v.trim() : CLI_MODEL_FALLBACK;
+}
+
+function setCliModelPref(baseDir, value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  const prefs = readAppPrefs(baseDir);
+  prefs.cliModel = value.trim();
+  writeAppPrefs(baseDir, prefs);
+  return true;
+}
+
 // Record (once) that a subscription has been seen, so the UI can prompt the user
 // to choose a preference the first time after they run `/login`. Returns true if
 // the prefs were changed (i.e. this is a newly observed subscription).
@@ -1219,6 +1249,9 @@ module.exports = {
   readAppPrefs,
   getClaudeAuthPref,
   setClaudeAuthPref,
+  CLI_MODEL_ALIASES,
+  getCliModelPref,
+  setCliModelPref,
   noteSubscriptionState,
   needsClaudeAuthChoice,
 };

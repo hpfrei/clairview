@@ -24,6 +24,9 @@ class CliSession {
     this.pty = null;
     this.cwd = null;
     this.tabId = null;
+    // 'cli' | 'shell' | null (never spawned). Recorded in the open-tab manifest:
+    // a shell has no resumable transcript, so it is never auto-resumed.
+    this.kind = null;
     this.sessId = null;
     this._instanceId = null;
     this.title = null;
@@ -50,6 +53,7 @@ class CliSession {
     if (this.running) this.kill();
 
     this.cwd = cwd;
+    this.kind = 'cli';
     this.isolated = isolated === true;
     this.autoMemory = autoMemory === true;
     this.status = 'running';
@@ -163,6 +167,7 @@ class CliSession {
     if (this.running) this.kill();
 
     this.cwd = cwd;
+    this.kind = 'shell';
     this.status = 'running';
     this._scrollback = '';
 

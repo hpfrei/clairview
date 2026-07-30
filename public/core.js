@@ -32,6 +32,8 @@ const state = {
   models: [],
   providers: [],
   claudeAuth: { pref: null, hasSubscription: false, needsChoice: false },
+  cliModel: null,
+  cliModelAliases: [],
   editingModel: null,
   mcpServers: [],
   serverRestarting: false,
@@ -1151,6 +1153,13 @@ function handleMessage(msg) {
     case 'provider:list':
     case 'prefs:claudeAuth':
       window.capabilitiesModule?.handleMessage(msg);
+      break;
+
+    // Default model for new CLI tabs
+    case 'prefs:cliModel':
+      state.cliModel = msg.model || null;
+      if (Array.isArray(msg.aliases)) state.cliModelAliases = msg.aliases;
+      window.cliModule?.handleMessage(msg);
       break;
 
     // Proxy rules

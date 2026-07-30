@@ -323,7 +323,7 @@ You don't have to use an external terminal. The CLI tab gives you Claude Code ri
   <text x="30" y="105" fill="var(--text-dim)" font-size="9" font-family="monospace">$ refactor the auth module</text>
   <text x="30" y="120" fill="var(--green)" font-size="9" font-family="monospace">Working on src/auth.js...</text>
   <text x="120" y="155" text-anchor="middle" fill="var(--text-dim)" font-size="9">⚙ model routing · ▶ resume</text>
-  <text x="120" y="172" text-anchor="middle" fill="var(--text-dim)" font-size="9">✎ rename · ✕ stop</text>
+  <text x="120" y="172" text-anchor="middle" fill="var(--text-dim)" font-size="9">✕ stop</text>
 
   <!-- Tab 2 -->
   <rect x="250" y="10" width="220" height="175" rx="8" fill="none" stroke="var(--cyan,#0dd)" stroke-width="2"/>

@@ -15,6 +15,14 @@
     "cacheReadCostPerMTok": 1.0,
     "cacheCreateCostPerMTok": 12.5
   },
+  "claude-opus-5": {
+    "label": "Claude Opus 5",
+    "lifecycle": "current",
+    "inputCostPerMTok": 5,
+    "outputCostPerMTok": 25,
+    "cacheReadCostPerMTok": 0.5,
+    "cacheCreateCostPerMTok": 6.25
+  },
   "claude-opus-4-8": {
     "label": "Claude Opus 4.8",
     "lifecycle": "current",

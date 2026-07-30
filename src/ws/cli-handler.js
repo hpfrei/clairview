@@ -41,7 +41,9 @@ function handleMessage(ws, msg, bc) {
     case 'cli:newTab': {
       const newTabId = mgr.nextTabId();
       mgr.getOrCreate(newTabId);
-      send({ type: 'cli:newTab', tabId: newTabId });
+      // Echo the client's correlation id so it can match the reply to the
+      // request it made, instead of assuming replies arrive in request order.
+      send({ type: 'cli:newTab', tabId: newTabId, reqId: msg.reqId || null });
       break;
     }
     case 'cli:closeTab':
@@ -110,9 +112,6 @@ function handleMessage(ws, msg, bc) {
         clearPendingQuestionsForTab(msg.tabId);
         mgr.kill(msg.tabId);
       }
-      break;
-    case 'cli:rename':
-      if (msg.tabId) mgr.rename(msg.tabId, msg.title || null);
       break;
     case 'cli:settings':
       if (msg.tabId && msg.settings) {

@@ -132,7 +132,17 @@ function handleMessage(ws, msg, bc) {
     case 'prefs:get':
       caps.noteSubscriptionState(PROJECT_ROOT);
       send({ type: 'prefs:claudeAuth', ...claudeAuthState() });
+      send({ type: 'prefs:cliModel', ...cliModelState() });
       break;
+    case 'prefs:cliModel:set': {
+      const ok = caps.setCliModelPref(PROJECT_ROOT, msg.value);
+      if (!ok) {
+        send({ type: 'chat:error', text: `Invalid CLI model: ${msg.value}` });
+        break;
+      }
+      bc.broadcast({ type: 'prefs:cliModel', ...cliModelState() });
+      break;
+    }
     case 'prefs:claudeAuth:set': {
       const ok = caps.setClaudeAuthPref(PROJECT_ROOT, msg.value);
       if (!ok) {
@@ -143,6 +153,15 @@ function handleMessage(ws, msg, bc) {
       break;
     }
   }
+}
+
+// Snapshot of the default-model-for-new-CLI-tabs choice, plus the alias list the
+// picker offers alongside the resolved model catalog.
+function cliModelState() {
+  return {
+    model: caps.getCliModelPref(PROJECT_ROOT),
+    aliases: caps.CLI_MODEL_ALIASES,
+  };
 }
 
 // Snapshot of the Claude auth decision for the frontend.

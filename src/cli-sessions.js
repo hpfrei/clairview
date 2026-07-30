@@ -3,9 +3,14 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const CliSession = require('./cli-session');
+const caps = require('./capabilities');
 const { readJSON, writeJSON, tryRm, DATA_HOME, PACKAGE_ROOT } = require('./utils');
 
 const HISTORY_FILE = path.join(DATA_HOME, 'data', 'cli-history.json');
+const OPEN_TABS_FILE = path.join(DATA_HOME, 'data', 'cli-open-tabs.json');
+// Gap between staggered restore spawns, so a large manifest does not fork every
+// `claude` process at the same instant.
+const RESTORE_STAGGER_MS = 500;
 const RECENT_DIRS_FILE = path.join(DATA_HOME, 'data', 'cli-recent-dirs.json');
 const MAX_RECENT_DIRS = 12;
 
@@ -90,6 +95,10 @@ class CliSessionManager {
     // a restart on any reconnect (even a seamless one without a page reload).
     this.bootId = crypto.randomUUID().slice(0, 8);
     this._tabSeq = 0;
+    // Tabs the last restore could not bring back, surfaced to the UI on connect.
+    this.droppedTabs = [];
+    this._restoring = false;
+    this._shuttingDown = false;
   }
 
   _createSession(tabId) {
@@ -130,6 +139,7 @@ class CliSessionManager {
       try { cb(tabId); } catch (e) { console.error('Session exit callback error:', e); }
     }
     this.sessions.delete(tabId);
+    this._persistOpenTabs();
     this.broadcastTabs();
   }
 
@@ -165,6 +175,106 @@ class CliSessionManager {
     });
     writeJSON(HISTORY_FILE, deduped);
     this.recordRecentDir(entry.cwd);
+  }
+
+  // --- Open-tab manifest ---
+  // The set of tabs to bring back after a restart, owned by the server. The
+  // client no longer replays a sessionStorage record, so recovery cannot race
+  // between browser windows and no longer depends on a dashboard being open when
+  // the server restarts. Entries store session *identity*, never tabIds:
+  // nextTabId deliberately embeds the per-process bootId so a tabId must not
+  // outlive its process.
+  _persistOpenTabs() {
+    // Suppressed in two windows where the live session map is not a truthful
+    // picture of "tabs that should come back":
+    //  - during restoreOpenTabs's staggered spawns, where the first restore would
+    //    otherwise rewrite the manifest with only itself in it;
+    //  - during shutdown, where killAll's pty exits each fire _onSessionExit and
+    //    would empty the manifest just before the process dies.
+    if (this._restoring || this._shuttingDown) return;
+    const entries = [];
+    for (const [tabId, session] of this.sessions) {
+      if (session.hidden) continue;          // app-driven, hidden from the strip
+      if (tabId.startsWith('app-')) continue; // app action tabs, not user tabs
+      if (!session.cwd) continue;             // created but never spawned
+      entries.push({
+        sessId: session.sessId || null,
+        kind: session.kind === 'shell' ? 'shell' : 'cli',
+        cwd: session.cwd,
+        title: session.title || null,
+        settings: session.getSettings(),
+        isolated: session.isolated === true,
+        autoMemory: session.autoMemory === true,
+      });
+    }
+    writeJSON(OPEN_TABS_FILE, entries);
+  }
+
+  // Bring back the tabs that were open when the previous process stopped. Called
+  // once at startup. Tabs that cannot be restored are reported on
+  // `this.droppedTabs` so the UI can say what went missing instead of letting
+  // them vanish silently.
+  restoreOpenTabs() {
+    const entries = readJSON(OPEN_TABS_FILE, []);
+    this.droppedTabs = [];
+    if (!Array.isArray(entries) || entries.length === 0) return { restored: 0, dropped: 0 };
+
+    const toRestore = [];
+    for (const e of entries) {
+      if (!e || !e.cwd) continue;
+      const label = e.title || e.cwd;
+      if (e.kind === 'shell') {
+        // A shell has no transcript; only its cwd could be restored, which would
+        // look like the tab came back when its state did not.
+        this.droppedTabs.push({ reason: 'shell', title: label, cwd: e.cwd });
+        continue;
+      }
+      if (!e.sessId) continue;
+      // `claude --resume <id>` exits immediately when the native transcript is
+      // missing, which the UI reads as the tab dying the moment it opened.
+      if (!this._transcriptExists(e.cwd, e.sessId, e.isolated === true)) {
+        this.droppedTabs.push({ reason: 'no-transcript', title: label, cwd: e.cwd });
+        continue;
+      }
+      toRestore.push(e);
+    }
+
+    if (toRestore.length === 0) {
+      this._persistOpenTabs();
+      return { restored: 0, dropped: this.droppedTabs.length };
+    }
+
+    this._restoring = true;
+    toRestore.forEach((entry, i) => {
+      setTimeout(() => {
+        try {
+          this._restoreOne(entry);
+        } catch (err) {
+          console.error(`  CLI tab restore failed for ${entry.cwd}: ${err.message}`);
+        }
+        if (i === toRestore.length - 1) {
+          this._restoring = false;
+          this._persistOpenTabs();
+          this.broadcastTabs();
+        }
+      }, i * RESTORE_STAGGER_MS);
+    });
+    return { restored: toRestore.length, dropped: this.droppedTabs.length };
+  }
+
+  _restoreOne(entry) {
+    const tabId = this.nextTabId();
+    const session = this.getOrCreate(tabId);
+    // Set title and settings before spawning: _assignTitle and the model
+    // fill-when-absent rule both no-op on an already-populated session, so the
+    // tab comes back with exactly the identity and model it had before.
+    session.title = entry.title || null;
+    if (entry.settings) session.updateSettings(entry.settings);
+    this.spawn(tabId, entry.cwd, 80, 24, {
+      resumeSessionId: entry.sessId,
+      isolated: entry.isolated === true,
+      autoMemory: entry.autoMemory === true,
+    });
   }
 
   getSavedSessions() {
@@ -287,9 +397,18 @@ class CliSessionManager {
     if (session.sessId && session.cwd) {
       this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
     }
+    this._assignTitle(session, cwd, resumeSessionId);
+    // Pin the model into the tab's own settings so the spawn always carries an
+    // explicit --model, and so a resume re-uses the model the session ran with
+    // rather than whatever the global default happens to be now. Only filled
+    // when absent: a restored tab arrives with its model already set.
+    if (!session.getSettings().model) {
+      session.updateSettings({ model: caps.getCliModelPref(DATA_HOME) });
+    }
     session.spawn(cwd, cols, rows, { resumeSessionId, isolated, autoMemory });
     // Persist immediately so session survives ungraceful server death
     this.saveToHistory({ sessId: session.sessId, cwd: session.cwd, title: session.title, settings: session.getSettings(), isolated: session.isolated, autoMemory: session.autoMemory });
+    this._persistOpenTabs();
     this.broadcastTabs();
   }
 
@@ -325,10 +444,15 @@ class CliSessionManager {
       }
       session.kill();
       this.sessions.delete(tabId);
+      this._persistOpenTabs();
     }
   }
 
+  // Shutdown path. Freezes the open-tab manifest first: these sessions are being
+  // killed because the process is stopping, not because the user closed them, so
+  // the manifest must keep listing them for the next boot to restore.
   killAll() {
+    this._shuttingDown = true;
     for (const session of this.sessions.values()) {
       session.kill();
     }
@@ -364,20 +488,41 @@ class CliSessionManager {
     return id;
   }
 
-  rename(tabId, title) {
-    const session = this.sessions.get(tabId);
-    if (session) {
-      session.title = title || null;
-      this.broadcastTabs();
-      return true;
+  // Give a session a stable display title. The title is the cwd basename, with
+  // a -2, -3, … suffix when a live sibling already holds that name. A resumed
+  // session reclaims the title it was saved under, so a tab keeps its identity
+  // across a server restart instead of having the suffix re-derived from the
+  // order the tabs happen to come back in. Titles set by the caller
+  // (launchSession's opts.title, for app tabs) are left alone.
+  _assignTitle(session, cwd, resumeSessionId) {
+    if (session.title) return;
+
+    const taken = new Set();
+    for (const other of this.sessions.values()) {
+      if (other !== session && other.title) taken.add(other.title);
     }
-    return false;
+
+    if (resumeSessionId) {
+      const saved = this._loadHistory().find(h => h.id === resumeSessionId);
+      if (saved?.title && !taken.has(saved.title)) {
+        session.title = saved.title;
+        return;
+      }
+    }
+
+    const base = path.basename((cwd || '').replace(/\/+$/, '')) || cwd || 'cli';
+    let candidate = base;
+    let n = 1;
+    while (taken.has(candidate)) candidate = `${base}-${++n}`;
+    session.title = candidate;
   }
 
   updateSettings(tabId, settings) {
     const session = this.sessions.get(tabId);
     if (session) {
       session.updateSettings(settings);
+      // settings carries the pinned --model, so the manifest must follow it.
+      this._persistOpenTabs();
       return true;
     }
     return false;

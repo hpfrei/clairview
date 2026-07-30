@@ -353,7 +353,8 @@ Available templates in this skill directory:
 
   // Warn on every page load when headless calls are routed onto the Max/Pro
   // subscription — Anthropic's terms do not permit non-interactive `claude -p`
-  // on a subscription, and doing so may result in account bans.
+  // on a subscription, and doing so may result in account bans. Behaves like any
+  // other warning toast: auto-dismisses, and stays readable in the bell centre.
   function maybeWarnSubscriptionHeadless() {
     const ca = state.claudeAuth || {};
     if (ca.pref !== 'subscription' || !ca.hasSubscription) return;
@@ -362,7 +363,6 @@ Available templates in this skill directory:
       sender: 'Vistaclair',
       title: 'Headless calls using your Max/Pro subscription',
       message: "Anthropic's terms do not permit non-interactive `claude -p` usage on a Max/Pro subscription and doing so may result in account bans. Switch to the API key in the Models page to run headless calls safely.",
-      duration: 0,
     });
   }
 

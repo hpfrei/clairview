@@ -2,6 +2,7 @@
   const { sendWs, state, escHtml, askFormBuildHTML, askFormBind } = window.dashboard;
   const tabStrip = document.getElementById('cliTabStrip');
   const tabNewBtn = document.getElementById('cliTabNew');
+  const modelCog = document.getElementById('cliModelCog');
   const container = document.getElementById('cliContainer');
   const placeholder = document.getElementById('cliPlaceholder');
   const settingsModal = document.getElementById('cliSettingsModal');
@@ -10,21 +11,20 @@
   let activeTabId = null;
   const pendingAskOverlays = new Map(); // askId -> { overlayEl, tabId }
   let _askCascade = 0;
-  let _firstTabSync = true;
-  const _respawnQueue = [];
   const _scrollbackLoaded = new Set();
   const _pendingRemoval = new Map();
 
-  function _saveOpenTabs() {
-    const entries = [];
-    for (const [tabId, tab] of tabs) {
-      entries.push({ tabId, cwd: tab.cwd, title: tab.title, settings: tab.settings, instanceId: tab.instanceId, sessId: tab.sessId, isolated: tab.isolated, autoMemory: tab.autoMemory });
-    }
-    try { sessionStorage.setItem('cli-open-tabs', JSON.stringify(entries)); } catch {}
+  // Intent for a new tab, keyed by the correlation id sent with cli:newTab. The
+  // server echoes reqId back, so two rapid requests can never claim each other's
+  // cwd/settings the way a single shared slot or a positional queue could.
+  const _pendingNewTabs = new Map();
+  let _reqSeq = 0;
+  function _requestNewTab(intent) {
+    const reqId = `req-${++_reqSeq}`;
+    if (intent) _pendingNewTabs.set(reqId, intent);
+    sendWs({ type: 'cli:newTab', reqId });
   }
-  function _loadOpenTabs() {
-    try { return JSON.parse(sessionStorage.getItem('cli-open-tabs') || 'null'); } catch { return null; }
-  }
+
   function _loadBootId() {
     try { return sessionStorage.getItem('cli-server-boot-id') || null; } catch { return null; }
   }
@@ -171,7 +171,6 @@
 
     const tab = { terminal, fitAddon, wrap, cwd: null, title: null, settings: {}, status: 'idle' };
     tabs.set(tabId, tab);
-    _saveOpenTabs();
 
     container.appendChild(wrap);
 
@@ -206,44 +205,17 @@
     }
   }
 
-  // Base label for a tab, ignoring collisions: an explicit title if set,
-  // otherwise the cwd basename, otherwise the raw tabId.
-  function _baseLabel(tab, tabId) {
+  // Display label for a tab. The server assigns every session a title at spawn
+  // time (cwd basename, `-2`/`-3` suffixed against live siblings) and persists
+  // it against the sessId, so the label is stable for the life of the session
+  // and is reclaimed verbatim when the session is resumed after a restart. The
+  // fallbacks only apply before the first spawn has reported back.
+  function computeTabLabel(tabId) {
+    const tab = tabs.get(tabId);
     if (tab?.title) return tab.title;
     if (!tab?.cwd) return tabId;
     const parts = tab.cwd.replace(/\/+$/, '').split('/');
     return parts[parts.length - 1] || tab.cwd;
-  }
-
-  // Assign a stable disambiguation number within a base-label group. A tab keeps
-  // the number it was first given for as long as its base label is unchanged, so
-  // deleting a sibling never renumbers the survivors (1 renders bare, 2 → "-2").
-  // The number is only (re)assigned when a tab has none yet or its base changed.
-  function _assignLabelNum(tabId, base) {
-    const tab = tabs.get(tabId);
-    if (!tab) return 1;
-    if (tab._labelBase === base && tab._labelNum) return tab._labelNum;
-    const taken = new Set();
-    for (const [id, t] of tabs) {
-      if (id === tabId) continue;
-      if (t._labelBase === base && t._labelNum) taken.add(t._labelNum);
-    }
-    let n = 1;
-    while (taken.has(n)) n++;
-    tab._labelBase = base;
-    tab._labelNum = n;
-    return n;
-  }
-
-  // Display label with collision disambiguation. Any two CLI tabs (titled or
-  // cwd-derived) that resolve to the same base share a numbering: the first
-  // keeps the bare name, the rest get stable `-2`, `-3`, … suffixes. Only CLI
-  // tabs live in `tabs`, so inspector tabs can never be folded into this.
-  function computeTabLabel(tabId) {
-    const tab = tabs.get(tabId);
-    const base = _baseLabel(tab, tabId);
-    const n = _assignLabelNum(tabId, base);
-    return n > 1 ? `${base}-${n}` : base;
   }
 
   function renderTabStrip() {
@@ -274,11 +246,6 @@
           const clickedTab = tabs.get(tabId);
           if (clickedTab?.instanceId) window.inspectorModule?.switchInstanceTab?.(clickedTab.instanceId);
         }, 250);
-      });
-      label.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-        startInlineRename(tabId, label);
       });
       btn.appendChild(label);
 
@@ -313,44 +280,6 @@
     }
   }
 
-  function startInlineRename(tabId, labelEl) {
-    const tab = tabs.get(tabId);
-    if (!tab) return;
-    const input = document.createElement('input');
-    input.className = 'cli-tab-rename-input';
-    input.value = tab.title || computeTabLabel(tabId);
-    input.size = Math.max(input.value.length, 4);
-    const parent = labelEl.parentElement;
-    labelEl.style.display = 'none';
-    parent.insertBefore(input, labelEl);
-    input.focus();
-    input.select();
-
-    let done = false;
-    function commit() {
-      if (done) return;
-      done = true;
-      const val = input.value.trim();
-      input.remove();
-      labelEl.style.display = '';
-      tab.title = val || null;
-      sendWs({ type: 'cli:rename', tabId, title: tab.title });
-      renderTabStrip();
-      window.inspectorModule?.renderInspectorTabStrip?.();
-    }
-    function cancel() {
-      if (done) return;
-      done = true;
-      input.remove();
-      labelEl.style.display = '';
-    }
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); commit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-    });
-    input.addEventListener('blur', commit);
-  }
-
   function removeTab(tabId) {
     dismissAskModalsForTab(tabId);
     _scrollbackLoaded.delete(tabId);
@@ -365,7 +294,6 @@
       tab.wrap.remove();
       tabs.delete(tabId);
     }
-    _saveOpenTabs();
     if (activeTabId === tabId) {
       const remaining = Array.from(tabs.keys());
       if (remaining.length > 0) {
@@ -397,10 +325,11 @@
       closeNewMenu();
       const picked = await openFsDirPicker();
       if (!picked) return;
-      state._pendingCliCwd = picked.dir;
-      state._pendingCliIsolated = picked.isolated;
-      state._pendingCliAutoMemory = picked.autoMemory;
-      sendWs({ type: 'cli:newTab' });
+      _requestNewTab({
+        cwd: picked.dir,
+        isolated: picked.isolated,
+        autoMemory: picked.autoMemory,
+      });
     });
     menu.appendChild(newItem);
 
@@ -492,13 +421,13 @@
 
         item.addEventListener('click', () => {
           closeNewMenu();
-          state._pendingCliCwd = sess.cwd;
-          state._pendingCliResumeSessionId = sess.id;
-          state._pendingCliSettings = sess.settings;
-          state._pendingCliTitle = sess.title || null;
-          state._pendingCliIsolated = sess.isolated === true;
-          state._pendingCliAutoMemory = sess.autoMemory === true;
-          sendWs({ type: 'cli:newTab' });
+          _requestNewTab({
+            cwd: sess.cwd,
+            resumeSessionId: sess.id,
+            settings: sess.settings,
+            isolated: sess.isolated === true,
+            autoMemory: sess.autoMemory === true,
+          });
         });
         menu.appendChild(item);
       }
@@ -524,6 +453,98 @@
 
   function closeNewMenu() {
     document.getElementById('cliNewMenu')?.remove();
+  }
+
+  // --- Default model for new CLI tabs ---
+
+  // Options for a model picker: the CLI's own aliases (which `--model` accepts
+  // but models.json does not list) followed by the resolved Anthropic catalog.
+  // The tab-strip cog and the per-tab settings modal both draw from this, so the
+  // two can never drift apart.
+  function modelPickerOptions() {
+    const aliases = (state.cliModelAliases || []).map(a => ({
+      value: a.value, label: a.label, group: 'Aliases', price: '',
+    }));
+    const catalog = (state.models || [])
+      .filter(m => m.providerKey === 'anthropic' && m.lifecycle !== 'retired' && !m.disabled)
+      .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name))
+      .map(m => ({
+        value: m.name,
+        label: (m.label || m.name) + (m.isNew ? ' (new)' : ''),
+        group: 'Catalog',
+        price: fmtPrice(m),
+      }));
+    return [...aliases, ...catalog];
+  }
+
+  function updateModelCog() {
+    if (!modelCog) return;
+    const current = state.cliModel || 'opus';
+    modelCog.title = `New CLI tabs use: ${current} — click to change`;
+  }
+
+  modelCog?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showModelMenu();
+  });
+
+  function showModelMenu() {
+    closeModelMenu();
+    closeNewMenu();
+    const menu = document.createElement('div');
+    menu.className = 'cli-new-menu';
+    menu.id = 'cliModelMenu';
+
+    const header = document.createElement('div');
+    header.className = 'cli-new-menu-header';
+    header.textContent = 'Model for new CLI tabs';
+    menu.appendChild(header);
+
+    const current = state.cliModel || 'opus';
+    let lastGroup = null;
+    for (const opt of modelPickerOptions()) {
+      if (opt.group !== lastGroup) {
+        lastGroup = opt.group;
+        const divider = document.createElement('div');
+        divider.className = 'cli-new-menu-divider';
+        menu.appendChild(divider);
+      }
+      const item = document.createElement('div');
+      item.className = 'cli-new-menu-item' + (opt.value === current ? ' is-selected' : '');
+      item.textContent = (opt.value === current ? '✓ ' : '') + opt.label;
+      if (opt.price) {
+        const price = document.createElement('span');
+        price.className = 'cli-model-menu-current';
+        price.textContent = opt.price;
+        item.appendChild(price);
+      }
+      item.addEventListener('click', () => {
+        closeModelMenu();
+        sendWs({ type: 'prefs:cliModel:set', value: opt.value });
+      });
+      menu.appendChild(item);
+    }
+
+    document.body.appendChild(menu);
+    const rect = modelCog.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = rect.bottom + 4 + 'px';
+    const menuWidth = menu.offsetWidth || 260;
+    let left = rect.right - menuWidth;
+    if (left < 8) left = 8;
+    if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+    menu.style.left = left + 'px';
+    const onClickOutside = (e) => {
+      if (!menu.contains(e.target) && e.target !== modelCog) {
+        closeModelMenu();
+        document.removeEventListener('click', onClickOutside, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', onClickOutside, true), 0);
+  }
+
+  function closeModelMenu() {
+    document.getElementById('cliModelMenu')?.remove();
   }
 
   function formatModelMap(modelMap) {
@@ -853,6 +874,39 @@
       });
     });
 
+    // Per-tab --model. Empty means "unset", which makes the server re-apply the
+    // tab-strip cog default at the next spawn.
+    const modelSel = settingsModal.querySelector('[data-setting="model"]');
+    if (modelSel) {
+      const cogDefault = state.cliModel || 'opus';
+      modelSel.innerHTML = `<option value="">Default (${escHtml(cogDefault)}, from the ⚙ cog)</option>`;
+      let lastGroup = null;
+      let matched = false;
+      for (const opt of modelPickerOptions()) {
+        if (opt.group !== lastGroup) {
+          lastGroup = opt.group;
+          const sep = document.createElement('option');
+          sep.disabled = true;
+          sep.textContent = `── ${opt.group} ──`;
+          modelSel.appendChild(sep);
+        }
+        const o = document.createElement('option');
+        o.value = opt.value;
+        o.textContent = opt.price ? `${opt.label}  [${opt.price}]` : opt.label;
+        if (settings.model === opt.value) { o.selected = true; matched = true; }
+        modelSel.appendChild(o);
+      }
+      // A tab pinned to a model the catalog no longer offers (retired, or an
+      // alias removed from the list) must still show what it is actually running.
+      if (settings.model && !matched) {
+        const o = document.createElement('option');
+        o.value = settings.model;
+        o.textContent = `${settings.model} — not in catalog`;
+        o.selected = true;
+        modelSel.appendChild(o);
+      }
+    }
+
     const showThinking = settingsModal.querySelector('[data-setting="showThinking"]');
     if (showThinking) showThinking.checked = !!settings.showThinking;
   }
@@ -867,7 +921,12 @@
       modelMap[family] = sel?.value || null;
     });
     const showThinking = settingsModal.querySelector('[data-setting="showThinking"]');
-    const settings = { modelMap, showThinking: !!showThinking?.checked };
+    const modelSel = settingsModal.querySelector('[data-setting="model"]');
+    const settings = {
+      modelMap,
+      model: modelSel?.value || null,
+      showThinking: !!showThinking?.checked,
+    };
     if (tab) tab.settings = { ...tab.settings, ...settings };
     sendWs({ type: 'cli:settings', tabId, settings });
     settingsModal.classList.add('hidden');
@@ -902,6 +961,12 @@
   // --- Message handler ---
   function handleMessage(msg) {
     switch (msg.type) {
+      case 'prefs:cliModel': {
+        updateModelCog();
+        // Keep an open picker in sync when the change came from another window.
+        if (document.getElementById('cliModelMenu')) showModelMenu();
+        break;
+      }
       case 'cli:output': {
         const tab = tabs.get(msg.tabId);
         if (tab) tab.terminal.write(msg.data);
@@ -922,10 +987,16 @@
         const pendingTimer = _pendingRemoval.get(msg.tabId);
         if (pendingTimer) { clearTimeout(pendingTimer); _pendingRemoval.delete(msg.tabId); }
         let tab = tabs.get(msg.tabId);
-        if (!tab && msg.tabId.startsWith('app-') && !msg.hidden) {
+        if (!tab && !msg.hidden) {
+          // A tab we have not seen yet: either an app action tab, or one the
+          // server restored at boot (its cli:spawned lands before the cli:tabs
+          // that would otherwise introduce it). Adopt it either way.
+          const isAppCli = msg.tabId.startsWith('app-');
           tab = createTab(msg.tabId);
-          switchTab(msg.tabId);
-          if (typeof switchView === 'function') switchView('claude');
+          if (isAppCli) {
+            switchTab(msg.tabId);
+            if (typeof switchView === 'function') switchView('claude');
+          }
         }
         if (tab) {
           _scrollbackLoaded.add(msg.tabId);
@@ -939,17 +1010,12 @@
           if (msg.autoMemory != null) tab.autoMemory = msg.autoMemory;
           if (msg.title) tab.title = msg.title;
           tab.settings = msg.settings || {};
-          _saveOpenTabs();
           renderTabStrip();
-        }
-        // Staggered respawn: trigger next tab after this one spawns
-        if (_respawnQueue.length > 0) {
-          sendWs({ type: 'cli:newTab' });
         }
         break;
       }
       case 'cli:tabs': {
-        handleTabList(msg.tabs || [], msg.bootId || null);
+        handleTabList(msg.tabs || [], msg.bootId || null, msg.droppedTabs || null);
         break;
       }
       case 'cli:newTab': {
@@ -957,51 +1023,31 @@
         if (!tabs.has(tabId)) createTab(tabId);
         switchTab(tabId);
 
-        // Check respawn queue first (server restart recovery)
-        const respawnEntry = _respawnQueue.shift();
-        if (respawnEntry) {
-          const tab = tabs.get(tabId);
-          if (tab) tab.title = respawnEntry.title || null;
-          if (respawnEntry.title) sendWs({ type: 'cli:rename', tabId, title: respawnEntry.title });
-          if (respawnEntry.settings) sendWs({ type: 'cli:settings', tabId, settings: respawnEntry.settings });
-          const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          sendWs({ type: 'cli:spawn', tabId, cwd: respawnEntry.cwd, cols, rows, isolated: respawnEntry.isolated === true, autoMemory: respawnEntry.autoMemory === true, resumeSessionId: respawnEntry.sessId });
-          break;
-        }
+        // Claim this reply's own intent by correlation id. An unmatched reply is
+        // an empty tab (the server minted one we have no plan for), not a licence
+        // to consume somebody else's pending spawn.
+        const intent = msg.reqId ? _pendingNewTabs.get(msg.reqId) : null;
+        if (msg.reqId) _pendingNewTabs.delete(msg.reqId);
+        if (!intent || !intent.cwd) break;
 
-        const pendingCwd = state._pendingCliCwd;
-        const pendingResumeSessionId = state._pendingCliResumeSessionId || null;
-        const pendingSettings = state._pendingCliSettings;
-        const pendingTitle = state._pendingCliTitle || null;
-        const pendingIsolated = state._pendingCliIsolated;
-        const pendingAutoMemory = state._pendingCliAutoMemory;
-        state._pendingCliCwd = null;
-        state._pendingCliResumeSessionId = null;
-        state._pendingCliSettings = null;
-        state._pendingCliTitle = null;
-        state._pendingCliIsolated = null;
-        state._pendingCliAutoMemory = null;
-        if (pendingTitle) {
-          const tab = tabs.get(tabId);
-          if (tab) tab.title = pendingTitle;
-          sendWs({ type: 'cli:rename', tabId, title: pendingTitle });
+        if (intent.settings) {
+          sendWs({ type: 'cli:settings', tabId, settings: intent.settings });
         }
-        if (pendingSettings) {
-          sendWs({ type: 'cli:settings', tabId, settings: pendingSettings });
+        const tab = tabs.get(tabId);
+        if (tab) {
+          tab.isolated = intent.isolated === true;
+          tab.autoMemory = intent.autoMemory === true;
+          if (intent.resumeSessionId) tab.sessId = intent.resumeSessionId;
         }
-        if (pendingCwd) {
-          const tab = tabs.get(tabId);
-          if (tab) {
-            tab.isolated = pendingIsolated === true;
-            tab.autoMemory = pendingAutoMemory === true;
-            if (pendingResumeSessionId) tab.sessId = pendingResumeSessionId;
-          }
-          const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
-          const spawnMsg = { type: 'cli:spawn', tabId, cwd: pendingCwd, cols, rows, isolated: pendingIsolated === true, autoMemory: pendingAutoMemory === true };
-          if (pendingResumeSessionId) spawnMsg.resumeSessionId = pendingResumeSessionId;
-          sendWs(spawnMsg);
-          maybeNotifyNoSubscription();
-        }
+        const { cols, rows } = tab ? { cols: tab.terminal.cols, rows: tab.terminal.rows } : { cols: 80, rows: 24 };
+        const spawnMsg = {
+          type: 'cli:spawn', tabId, cwd: intent.cwd, cols, rows,
+          isolated: intent.isolated === true,
+          autoMemory: intent.autoMemory === true,
+        };
+        if (intent.resumeSessionId) spawnMsg.resumeSessionId = intent.resumeSessionId;
+        sendWs(spawnMsg);
+        maybeNotifyNoSubscription();
         break;
       }
       case 'cli:settingsData': {
@@ -1046,20 +1092,29 @@
     }
   }
 
-  // Queue saved sessions for staggered re-spawn (resume by sessId). Used by both
-  // page-reload-after-restart and seamless-reconnect-after-restart recovery.
-  function _beginRestartRecovery(entries) {
-    _respawnQueue.length = 0;
-    for (const entry of (entries || [])) {
-      if (!entry || !entry.cwd || !entry.sessId) continue;
-      _respawnQueue.push(entry);
-    }
-    if (_respawnQueue.length > 0) sendWs({ type: 'cli:newTab' });
+  // Report tabs the server's startup restore could not bring back, so they do not
+  // just silently disappear. Once per page load.
+  let _droppedToastShown = false;
+  function _reportDroppedTabs(dropped) {
+    if (_droppedToastShown || !Array.isArray(dropped) || dropped.length === 0) return;
+    _droppedToastShown = true;
+    const reasons = {
+      shell: 'shell tabs cannot be resumed (no transcript)',
+      'no-transcript': 'transcript missing',
+    };
+    const lines = dropped.map(d => `${d.title || d.cwd} — ${reasons[d.reason] || d.reason}`);
+    window.dashboard.showToast?.({
+      sender: 'CLI',
+      title: `${dropped.length} tab${dropped.length !== 1 ? 's' : ''} not restored`,
+      message: lines.join('\n'),
+      level: 'warning',
+      duration: 12000,
+    });
   }
 
-  // Dispose all client-side terminals without telling the server (it no longer
-  // has these sessions) and without clearing inspector instances (the sessions
-  // are about to be resumed by sessId, so their history must survive).
+  // Dispose all client-side terminals without telling the server (these tabIds
+  // belong to a process that is gone) and without clearing inspector instances,
+  // whose history must survive the restart.
   function _teardownAllTabsLocal() {
     for (const [tabId, tab] of tabs) {
       dismissAskModalsForTab(tabId);
@@ -1074,59 +1129,27 @@
     _pendingRemoval.clear();
   }
 
-  function handleTabList(serverTabs, bootId) {
-    // A changed bootId means we are talking to a different server process than
-    // the one we last synced with — i.e. the server restarted. This is detected
-    // on ANY reconnect, including a seamless one with no page reload, which the
-    // _firstTabSync guard alone would miss (and which caused stale tabs to be
-    // re-bound to unrelated new sessions).
+  // The server owns the tab list: it persists which tabs were open and respawns
+  // them itself at boot. This is therefore a pure sync — adopt whatever the server
+  // reports. There is no client-side recovery left to race, so two dashboard
+  // windows can no longer each resume the same session.
+  function handleTabList(serverTabs, bootId, droppedTabs) {
+    _reportDroppedTabs(droppedTabs);
+
+    // A changed bootId means this is a different server process than the one we
+    // last synced with. Our tabIds embed the old process's bootId and can never
+    // be re-bound, so drop the orphaned terminals before adopting the new list.
     const knownBootId = _loadBootId();
     const restarted = !!(knownBootId && bootId && knownBootId !== bootId);
     if (bootId) _saveBootId(bootId);
-
-    if (_firstTabSync) {
-      _firstTabSync = false;
-      const prev = _loadOpenTabs();
-      if (prev && prev.length > 0) {
-        const prevSet = new Set(prev.map(e => e.tabId || e));
-        // Close server tabs we don't recognize
-        for (const st of serverTabs) {
-          if (!prevSet.has(st.tabId)) {
-            sendWs({ type: 'cli:closeTab', tabId: st.tabId });
-          }
-        }
-        const ourServerTabs = serverTabs.filter(st => prevSet.has(st.tabId));
-
-        if (ourServerTabs.length > 0) {
-          // Server still has our tabs (page refresh without server restart)
-          for (const st of ourServerTabs) {
-            if (!tabs.has(st.tabId)) createTab(st.tabId);
-          }
-          serverTabs = ourServerTabs;
-        } else {
-          // Server has none of our tabs (server restarted) — resume from sessId
-          _beginRestartRecovery(prev);
-          return;
-        }
-      }
-    } else if (restarted) {
-      // Seamless reconnect to a restarted server (no page reload). Tear down the
-      // now-orphaned terminals and resume each session by its sessId so a stale
-      // tab can never display another session's content.
-      const source = tabs.size > 0
-        ? Array.from(tabs.entries()).map(([tabId, t]) => ({ tabId, cwd: t.cwd, sessId: t.sessId, title: t.title, settings: t.settings, isolated: t.isolated, autoMemory: t.autoMemory }))
-        : (_loadOpenTabs() || []);
-      _teardownAllTabsLocal();
-      _beginRestartRecovery(source);
-      return;
-    }
+    if (restarted) _teardownAllTabsLocal();
 
     const serverIds = new Set(serverTabs.map(t => t.tabId));
     for (const [tabId] of tabs) {
       if (!serverIds.has(tabId)) removeTab(tabId);
     }
     for (const st of serverTabs) {
-      if (!tabs.has(st.tabId)) continue;
+      if (!tabs.has(st.tabId)) createTab(st.tabId);
       const tab = tabs.get(st.tabId);
       tab.status = st.status;
       tab.cwd = st.cwd;
@@ -1142,7 +1165,6 @@
       switchTab(first);
     }
     renderTabStrip();
-    _saveOpenTabs();
     window.inspectorModule?.renderInspectorTabStrip?.();
   }
 

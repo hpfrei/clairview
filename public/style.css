@@ -140,6 +140,30 @@ body.nav-loading .view-nav {
   transition: color 0.15s, background 0.15s;
 }
 .view-tab-new:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.16); }
+/* Default-model cog. `margin-left:auto` pins it to the right edge of the
+   flex tab strip, clear of the tabs and the "+" button. */
+.cli-model-cog {
+  margin-left: auto;
+  padding: 5px 10px;
+  font-size: 13px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom: none;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+.cli-model-cog:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.16); }
+.cli-model-menu-current {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.cli-new-menu-item.is-selected { font-weight: 600; }
 /* Inspector tab strip: scrollable tabs + pinned action button */
 .inspector-tab-wrapper {
   overflow: hidden;
@@ -1591,18 +1615,6 @@ footer {
 
 .cli-tab-label {
   cursor: default;
-}
-.cli-tab-rename-input {
-  background: var(--bg, #1a1a2e);
-  color: var(--text, #e0e0e0);
-  border: 1px solid var(--accent, #6688cc);
-  border-radius: 3px;
-  font: inherit;
-  font-size: 12px;
-  padding: 1px 4px;
-  outline: none;
-  min-width: 40px;
-  max-width: 160px;
 }
 .cli-model-override-btn {
   margin-left: 6px;

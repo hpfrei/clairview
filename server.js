@@ -637,6 +637,14 @@ for (const srv of [proxyServer, dashboardServer]) {
 proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
   dashboardServer.listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
     mcp.autoStart();
+
+    // Bring back the CLI tabs that were open when the previous process stopped.
+    // Server-owned, so it happens whether or not a dashboard is connected.
+    const restore = cliSessionManager.restoreOpenTabs();
+    if (restore.restored || restore.dropped) {
+      console.log(`  CLI tabs: restoring ${restore.restored}${restore.dropped ? `, dropped ${restore.dropped}` : ''}`);
+    }
+
     console.log('');
     console.log('  Claude Code API Proxy running.');
     console.log('');

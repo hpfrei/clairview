@@ -104,6 +104,11 @@ class DashboardBroadcaster {
         hasSubscription: caps.hasClaudeSubscription(),
         needsChoice: caps.needsClaudeAuthChoice(PROJECT_ROOT),
       }));
+      ws.send(JSON.stringify({
+        type: 'prefs:cliModel',
+        model: caps.getCliModelPref(PROJECT_ROOT),
+        aliases: caps.CLI_MODEL_ALIASES,
+      }));
 
       // Send running Claude process count and instance list
       ws.send(JSON.stringify({ type: 'claude:count', count: getActiveProcessCount() }));
@@ -120,7 +125,15 @@ class DashboardBroadcaster {
 
       // CLI tabs init — send tab metadata only; scrollback is loaded on demand
       if (this.cliSessionManager) {
-        ws.send(JSON.stringify({ type: 'cli:tabs', bootId: this.cliSessionManager.bootId, tabs: this.cliSessionManager.list() }));
+        ws.send(JSON.stringify({
+          type: 'cli:tabs',
+          bootId: this.cliSessionManager.bootId,
+          tabs: this.cliSessionManager.list(),
+          // Only on the initial send: tabs the startup restore could not bring
+          // back, so the client can say what went missing rather than letting
+          // them disappear silently.
+          droppedTabs: this.cliSessionManager.droppedTabs || [],
+        }));
       }
 
       ws.on('message', (data) => {
