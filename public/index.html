@@ -1085,6 +1085,7 @@ jq -r '.tool_input.command' |
 
       if (s.loaded && s.clientModules && !proLoaded) {
         proLoaded = true;
+        try { sessionStorage.removeItem('proAutoRestarted'); } catch (e) {}
         s.clientModules.forEach(function(mod) {
           (mod.styles || []).forEach(function(href) {
             var link = document.createElement('link');
@@ -1105,6 +1106,16 @@ jq -r '.tool_input.command' |
 
       if (s.needsRestart) {
         var msg = document.getElementById('proClaimMsg');
+        // One auto-restart only: if Pro still failed to load after a restart,
+        // restarting again cannot help — without this guard the page restarts
+        // the server in an endless loop.
+        var alreadyTried = false;
+        try { alreadyTried = !!sessionStorage.getItem('proAutoRestarted'); } catch (e) {}
+        if (alreadyTried) {
+          if (msg) { msg.textContent = 'Pro is licensed but failed to load. Check the server logs for "Pro:" errors.'; msg.className = 'pro-activate-msg error'; }
+          return;
+        }
+        try { sessionStorage.setItem('proAutoRestarted', '1'); } catch (e) {}
         if (msg) { msg.textContent = 'Pro features licensed. Restarting to activate...'; msg.className = 'pro-activate-msg success'; }
         showRestartingOverlay();
         fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});

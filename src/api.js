@@ -258,6 +258,27 @@ function createApiRouter({ broadcaster, store, proxyPort, dashboardPort, authTok
     }
   });
 
+  // ── GET /api/file-info — stat a single path (preview modal header) ─
+  router.get('/file-info', (req, res) => {
+    const filePath = req.query.path;
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+    const resolved = path.resolve(filePath);
+    try {
+      const stat = fs.statSync(resolved);
+      res.json({
+        exists: true,
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        name: path.basename(resolved),
+        path: resolved,
+      });
+    } catch {
+      res.json({ exists: false, isFile: false, isDirectory: false, path: resolved });
+    }
+  });
+
   // ── GET /api/video-thumb — one cached ffmpeg frame from a video ────
   router.get('/video-thumb', async (req, res) => {
     const filePath = req.query.path;

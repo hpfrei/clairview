@@ -57,6 +57,35 @@ const _TEXT_EXTS = new Set([
   'env','log','cfg','conf','properties','lock','vue','svelte','astro',
   'graphql','gql','proto','tf','hcl','nix','bat','ps1','fish','jsonl',
 ]);
+const _IMAGE_EXTS = new Set(['png','jpg','jpeg','gif','webp','svg','bmp','ico','avif','apng']);
+const _AUDIO_EXTS = new Set(['mp3','wav','ogg','oga','m4a','aac','flac','opus','weba']);
+const _VIDEO_EXTS = new Set(['mp4','webm','mov','m4v','mkv','avi','ogv']);
+
+function fileCategory(ext) {
+  if (_IMAGE_EXTS.has(ext)) return 'image';
+  if (_AUDIO_EXTS.has(ext)) return 'audio';
+  if (_VIDEO_EXTS.has(ext)) return 'video';
+  if (ext === 'pdf') return 'pdf';
+  if (_TEXT_EXTS.has(ext)) return 'text';
+  return 'unknown';
+}
+
+function _fileExt(fp) {
+  return (String(fp).match(/\.([^./\\]+)$/) || [])[1]?.toLowerCase() || '';
+}
+
+function _fileName(fp) {
+  return String(fp).split(/[/\\]/).pop() || fp;
+}
+
+function formatBytes(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
 const _MONACO_LANGS = {
   js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
   ts: 'typescript', tsx: 'typescript',
@@ -71,19 +100,31 @@ const _MONACO_LANGS = {
   r: 'r', lua: 'lua', pl: 'perl', dart: 'dart', bat: 'bat', ps1: 'powershell',
 };
 
-function linkifyFilePaths(root) {
+// opts.includePre — also linkify inside <pre> (tool input/result dumps in the
+// inspector). `script`/`style`/`textarea` are always skipped: the JSON tree
+// keeps its copy-source in a <script type="application/json"> sibling, and
+// rewriting that would corrupt the Copy button.
+const _LINKIFY_MAX_NODE_CHARS = 200000;  // skip pathological dumps entirely
+const _LINKIFY_MAX_LINKS = 600;          // stop before a `find` dump floods the DOM
+
+function linkifyFilePaths(root, opts) {
+  const skipSel = (opts && opts.includePre ? '' : 'pre, ')
+    + 'a, .file-link, script, style, textarea, .monaco-editor, .no-linkify';
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const p = node.parentElement;
       if (!p) return NodeFilter.FILTER_REJECT;
-      if (p.closest('pre, a, .file-link')) return NodeFilter.FILTER_REJECT;
+      if (node.nodeValue.length > _LINKIFY_MAX_NODE_CHARS) return NodeFilter.FILTER_REJECT;
+      if (p.closest(skipSel)) return NodeFilter.FILTER_REJECT;
       _FILE_PATH_RE.lastIndex = 0;
       return _FILE_PATH_RE.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     }
   });
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
+  let made = 0;
   for (const node of nodes) {
+    if (made >= _LINKIFY_MAX_LINKS) break;
     _FILE_PATH_RE.lastIndex = 0;
     const text = node.nodeValue;
     const frag = document.createDocumentFragment();
@@ -94,10 +135,12 @@ function linkifyFilePaths(root) {
       a.className = 'file-link';
       a.textContent = m[1];
       a.href = '#';
+      a.title = 'Preview ' + m[1];
       a.dataset.filepath = m[1];
       a.addEventListener('click', _onFilePathClick);
       frag.appendChild(a);
       last = m.index + m[0].length;
+      if (++made >= _LINKIFY_MAX_LINKS) break;
     }
     if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
     node.parentNode.replaceChild(frag, node);
@@ -106,13 +149,8 @@ function linkifyFilePaths(root) {
 
 function _onFilePathClick(e) {
   e.preventDefault();
-  const fp = e.currentTarget.dataset.filepath;
-  const ext = (fp.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
-  if (_TEXT_EXTS.has(ext)) {
-    openFileViewer(fp);
-  } else {
-    window.open('/api/raw-file?path=' + encodeURIComponent(fp), '_blank');
-  }
+  e.stopPropagation();
+  openFilePreview(e.currentTarget.dataset.filepath);
 }
 
 let _monacoReadyCore = false;
@@ -128,55 +166,202 @@ function _ensureMonaco() {
   return _monacoReadyPromiseCore;
 }
 
-async function openFileViewer(filePath) {
-  document.querySelector('.file-viewer-modal')?.remove();
-  const ext = (filePath.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
-  const modal = document.createElement('div');
-  modal.className = 'file-viewer-modal';
-  modal.innerHTML = `<div class="file-viewer-content">
-    <div class="file-viewer-header">
-      <span class="file-viewer-path">${escHtml(filePath)}</span>
-      <button class="file-viewer-close">&times;</button>
-    </div>
-    <div class="file-viewer-body"><div style="padding:12px;color:var(--text-dim);font-size:12px">Loading...</div></div>
+// --- File preview modal (images, video, audio, text, pdf) ---
+
+const _TEXT_PREVIEW_MAX = 5 * 1024 * 1024;   // beyond this, offer download instead
+
+let _activePreview = null;
+let _previewToken = 0;
+
+function closeFilePreview() {
+  if (!_activePreview) return;
+  try { _activePreview.editor?.dispose(); } catch {}
+  document.removeEventListener('keydown', _activePreview.keyHandler);
+  _activePreview.el.remove();
+  _activePreview = null;
+}
+
+function openFilePreview(filePath) {
+  if (!filePath) return;
+  closeFilePreview();
+
+  const token = ++_previewToken;
+  const name = _fileName(filePath);
+  const ext = _fileExt(filePath);
+  const rawUrl = '/api/raw-file?path=' + encodeURIComponent(filePath);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dir-overlay file-preview-overlay';
+  overlay.innerHTML = `
+    <div class="dir-overlay-backdrop"></div>
+    <div class="dir-overlay-panel">
+      <div class="dir-overlay-header">
+        <span class="dir-filename">${escHtml(name)}</span>
+        <span class="dir-viewer-size file-preview-size"></span>
+        <span class="file-preview-path" title="${escHtml(filePath)}">${escHtml(filePath)}</span>
+        <a class="dir-download-btn" href="${rawUrl}" target="_blank" rel="noopener" title="Open in new tab">↗</a>
+        <a class="dir-download-btn" href="${rawUrl}" download="${escHtml(name)}" title="Download">⬇</a>
+        <button class="dir-overlay-close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="dir-overlay-content"></div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('.dir-overlay-backdrop').addEventListener('click', closeFilePreview);
+  overlay.querySelector('.dir-overlay-close').addEventListener('click', closeFilePreview);
+
+  const keyHandler = e => { if (e.key === 'Escape') { e.preventDefault(); closeFilePreview(); } };
+  document.addEventListener('keydown', keyHandler);
+
+  _activePreview = { el: overlay, editor: null, keyHandler, filePath, token };
+
+  const content = overlay.querySelector('.dir-overlay-content');
+  const sizeEl = overlay.querySelector('.file-preview-size');
+
+  // /api/file-info is only used to show the size and to report a missing file
+  // up front. If it is unavailable (older server), preview optimistically.
+  fetch('/api/file-info?path=' + encodeURIComponent(filePath))
+    .then(r => r.ok ? r.json() : null)
+    .then(info => {
+      if (_previewToken !== token) return;
+      if (info && !info.exists) {
+        content.innerHTML = `<div class="file-preview-empty">File not found on disk</div>`;
+        return;
+      }
+      if (info && info.isDirectory) {
+        content.innerHTML = `<div class="file-preview-empty">That path is a directory</div>`;
+        return;
+      }
+      if (info && sizeEl) sizeEl.textContent = formatBytes(info.size);
+      _renderFilePreview(filePath, ext, content, token, info ? info.size : null);
+    })
+    .catch(() => {
+      if (_previewToken === token) _renderFilePreview(filePath, ext, content, token, null);
+    });
+
+  return overlay;
+}
+
+function _renderFilePreview(filePath, ext, content, token, size) {
+  const category = fileCategory(ext);
+  const rawUrl = '/api/raw-file?path=' + encodeURIComponent(filePath);
+
+  switch (category) {
+    case 'image': {
+      const img = document.createElement('img');
+      img.src = rawUrl;
+      img.alt = _fileName(filePath);
+      img.addEventListener('error', () => {
+        if (_previewToken === token) content.innerHTML = `<div class="file-preview-empty">Could not load image</div>`;
+      });
+      content.appendChild(img);
+      break;
+    }
+    case 'audio': {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.src = rawUrl;
+      content.appendChild(audio);
+      break;
+    }
+    case 'video': {
+      const video = document.createElement('video');
+      video.controls = true;
+      video.preload = 'metadata';
+      video.src = '/api/video-stream?path=' + encodeURIComponent(filePath);
+      content.appendChild(video);
+      break;
+    }
+    case 'pdf': {
+      const iframe = document.createElement('iframe');
+      iframe.src = rawUrl;
+      content.appendChild(iframe);
+      break;
+    }
+    case 'text':
+      _renderTextPreview(filePath, ext, content, token, size);
+      break;
+    default:
+      _renderUnknownPreview(filePath, ext, content, token, size);
+  }
+}
+
+function _renderUnknownPreview(filePath, ext, content, token, size) {
+  content.innerHTML = `<div class="file-preview-empty">
+    <div>No preview for <code>.${escHtml(ext || 'unknown')}</code> files</div>
+    <button class="file-preview-astext">View as text</button>
   </div>`;
-  document.body.appendChild(modal);
-  const close = () => modal.remove();
-  modal.addEventListener('click', e => { if (e.target === modal) close(); });
-  modal.querySelector('.file-viewer-close').addEventListener('click', close);
-  const esc = e => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } };
-  document.addEventListener('keydown', esc);
+  content.querySelector('.file-preview-astext').addEventListener('click', () => {
+    if (_previewToken !== token) return;
+    content.innerHTML = '';
+    _renderTextPreview(filePath, ext, content, token, size);
+  });
+}
+
+async function _renderTextPreview(filePath, ext, content, token, size) {
+  if (size != null && size > _TEXT_PREVIEW_MAX) {
+    content.innerHTML = `<div class="file-preview-empty">File is too large to preview (${escHtml(formatBytes(size))}) — use the download button</div>`;
+    return;
+  }
+  content.innerHTML = '<div class="file-preview-empty">Loading…</div>';
+  let text;
   try {
     const resp = await fetch('/api/raw-file?path=' + encodeURIComponent(filePath));
-    if (!resp.ok) throw new Error('Failed to load');
-    const text = await resp.text();
-    const body = modal.querySelector('.file-viewer-body');
-    if (!body) return;
-    body.innerHTML = '';
-    const editorDiv = document.createElement('div');
-    editorDiv.style.cssText = 'width:100%;height:100%;';
-    body.appendChild(editorDiv);
-    await _ensureMonaco();
-    const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'vs' : 'vs-dark';
-    monaco.editor.create(editorDiv, {
-      value: text,
-      language: _MONACO_LANGS[ext] || 'plaintext',
-      theme,
-      readOnly: true,
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      automaticLayout: true,
-      fontSize: 12,
-      fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
-      wordWrap: 'on',
-      renderLineHighlight: 'none',
-      overviewRulerLanes: 0,
-      scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
-    });
+    if (!resp.ok) throw new Error('load failed');
+    // fetch resolves on headers — bail out before pulling a huge body down.
+    const len = parseInt(resp.headers.get('content-length') || '', 10);
+    if (Number.isFinite(len) && len > _TEXT_PREVIEW_MAX) {
+      resp.body?.cancel?.();
+      if (_previewToken === token) {
+        content.innerHTML = `<div class="file-preview-empty">File is too large to preview (${escHtml(formatBytes(len))}) — use the download button</div>`;
+      }
+      return;
+    }
+    text = await resp.text();
   } catch {
-    const body = modal.querySelector('.file-viewer-body');
-    if (body) body.innerHTML = '<div style="padding:12px;color:#e55;font-size:12px">Failed to load file</div>';
+    if (_previewToken === token) content.innerHTML = '<div class="file-preview-empty file-preview-error">Failed to load file</div>';
+    return;
   }
+  if (_previewToken !== token) return;
+
+  content.innerHTML = '';
+  const editorDiv = document.createElement('div');
+  editorDiv.style.cssText = 'position:absolute;inset:0;';
+  content.appendChild(editorDiv);
+
+  await _ensureMonaco();
+  if (_previewToken !== token) return;
+
+  if (typeof monaco === 'undefined') {
+    // Monaco unavailable (offline) — plain <pre> is still a usable preview.
+    content.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.className = 'file-preview-plain';
+    pre.textContent = text;
+    content.appendChild(pre);
+    return;
+  }
+
+  // Theme is kept in localStorage by the header toggle ('bright' | 'dark').
+  const theme = (localStorage.getItem('theme') || 'bright') === 'dark' ? 'vs-dark' : 'vs';
+  const editor = monaco.editor.create(editorDiv, {
+    value: text,
+    language: _MONACO_LANGS[ext] || 'plaintext',
+    theme,
+    readOnly: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    automaticLayout: true,
+    fontSize: 12,
+    fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+    wordWrap: 'on',
+    renderLineHighlight: 'none',
+    overviewRulerLanes: 0,
+    scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+  });
+  if (_activePreview && _activePreview.token === token) _activePreview.editor = editor;
+  else editor.dispose();
 }
 
 // --- Markdown rendering (with HTML/SVG pass-through and MathJax) ---
@@ -1028,6 +1213,11 @@ window.dashboard = {
   renderMarkdown,
   renderMarkdownDebounced,
   cancelRenderDebounce,
+  linkifyFilePaths,
+  openFilePreview,
+  closeFilePreview,
+  fileCategory,
+  formatBytes,
   timelineList,
   detailContent,
   emptyState,

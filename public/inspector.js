@@ -2,7 +2,15 @@
   'use strict';
   const { state, escHtml, highlightJSON, renderJSON, jsonBlock, formatDuration, truncate,
           renderMarkdown, renderMarkdownDebounced, cancelRenderDebounce, sendWs,
+          linkifyFilePaths, openFilePreview, fileCategory,
           timelineList, detailContent, emptyState, statsEl } = window.dashboard;
+
+  // Absolute file paths anywhere in the detail pane (tool input JSON, tool
+  // results, hook payloads) become links that open the file preview modal.
+  function linkifyDetail(root) {
+    if (!root) return;
+    try { linkifyFilePaths(root, { includePre: true }); } catch {}
+  }
 
   // --- Auto-select suppression: don't jump away from user-selected turns ---
   let _liveMode = localStorage.getItem('timelineLive') !== 'false';
@@ -3057,6 +3065,7 @@
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
+    linkifyDetail(detailContent);
   }
 
   function renderHookCallDetail(interaction) {
@@ -3095,6 +3104,7 @@
 
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
+    linkifyDetail(detailContent);
   }
 
   function renderTurnDetail(interaction) {
@@ -3250,12 +3260,12 @@
     if (_isLive) {
       html += `<details id="raw-sse-details" hidden>
         <summary>Raw SSE Events (<span id="raw-sse-count">0</span>)</summary>
-        <pre class="json-block" id="raw-sse-pre"></pre>
+        <pre class="json-block no-linkify" id="raw-sse-pre"></pre>
       </details>`;
     } else {
       html += `<details id="raw-sse-details"${resp.sseEvents?.length > 0 ? '' : ' hidden'}>
         <summary>Raw SSE Events (<span id="raw-sse-count">${resp.sseEvents?.length || 0}</span>)</summary>
-        <pre class="json-block" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
+        <pre class="json-block no-linkify" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
           `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
         ).join('\n') : ''}</pre>
       </details>`;
@@ -3266,6 +3276,7 @@
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
+    linkifyDetail(detailContent);
 
     // Lazy-load: when a "Loading..." details is toggled open, re-request full data
     for (const el of detailContent.querySelectorAll('details[data-lazy-detail]')) {
@@ -3304,6 +3315,12 @@
       <span class="info-label">Turn</span><span class="info-value"><a href="#" class="turn-link" data-turn-id="${interaction.id}">Turn ${llmTurnNumber(interaction)}</a></span>
     </div>`;
 
+    const media = toolMediaPaths(tc.input);
+    if (media.length > 0) {
+      html += `<div class="section-title">Preview</div>`;
+      html += `<div class="tool-media-row">${media.map(mediaPreviewHtml).join('')}</div>`;
+    }
+
     html += `<div class="section-title">Input</div>`;
     if (tc.input) {
       html += `${jsonBlock(tc.input)}`;
@@ -3331,7 +3348,10 @@
           if (block.type === 'text') {
             html += `<pre style="white-space:pre-wrap">${escHtml(block.text || '')}`;
           } else if (block.type === 'image') {
-            html += `<p class="info-label">[image: ${escHtml(block.source?.media_type || 'unknown')}]</p>`;
+            // Base64 payloads are truncated on capture — when the call names a
+            // file on disk we show it from there instead (see Preview above).
+            const note = media.length > 0 ? ' — see Preview above' : '';
+            html += `<p class="info-label">[image: ${escHtml(block.source?.media_type || 'unknown')}${note}]</p>`;
           } else {
             html += `${jsonBlock(block)}`;
           }
@@ -3349,6 +3369,8 @@
     detailContent.innerHTML = html;
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
+    linkifyDetail(detailContent);
+    bindMediaPreviews(detailContent);
 
     const link = detailContent.querySelector('.turn-link');
     if (link) {
@@ -3356,6 +3378,55 @@
         e.preventDefault();
         select({ type: 'turn', id: link.dataset.turnId }, { userClick: true });
       });
+    }
+  }
+
+  // --- Inline media previews for tool calls that name a file on disk ---
+
+  const _TOOL_PATH_KEYS = ['file_path', 'filePath', 'path', 'notebook_path',
+                           'image_path', 'video_path', 'audio_path', 'output_path'];
+
+  function toolMediaPaths(input) {
+    if (!input || typeof input !== 'object') return [];
+    const out = [];
+    for (const key of _TOOL_PATH_KEYS) {
+      const v = input[key];
+      if (typeof v !== 'string' || !v.startsWith('/')) continue;
+      const ext = (v.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
+      const category = fileCategory(ext);
+      if (category !== 'image' && category !== 'video' && category !== 'audio') continue;
+      if (!out.some(e => e.path === v)) out.push({ path: v, category });
+    }
+    return out;
+  }
+
+  function mediaPreviewHtml(entry) {
+    const rawUrl = '/api/raw-file?path=' + encodeURIComponent(entry.path);
+    const name = entry.path.split('/').pop();
+    let inner;
+    if (entry.category === 'image') {
+      inner = `<img src="${escHtml(rawUrl)}" alt="${escHtml(name)}" loading="lazy">`;
+    } else if (entry.category === 'video') {
+      inner = `<video src="${escHtml('/api/video-stream?path=' + encodeURIComponent(entry.path))}" controls preload="metadata"></video>`;
+    } else {
+      inner = `<audio src="${escHtml(rawUrl)}" controls preload="metadata"></audio>`;
+    }
+    return `<figure class="tool-media-preview" data-preview-path="${escHtml(entry.path)}">
+      ${inner}
+      <figcaption title="Open preview">${escHtml(name)}</figcaption>
+    </figure>`;
+  }
+
+  function bindMediaPreviews(root) {
+    for (const el of root.querySelectorAll('.tool-media-preview')) {
+      el.addEventListener('click', (e) => {
+        // Let the native transport controls work; the caption opens the modal.
+        if (e.target.closest('video, audio')) return;
+        e.preventDefault();
+        openFilePreview(el.dataset.previewPath);
+      });
+      const img = el.querySelector('img');
+      if (img) img.addEventListener('error', () => el.classList.add('tool-media-missing'));
     }
   }
 
