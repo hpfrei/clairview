@@ -160,6 +160,25 @@ class InteractionStore {
     return null;
   }
 
+  /**
+   * Write an interaction file, recreating its session dir if it vanished
+   * (deleteSessionData can remove it while the session is still live).
+   */
+  _writeInteractionFile(filePath, content, label) {
+    const json = JSON.stringify(content, null, 2);
+    fs.writeFile(filePath, json, (err) => {
+      if (!err) return;
+      if (err.code === 'ENOENT') {
+        try { fs.mkdirSync(path.dirname(filePath), { recursive: true }); } catch {}
+        fs.writeFile(filePath, json, (err2) => {
+          if (err2 && label) console.error(`Failed to write interaction ${label}:`, err2.message);
+        });
+        return;
+      }
+      if (label) console.error(`Failed to write interaction ${label}:`, err.message);
+    });
+  }
+
   /** Persist an interaction's current state back to its file. */
   _persist(interaction) {
     const fp = interaction.__filePath || this.filePaths.get(interaction.id);
@@ -167,7 +186,7 @@ class InteractionStore {
     try {
       const content = interaction.__filePath ? interaction : this._buildFileContent(interaction);
       if (interaction.__filePath) delete content.__filePath;
-      fs.writeFile(fp, JSON.stringify(content, null, 2), () => {});
+      this._writeInteractionFile(fp, content, null);
     } catch {}
   }
 
@@ -218,8 +237,12 @@ class InteractionStore {
     for (const { sessId, seqNum, filePath } of toLoad) {
       const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
       if (!interaction) continue;
+      // Older data can hold the same id in several files (one per save). Keep the
+      // newest copy but only one slot in `order` — a duplicated id there survives
+      // eviction of its map entry and turns getAll() into a list with holes.
+      const dup = this.interactions.has(interaction.id);
       this.interactions.set(interaction.id, interaction);
-      this.order.push(interaction.id);
+      if (!dup) this.order.push(interaction.id);
       this.filePaths.set(interaction.id, filePath);
       const reqId = interaction.response?.headers?.['request-id'];
       if (reqId) this.requestIdIndex.set(reqId, filePath);
@@ -298,6 +321,13 @@ class InteractionStore {
   }
 
   add(interaction) {
+    // Re-adding a known id must not leave a second entry in `order`: eviction
+    // would then delete the map entry while a dangling id remained, and
+    // getAll() would hand out undefined.
+    if (this.interactions.has(interaction.id)) {
+      const at = this.order.indexOf(interaction.id);
+      if (at !== -1) this.order.splice(at, 1);
+    }
     if (this.order.length >= this.maxSize) {
       const oldestId = this.order.shift();
       this.interactions.delete(oldestId);
@@ -346,7 +376,12 @@ class InteractionStore {
   }
 
   getAll() {
-    return this.order.map(id => this.interactions.get(id));
+    const out = [];
+    for (const id of this.order) {
+      const interaction = this.interactions.get(id);
+      if (interaction) out.push(interaction);
+    }
+    return out;
   }
 
   save(id) {
@@ -356,9 +391,18 @@ class InteractionStore {
     const sessId = this.sessionMap.get(interaction.instanceId);
     if (!sessId) return;
 
-    let seqNum = this.sessionSeqs.get(sessId) || 0;
-    seqNum++;
-    this.sessionSeqs.set(sessId, seqNum);
+    // save() is called several times per interaction (start, complete, error).
+    // Reuse the file already allocated for this id — allocating a fresh seq each
+    // time scatters one interaction across several files, which then load back
+    // as duplicate ids.
+    let filePath = this.filePaths.get(id);
+    let label = filePath ? `${sessId}/${path.basename(filePath)}` : null;
+    if (!filePath) {
+      const seqNum = (this.sessionSeqs.get(sessId) || 0) + 1;
+      this.sessionSeqs.set(sessId, seqNum);
+      filePath = path.join(INTERACTIONS_DIR, sessId, `${seqNum}.json`);
+      label = `${sessId}/${seqNum}`;
+    }
 
     // When saving a tool-call hook without an explicit agent_id, resolve its
     // owner authoritatively via the trace index (tool_use_id → agentId). Falls
@@ -376,14 +420,11 @@ class InteractionStore {
 
     const fileContent = this._buildFileContent(interaction);
 
-    const filePath = path.join(INTERACTIONS_DIR, sessId, `${seqNum}.json`);
     this.filePaths.set(id, filePath);
     this.diskIndex.set(id, filePath);
     const reqId = interaction.response?.headers?.['request-id'];
     if (reqId) this.requestIdIndex.set(reqId, filePath);
-    fs.writeFile(filePath, JSON.stringify(fileContent, null, 2), (err) => {
-      if (err) console.error(`Failed to write interaction ${sessId}/${seqNum}:`, err.message);
-    });
+    this._writeInteractionFile(filePath, fileContent, label);
 
     // Resolve LLM turns to their owning thread the moment they complete. If the
     // transcript line isn't written yet, this queues the request-id for the
@@ -401,10 +442,7 @@ class InteractionStore {
 
     const filePath = this.filePaths.get(id);
     if (filePath) {
-      const fileContent = this._buildFileContent(interaction);
-      fs.writeFile(filePath, JSON.stringify(fileContent, null, 2), (err) => {
-        if (err) console.error(`Failed to resave interaction:`, err.message);
-      });
+      this._writeInteractionFile(filePath, this._buildFileContent(interaction), 'resave');
     }
 
     // Also enrich hooks whose toolUseId matches a tool call in this turn
@@ -449,10 +487,7 @@ class InteractionStore {
 
       const fp = this.filePaths.get(hookId);
       if (fp) {
-        const content = this._buildFileContent(hook);
-        fs.writeFile(fp, JSON.stringify(content, null, 2), (err) => {
-          if (err) console.error(`Failed to resave hook:`, err.message);
-        });
+        this._writeInteractionFile(fp, this._buildFileContent(hook), 'resave hook');
       }
     }
     return enriched;
@@ -557,16 +592,22 @@ class InteractionStore {
     const pathToMemId = new Map();
     for (const [id, fp] of this.filePaths) pathToMemId.set(fp, id);
 
-    const results = [];
+    // Legacy data can hold one interaction in several files; show it once,
+    // preferring the in-memory copy.
+    const byId = new Map();
     for (const { sessId, seqNum, filePath } of allFiles) {
       const memId = pathToMemId.get(filePath);
       if (memId) {
         const memInteraction = this.interactions.get(memId);
-        if (memInteraction) { results.push(memInteraction); continue; }
+        if (memInteraction) { byId.set(memId, memInteraction); continue; }
       }
       const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
-      if (interaction) results.push(interaction);
+      if (!interaction) continue;
+      const existing = byId.get(interaction.id);
+      if (existing && this.interactions.get(interaction.id) === existing) continue;
+      byId.set(interaction.id, interaction);
     }
+    const results = [...byId.values()];
     results.sort((a, b) => a.timestamp - b.timestamp);
     return results;
   }
@@ -608,6 +649,10 @@ class InteractionStore {
       const filePath = path.join(dir, file);
       const interaction = this._parseInteractionFile(sessId, seqNum, filePath);
       if (!interaction) continue;
+      // Already live in memory (or duplicated on disk): keep the in-memory copy,
+      // never a second `order` entry for the same id.
+      const live = this.interactions.get(interaction.id);
+      if (live) { loaded.push(live); continue; }
 
       if (this.order.length >= this.maxSize) {
         const oldestId = this.order.shift();

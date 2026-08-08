@@ -351,20 +351,10 @@ Available templates in this skill directory:
     modal.querySelector('[data-choice="subscription"]').addEventListener('click', () => choose('subscription'));
   }
 
-  // Warn on every page load when headless calls are routed onto the Max/Pro
-  // subscription — Anthropic's terms do not permit non-interactive `claude -p`
-  // on a subscription, and doing so may result in account bans. Behaves like any
-  // other warning toast: auto-dismisses, and stays readable in the bell centre.
-  function maybeWarnSubscriptionHeadless() {
-    const ca = state.claudeAuth || {};
-    if (ca.pref !== 'subscription' || !ca.hasSubscription) return;
-    window.dashboard.showToast?.({
-      level: 'warning',
-      sender: 'Vistaclair',
-      title: 'Headless calls using your Max/Pro subscription',
-      message: "Anthropic's terms do not permit non-interactive `claude -p` usage on a Max/Pro subscription and doing so may result in account bans. Switch to the API key in the Models page to run headless calls safely.",
-    });
-  }
+  // The subscription/headless warning used to also fire as a toast here. Every
+  // `prefs:claudeAuth` broadcast re-fired it, so it read as a permanent banner
+  // rather than a notice. The warning still lives where it's actionable: the
+  // one-time choice modal above and the Models page auth section.
 
   function renderModelsPanel() {
     const nav = document.getElementById('modelsNav');
@@ -854,7 +844,6 @@ Available templates in this skill directory:
         };
         renderModelsPanel();
         maybeShowClaudeAuthBanner();
-        maybeWarnSubscriptionHeadless();
         break;
       case 'model:refresh:scanned':
         showScanResults(msg.results);

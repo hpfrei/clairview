@@ -549,6 +549,7 @@ function _truncateHookToolResponse(tr) {
 }
 
 function sanitizeForDashboard(interaction) {
+  if (!interaction || typeof interaction !== 'object') return null;
   const clone = { ...interaction };
   clone.response = { ...interaction.response };
   clone.timing = { ...interaction.timing };

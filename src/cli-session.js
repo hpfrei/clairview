@@ -78,7 +78,7 @@ class CliSession {
             type: 'inspector:sessionLoaded',
             sessId,
             instanceId,
-            interactions: historical.map(sanitizeForDashboard),
+            interactions: historical.map(sanitizeForDashboard).filter(Boolean),
           });
         }
       });

@@ -74,9 +74,10 @@ class DashboardBroadcaster {
     this.wss.on('connection', (ws) => {
       const interactions = this.store.getAll().map(i => {
         const s = sanitizeForDashboard(i);
+        if (!s) return null;
         if (s.response) s.response = { ...s.response, sseEvents: undefined };
         return summarizeForInit(s);
-      });
+      }).filter(Boolean);
       ws.send(JSON.stringify({ type: 'init', interactions }));
 
       // Send settings
@@ -153,9 +154,10 @@ class DashboardBroadcaster {
               const loaded = this.store.loadSessionIntoMemory(msg.sessId);
               const interactions = loaded.map(i => {
                 const s = sanitizeForDashboard(i);
+                if (!s) return null;
                 if (s.response) s.response = { ...s.response, sseEvents: undefined };
                 return summarizeForInit(s);
-              });
+              }).filter(Boolean);
               ws.send(JSON.stringify({
                 type: 'inspector:sessionLoaded',
                 sessId: msg.sessId,
@@ -166,9 +168,10 @@ class DashboardBroadcaster {
           } else if (msg.type === 'inspector:loadAll') {
             const all = this.store.getAllFromDisk().map(i => {
               const s = sanitizeForDashboard(i);
+              if (!s) return null;
               if (s.response) s.response = { ...s.response, sseEvents: undefined };
               return summarizeForInit(s);
-            });
+            }).filter(Boolean);
             ws.send(JSON.stringify({ type: 'inspector:allLoaded', interactions: all }));
           } else if (msg.type === 'inspector:setSensitiveHeaders') {
             createProxyRouter._showSensitiveHeaders = !!msg.value;

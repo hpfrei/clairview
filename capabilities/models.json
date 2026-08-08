@@ -54,7 +54,7 @@
       "systemPromptMode": "passthrough",
       "toolOverrides": {},
       "reasoning": true,
-      "disabled": true,
+      "disabled": false,
       "contextWindow": 200000,
       "maxOutputTokens": 32000,
       "useMaxCompletionTokens": false,
