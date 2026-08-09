@@ -1044,8 +1044,18 @@ jq -r '.tool_input.command' |
       var statusLine = 'Up to date';
       if (info) {
         var parts = [];
-        if (info.behind > 0) parts.push(info.behind + ' commit' + (info.behind === 1 ? '' : 's') + ' behind');
-        if (info.ahead > 0) parts.push(info.ahead + ' local commit' + (info.ahead === 1 ? '' : 's') + ' not on the server');
+        if (info.sameContent && !info.dirty) {
+          // Content-identical: the server republished its release commit, so
+          // history differs while the files do not. Not an update.
+          parts.push('Up to date');
+        } else {
+          if (info.behind > 0) parts.push(info.behind + ' commit' + (info.behind === 1 ? '' : 's') + ' behind');
+          // Local commits are meaningful only in a dev checkout; in a licensed
+          // mirror they are just the server's rewritten history.
+          if (info.ahead > 0 && !info.mirror) parts.push(info.ahead + ' local commit' + (info.ahead === 1 ? '' : 's') + ' not on the server');
+          if (info.ahead > 0 && info.mirror && info.behind === 0) parts.push('differs from the server version');
+          if (info.dirty) parts.push('locally modified');
+        }
         if (parts.length) statusLine = parts.join(', ');
       } else {
         statusLine = 'No update check has run yet';
@@ -1061,8 +1071,14 @@ jq -r '.tool_input.command' |
         warn.appendChild(div);
       }
       if (lock.devInstall) addWarn('This is a development checkout (git origin is not the license server). This is where the vc-pro codebase is maintained — updating here could overwrite it.');
-      if (info && info.dirty) addWarn('The working tree has uncommitted changes.');
-      if (info && info.ahead > 0) addWarn('Local commits exist that the update server does not have. A pull may fail or create unexpected results.');
+      if (info && info.dirty) addWarn(info.mirror
+        ? 'This copy has local modifications. Updating discards them and restores the server version.'
+        : 'The working tree has uncommitted changes.');
+      // A licensed install is a disposable mirror of the update server: its
+      // "local commits" are the server's republished history, not user work,
+      // and updating simply resets to the server. Only a dev checkout, where
+      // local commits are real work, warrants a warning.
+      if (info && info.ahead > 0 && !info.mirror) addWarn('Local commits exist that the update server does not have. A pull may fail or create unexpected results.');
 
       if (updAllowChk) updAllowChk.checked = !lock.disabled;
       updateApplyState();
@@ -1074,7 +1090,10 @@ jq -r '.tool_input.command' |
     function updateApplyState() {
       if (!updApplyBtn) return;
       var allowed = updAllowChk && updAllowChk.checked;
-      var hasUpdate = cachedUpdateInfo && cachedUpdateInfo.behind > 0;
+      var i = cachedUpdateInfo;
+      // Mirrors realign to the server whenever they deviate from it (the
+      // server's history rewrites make "behind" alone an unreliable signal).
+      var hasUpdate = !!i && (i.mirror ? (i.dirty || !i.sameContent) : i.behind > 0);
       updApplyBtn.disabled = !allowed || !hasUpdate;
       updApplyBtn.textContent = hasUpdate ? 'Update now' : 'Nothing to update';
       updApplyBtn.title = allowed ? '' : 'Updates are disabled on this machine';

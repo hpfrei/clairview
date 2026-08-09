@@ -302,19 +302,38 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
       const counts = execSync('git rev-list --left-right --count @{u}...HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
       const [behind, ahead] = counts.split(/\s+/).map(n => parseInt(n, 10) || 0);
       const dirty = execSync('git status --porcelain', { cwd: proDir, encoding: 'utf-8' }).trim().length > 0;
+      // Compare CONTENT, not history: the update server republishes its
+      // release commit, so a clone can be "1 behind, 1 ahead" while holding
+      // byte-identical files. Equal tree hashes ⇒ nothing to update.
+      let sameContent = false;
+      try {
+        const localTree = execSync('git rev-parse "HEAD^{tree}"', { cwd: proDir, encoding: 'utf-8' }).trim();
+        const remoteTree = execSync('git rev-parse "@{u}^{tree}"', { cwd: proDir, encoding: 'utf-8' }).trim();
+        sameContent = !!localTree && localTree === remoteTree;
+      } catch {}
+      // A licensed clone is a disposable MIRROR of the update server, not a
+      // working repo: nothing the user authored lives here. Its "local
+      // commits" are an artefact of how the server publishes (it can
+      // republish/rewrite its release commit), so divergence is normal and is
+      // resolved by resetting to the server — never by merging.
+      const mirror = !isDevInstall();
       proUpdateInfo = {
         branch,
         ahead,
         behind,
         dirty,
+        mirror,
+        sameContent,
         local: gitCommitInfo(proDir, 'HEAD'),
         remote: gitCommitInfo(proDir, '@{u}'),
         checkedAt: new Date().toISOString(),
       };
-      // Only commits we don't have count as an update. Being ahead (unpushed
-      // dev work) or merely diverged in local-only commits is not an update.
-      proUpdateAvailable = behind > 0;
-      if (proUpdateAvailable) console.log(`[pro] Update available: ${behind} commit(s) behind${ahead ? `, ${ahead} ahead` : ''}`);
+      // A mirror should match the server exactly, so any real deviation —
+      // different content or local modifications — is fixable by updating,
+      // while a republished commit with an identical tree is not. A dev
+      // checkout only counts commits it lacks; being ahead is unpushed work.
+      proUpdateAvailable = mirror ? (dirty || !sameContent) : behind > 0;
+      if (proUpdateAvailable) console.log(`[pro] Update available: ${behind} commit(s) behind${ahead ? `, ${ahead} ahead` : ''}${mirror && ahead ? ' (mirror — will reset to server)' : ''}`);
     } catch {}
   }
 
@@ -394,8 +413,24 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
           });
         }
         const before = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-        try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); }
-        catch (err) { console.warn('  Pro: git pull failed during update:', err.message); }
+        // A licensed mirror is hard-synced to the server (fast-forward can't
+        // cross a republished release commit, and there is no local work to
+        // preserve). A dev checkout only ever fast-forwards. Never `git clean`
+        // in either case — node_modules and other untracked runtime files live
+        // here. A failure must surface: silently reporting success made the
+        // GUI claim "Already up to date" while nothing had been updated.
+        try {
+          if (isDevInstall()) {
+            execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
+          } else {
+            execSync('git fetch', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
+            execSync('git reset --hard @{u}', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
+          }
+        } catch (err) {
+          const detail = ((err.stderr && err.stderr.toString()) || err.message || '').trim().slice(0, 400);
+          console.warn('  Pro: update failed:', detail);
+          return res.status(500).json({ ok: false, error: `Update failed: ${detail}` });
+        }
         const after = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
         const pro = lifecycle.getPro();
         if (pro?.update) await pro.update();
