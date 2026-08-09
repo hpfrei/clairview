@@ -47,6 +47,7 @@
     <div id="toastContainer" class="toast-container"></div>
     <div class="header-actions">
       <button id="toastBellBtn" class="toast-bell-btn" title="Notifications">&#128276;<span id="toastBadge" class="toast-badge hidden">0</span></button>
+      <button id="proCheckBtn" class="pro-check-btn" style="display:none" title="Check now whether a new pro version is available">&#8635; Check</button>
       <button id="proUpdateBtn" class="pro-update-btn" style="display:none" title="Update pro to latest version">&#8593; Update</button>
       <button id="proHeaderBtn" class="pro-header-btn" title="VistaClair Pro">PRO</button>
       <button class="restart-server-btn" id="restartServerBtn" title="Restart vistaclair server">&#8635; Restart</button>
@@ -998,6 +999,7 @@ jq -r '.tool_input.command' |
 
     var proHeaderBtn = document.getElementById('proHeaderBtn');
     var proUpdateBtn = document.getElementById('proUpdateBtn');
+    var proCheckBtn = document.getElementById('proCheckBtn');
     var proModal = document.getElementById('proModal');
     var proModalClose = document.getElementById('proModalClose');
     var subInfoModal = document.getElementById('subInfoModal');
@@ -1191,6 +1193,27 @@ jq -r '.tool_input.command' |
 
     if (proUpdateBtn) proUpdateBtn.addEventListener('click', showUpdModal);
 
+    // Manual update check: the server only re-checks hourly and the page only
+    // reads the cached result on load, so this forces a fresh git fetch now.
+    if (proCheckBtn) proCheckBtn.addEventListener('click', function() {
+      proCheckBtn.disabled = true;
+      proCheckBtn.innerHTML = 'Checking&#8230;';
+      fetch('/api/pro/update-check', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.updateInfo) cachedUpdateInfo = data.updateInfo;
+          if (data.updateLock) cachedUpdateLock = data.updateLock;
+          renderUpdateBtn();
+          var hasUpdate = cachedUpdateInfo && cachedUpdateInfo.behind > 0;
+          proCheckBtn.innerHTML = hasUpdate ? '&#8635; Check' : '&#10003; Up to date';
+        })
+        .catch(function() { proCheckBtn.innerHTML = 'Check failed'; })
+        .finally(function() {
+          proCheckBtn.disabled = false;
+          setTimeout(function() { proCheckBtn.innerHTML = '&#8635; Check'; }, 2500);
+        });
+    });
+
     function renderUpdateBtn() {
       if (!proUpdateBtn) return;
       var info = cachedUpdateInfo;
@@ -1227,6 +1250,8 @@ jq -r '.tool_input.command' |
           proHeaderBtn.title = 'Get VistaClair Pro';
         }
       }
+
+      if (proCheckBtn) proCheckBtn.style.display = (s.installed && (s.loaded || s.licensed)) ? '' : 'none';
 
       if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
       if (s.licenseInfo) cachedLicenseInfo = s.licenseInfo;
