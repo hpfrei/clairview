@@ -48,6 +48,8 @@ function createHeadlessCtx({ dataHome = DATA_HOME } = {}) {
     resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(dataHome, authMode),
     resolveProviderKey: (providerKey) => caps.getProviderKey(dataHome, providerKey),
     setProviderKey: (providerKey, apiKey) => caps.setProviderKey(dataHome, providerKey, apiKey),
+    exportKeyBundle: () => caps.exportKeyBundle(dataHome),
+    importKeyBundle: (bundle, opts) => caps.importKeyBundle(dataHome, bundle, opts),
     listModels: () => caps.listModels(dataHome),
     claudeAuthInfo: () => ({
       hasSubscription: caps.hasClaudeSubscription(),

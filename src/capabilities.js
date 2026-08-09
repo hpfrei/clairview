@@ -534,6 +534,82 @@ function setProviderKey(baseDir, providerKey, apiKey) {
   return true;
 }
 
+// --- Key/model bundle transfer (master → slave) ---
+// Pro's peer sync copies this host's provider credentials and model registry to
+// a linked slave, so a published app finds the same keys and models there. The
+// bundle is the encrypted secrets store PLUS models.json — a key without its
+// model definition (or the reverse) is useless on the far side.
+
+// Everything a slave needs to reproduce this host's model configuration.
+// Contains REAL API keys — callers must treat the result as a secret.
+function exportKeyBundle(baseDir) {
+  const secrets = readSecrets(baseDir);
+  const data = readModelsFile(baseDir);
+  const pick = (obj) => Object.fromEntries(
+    Object.entries(obj || {}).filter(([k, v]) => k && typeof v === 'string' && v)
+  );
+  return {
+    providerKeys: pick(secrets.providerKeys),
+    modelKeys: pick(secrets.modelKeys),
+    providers: Object.fromEntries(Object.entries(data.providers).map(([key, p]) => [key, {
+      label: typeof p.label === 'string' ? p.label : key,
+      apiBaseUrl: typeof p.apiBaseUrl === 'string' ? p.apiBaseUrl : '',
+    }])),
+    models: data.models,
+  };
+}
+
+// Apply a bundle produced by exportKeyBundle. Default is a MERGE: incoming
+// entries overwrite same-named ones, local-only entries survive. `replace: true`
+// mirrors the source exactly — local-only keys, providers and models are dropped.
+// Returns the number of entries written in each section.
+function importKeyBundle(baseDir, bundle, { replace = false } = {}) {
+  if (!bundle || typeof bundle !== 'object') throw new Error('bundle must be an object');
+  const strings = (obj) => Object.fromEntries(
+    Object.entries(obj && typeof obj === 'object' ? obj : {})
+      .filter(([k, v]) => k && typeof v === 'string' && v)
+  );
+  const providerKeys = strings(bundle.providerKeys);
+  const modelKeys = strings(bundle.modelKeys);
+  const providers = Object.fromEntries(
+    Object.entries(bundle.providers && typeof bundle.providers === 'object' ? bundle.providers : {})
+      .filter(([key, p]) => key && p && typeof p === 'object')
+      .map(([key, p]) => [key, {
+        label: typeof p.label === 'string' ? p.label : key,
+        apiBaseUrl: typeof p.apiBaseUrl === 'string' ? p.apiBaseUrl : '',
+      }])
+  );
+  const models = (Array.isArray(bundle.models) ? bundle.models : [])
+    .map(validateModel)
+    .filter((m) => m.name);
+
+  const secrets = readSecrets(baseDir);
+  secrets.providerKeys = replace ? providerKeys : { ...secrets.providerKeys, ...providerKeys };
+  secrets.modelKeys = replace ? modelKeys : { ...secrets.modelKeys, ...modelKeys };
+
+  const data = readModelsFile(baseDir);
+  data.providers = replace ? providers : { ...data.providers, ...providers };
+  if (replace) {
+    data.models = models;
+  } else {
+    for (const m of models) {
+      const idx = data.models.findIndex((x) => x.name === m.name);
+      if (idx >= 0) data.models[idx] = m;
+      else data.models.push(m);
+    }
+  }
+
+  writeModelsFile(baseDir, data);
+  writeSecrets(baseDir, secrets);
+  return {
+    providerKeys: Object.keys(providerKeys).length,
+    modelKeys: Object.keys(modelKeys).length,
+    providers: Object.keys(providers).length,
+    models: models.length,
+    replaced: !!replace,
+  };
+}
+
 // --- App preferences (small global key-value store) ---
 // Persisted at DATA_HOME/data/app-prefs.json. Holds the user's Claude auth
 // choice and a record of whether a subscription has ever been detected.
@@ -1244,6 +1320,8 @@ module.exports = {
   getAnthropicApiKey,
   getProviderKey,
   setProviderKey,
+  exportKeyBundle,
+  importKeyBundle,
   resolveHeadlessAuth,
   getInteractiveAuth,
   readAppPrefs,

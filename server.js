@@ -470,6 +470,10 @@ const addonCtx = {
   resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
   resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
   setProviderKey: (providerKey, apiKey) => caps.setProviderKey(DATA_HOME, providerKey, apiKey),
+  // Whole key + model registry, for Pro's master→slave sync. exportKeyBundle
+  // returns real API keys; only the peer control plane may carry it.
+  exportKeyBundle: () => caps.exportKeyBundle(DATA_HOME),
+  importKeyBundle: (bundle, opts) => caps.importKeyBundle(DATA_HOME, bundle, opts),
   listModels: () => caps.listModels(DATA_HOME),
   claudeAuthInfo: () => ({
     hasSubscription: caps.hasClaudeSubscription(),
