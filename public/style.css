@@ -5343,7 +5343,45 @@ footer {
 }
 .pro-update-btn:hover { background: rgba(31,111,235,0.15); }
 .pro-update-btn:disabled { opacity: 0.5; cursor: not-allowed; animation: none; }
+.pro-update-btn.locked {
+  border-color: var(--text-dim);
+  color: var(--text-dim);
+  animation: none;
+}
+.pro-update-btn.locked:hover { background: rgba(128,128,128,0.12); }
 @keyframes pro-update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+#proUpdateModal .sub-info-value {
+  text-align: right;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upd-warnings { margin: 12px 0 0; }
+.upd-warning {
+  font-size: 12px;
+  color: #d29922;
+  background: rgba(210,153,34,0.08);
+  border: 1px solid rgba(210,153,34,0.3);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+.upd-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.upd-lock-row input { cursor: pointer; }
+.sub-info-actions button.sub-info-portal-btn { cursor: pointer; font-family: inherit; font-size: 13px; }
+.sub-info-actions button.sub-info-portal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .pro-modal-backdrop {
   position: fixed;

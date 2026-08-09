@@ -824,6 +824,38 @@ jq -r '.tool_input.command' |
     </div>
   </div>
 
+  <div id="proUpdateModal" class="pro-modal-backdrop" style="display:none">
+    <div class="pro-modal" style="max-width:480px">
+      <button class="pro-modal-close" id="proUpdateClose">&times;</button>
+      <div class="sub-info">
+        <h2 class="sub-info-title">Pro Update</h2>
+        <div class="sub-info-rows">
+          <div class="sub-info-row">
+            <span class="sub-info-label">Installed</span>
+            <span class="sub-info-value" id="updLocalVer"></span>
+          </div>
+          <div class="sub-info-row">
+            <span class="sub-info-label">Latest</span>
+            <span class="sub-info-value" id="updRemoteVer"></span>
+          </div>
+          <div class="sub-info-row">
+            <span class="sub-info-label">Status</span>
+            <span class="sub-info-value" id="updStatusLine"></span>
+          </div>
+        </div>
+        <div id="updWarnings" class="upd-warnings"></div>
+        <label class="upd-lock-row">
+          <input type="checkbox" id="updAllowChk">
+          <span>Allow updating vc-pro on this machine</span>
+        </label>
+        <div class="sub-info-actions">
+          <button class="sub-info-portal-btn" id="updApplyBtn">Update now</button>
+        </div>
+        <div id="updMsg" class="pro-activate-msg"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="footer-gradient-bar">
     <div class="footer-sep" style="left:200px"></div>
     <div class="footer-sep" style="left:400px"></div>
@@ -904,24 +936,26 @@ jq -r '.tool_input.command' |
   <script src="directories.js"></script>
   <script>
   function applyProUpdate() {
-    var btn = document.getElementById('proUpdateBtn');
+    var btn = document.getElementById('updApplyBtn');
+    var msg = document.getElementById('updMsg');
     if (btn) { btn.disabled = true; btn.textContent = 'Pulling update...'; }
+    if (msg) { msg.textContent = ''; msg.className = 'pro-activate-msg'; }
     fetch('/api/pro/update', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.updated) {
-        if (btn) { btn.textContent = 'Updated! Restarting...'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
+        if (btn) { btn.textContent = 'Updated! Restarting...'; }
         showRestartingOverlay();
         fetch('/api/pro/restart', { method: 'POST' }).catch(function() {});
+      } else if (data.ok) {
+        if (msg) { msg.textContent = 'Already up to date'; msg.className = 'pro-activate-msg success'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Update now'; }
+        if (window.checkProStatus) window.checkProStatus(false);
       } else {
-        if (btn) { btn.textContent = 'Already up to date'; btn.style.borderColor = '#238636'; btn.style.color = '#3fb950'; }
-        setTimeout(function() {
-          if (btn) { btn.disabled = false; btn.textContent = '↑ Update'; btn.style.borderColor = ''; btn.style.color = ''; btn.style.display = 'none'; }
-        }, 2000);
+        if (msg) { msg.textContent = data.error || 'Update failed'; msg.className = 'pro-activate-msg error'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Update now'; }
       }
-    }).catch(function() {
-      if (btn) { btn.disabled = false; btn.textContent = 'Update failed'; btn.style.borderColor = '#f85149'; btn.style.color = '#f85149'; }
-      setTimeout(function() {
-        if (btn) { btn.textContent = '↑ Update'; btn.style.borderColor = ''; btn.style.color = ''; }
-      }, 2000);
+    }).catch(function(err) {
+      if (msg) { msg.textContent = 'Update failed: ' + err.message; msg.className = 'pro-activate-msg error'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Update now'; }
     });
   }
 
@@ -959,6 +993,8 @@ jq -r '.tool_input.command' |
     var checkoutListenerAdded = false;
     var portalUrl = null;
     var cachedLicenseInfo = null;
+    var cachedUpdateInfo = null;
+    var cachedUpdateLock = null;
 
     var proHeaderBtn = document.getElementById('proHeaderBtn');
     var proUpdateBtn = document.getElementById('proUpdateBtn');
@@ -966,6 +1002,10 @@ jq -r '.tool_input.command' |
     var proModalClose = document.getElementById('proModalClose');
     var subInfoModal = document.getElementById('subInfoModal');
     var subInfoClose = document.getElementById('subInfoClose');
+    var updModal = document.getElementById('proUpdateModal');
+    var updClose = document.getElementById('proUpdateClose');
+    var updAllowChk = document.getElementById('updAllowChk');
+    var updApplyBtn = document.getElementById('updApplyBtn');
 
     function showProModal() { if (proModal) proModal.style.display = 'flex'; }
     function hideProModal() { if (proModal) proModal.style.display = 'none'; }
@@ -982,6 +1022,84 @@ jq -r '.tool_input.command' |
       subInfoModal.addEventListener('click', function(e) { if (e.target === subInfoModal) hideSubInfoModal(); });
       subInfoModal.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideSubInfoModal(); });
     }
+
+    function hideUpdModal() { if (updModal) updModal.style.display = 'none'; }
+    if (updClose) updClose.addEventListener('click', hideUpdModal);
+    if (updModal) {
+      updModal.addEventListener('click', function(e) { if (e.target === updModal) hideUpdModal(); });
+      updModal.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideUpdModal(); });
+    }
+
+    function fmtCommit(c) {
+      if (!c) return 'unknown';
+      var d = c.date ? new Date(c.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+      return c.hash + (d ? ' · ' + d : '') + (c.subject ? ' · ' + c.subject : '');
+    }
+
+    function showUpdModal() {
+      var info = cachedUpdateInfo;
+      var lock = cachedUpdateLock || {};
+      document.getElementById('updLocalVer').textContent = info ? fmtCommit(info.local) : 'unknown';
+      document.getElementById('updRemoteVer').textContent = info ? fmtCommit(info.remote) : 'unknown';
+      var statusLine = 'Up to date';
+      if (info) {
+        var parts = [];
+        if (info.behind > 0) parts.push(info.behind + ' commit' + (info.behind === 1 ? '' : 's') + ' behind');
+        if (info.ahead > 0) parts.push(info.ahead + ' local commit' + (info.ahead === 1 ? '' : 's') + ' not on the server');
+        if (parts.length) statusLine = parts.join(', ');
+      } else {
+        statusLine = 'No update check has run yet';
+      }
+      document.getElementById('updStatusLine').textContent = statusLine;
+
+      var warn = document.getElementById('updWarnings');
+      warn.innerHTML = '';
+      function addWarn(text) {
+        var div = document.createElement('div');
+        div.className = 'upd-warning';
+        div.textContent = '⚠ ' + text;
+        warn.appendChild(div);
+      }
+      if (lock.devInstall) addWarn('This is a development checkout (git origin is not the license server). This is where the vc-pro codebase is maintained — updating here could overwrite it.');
+      if (info && info.dirty) addWarn('The working tree has uncommitted changes.');
+      if (info && info.ahead > 0) addWarn('Local commits exist that the update server does not have. A pull may fail or create unexpected results.');
+
+      if (updAllowChk) updAllowChk.checked = !lock.disabled;
+      updateApplyState();
+      var msg = document.getElementById('updMsg');
+      if (msg) { msg.textContent = ''; msg.className = 'pro-activate-msg'; }
+      if (updModal) updModal.style.display = 'flex';
+    }
+
+    function updateApplyState() {
+      if (!updApplyBtn) return;
+      var allowed = updAllowChk && updAllowChk.checked;
+      var hasUpdate = cachedUpdateInfo && cachedUpdateInfo.behind > 0;
+      updApplyBtn.disabled = !allowed || !hasUpdate;
+      updApplyBtn.textContent = hasUpdate ? 'Update now' : 'Nothing to update';
+      updApplyBtn.title = allowed ? '' : 'Updates are disabled on this machine';
+    }
+
+    if (updAllowChk) updAllowChk.addEventListener('change', function() {
+      var disabled = !updAllowChk.checked;
+      updAllowChk.disabled = true;
+      fetch('/api/pro/update-lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabled: disabled })
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.updateLock) cachedUpdateLock = data.updateLock;
+        updAllowChk.checked = !(cachedUpdateLock && cachedUpdateLock.disabled);
+        updateApplyState();
+        renderUpdateBtn();
+      }).catch(function() {
+        updAllowChk.checked = !disabled;
+      }).finally(function() {
+        updAllowChk.disabled = false;
+      });
+    });
+
+    if (updApplyBtn) updApplyBtn.addEventListener('click', applyProUpdate);
 
     function populateSubInfo() {
       var productRow = document.getElementById('subInfoProductRow');
@@ -1052,11 +1170,23 @@ jq -r '.tool_input.command' |
       }
     });
 
-    if (proUpdateBtn) proUpdateBtn.addEventListener('click', function() {
-      proUpdateBtn.disabled = true;
-      proUpdateBtn.textContent = 'Updating...';
-      applyProUpdate();
-    });
+    if (proUpdateBtn) proUpdateBtn.addEventListener('click', showUpdModal);
+
+    function renderUpdateBtn() {
+      if (!proUpdateBtn) return;
+      var info = cachedUpdateInfo;
+      var locked = cachedUpdateLock && cachedUpdateLock.disabled;
+      var hasUpdate = info && info.behind > 0;
+      proUpdateBtn.style.display = hasUpdate ? '' : 'none';
+      if (!hasUpdate) return;
+      proUpdateBtn.classList.toggle('locked', !!locked);
+      proUpdateBtn.innerHTML = locked ? '&#8593; Update &#128274;' : '&#8593; Update';
+      var t = 'vc-pro ' + (info.local && info.local.hash) + ' → ' + (info.remote && info.remote.hash)
+        + ' (' + info.behind + ' commit' + (info.behind === 1 ? '' : 's') + ' behind'
+        + (info.ahead > 0 ? ', ' + info.ahead + ' ahead' : '') + ')';
+      if (locked) t += ' — updates disabled on this machine';
+      proUpdateBtn.title = t + '. Click for details.';
+    }
 
     function showRegistryError(reason) {
       var container = document.getElementById('proVariantButtons');
@@ -1081,7 +1211,9 @@ jq -r '.tool_input.command' |
 
       if (s.customerPortalUrl) portalUrl = s.customerPortalUrl;
       if (s.licenseInfo) cachedLicenseInfo = s.licenseInfo;
-      if (proUpdateBtn) proUpdateBtn.style.display = s.updateAvailable ? '' : 'none';
+      if (s.updateInfo) cachedUpdateInfo = s.updateInfo;
+      if (s.updateLock) cachedUpdateLock = s.updateLock;
+      renderUpdateBtn();
 
       if (s.loaded && s.clientModules && !proLoaded) {
         proLoaded = true;

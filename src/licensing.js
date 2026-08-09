@@ -26,6 +26,7 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
   let customerPortalUrl = null;
   let licenseInfo = null;
   let proUpdateAvailable = false;
+  let proUpdateInfo = null;
 
   function getMachineId() {
     const os = require('os');
@@ -239,15 +240,81 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   }
 
+  // --- Pro update lock -------------------------------------------------------
+  // The explicit pref lives in data/app-prefs.json (proUpdatesDisabled). On top
+  // of that, an install whose git origin does not point at the license server is
+  // treated as a dev checkout (the maintained codebase) and is locked by
+  // default — a stray click on Update must never overwrite the source of truth.
+
+  function appPrefsPath() { return path.join(dataHome, 'data', 'app-prefs.json'); }
+
+  function readAppPrefs() {
+    try {
+      const p = JSON.parse(fs.readFileSync(appPrefsPath(), 'utf-8'));
+      return (p && typeof p === 'object') ? p : {};
+    } catch { return {}; }
+  }
+
+  function setProUpdatesDisabled(disabled) {
+    const prefs = readAppPrefs();
+    prefs.proUpdatesDisabled = !!disabled;
+    ensureDir(path.join(dataHome, 'data'));
+    fs.writeFileSync(appPrefsPath(), JSON.stringify(prefs, null, 2));
+  }
+
+  function isDevInstall() {
+    if (!fs.existsSync(proDir)) return false;
+    try {
+      const { execSync } = require('child_process');
+      const originUrl = execSync('git remote get-url origin', { cwd: proDir, encoding: 'utf-8', timeout: 5000 }).trim();
+      if (!/^https?:\/\//.test(originUrl)) return true; // ssh/local remote — never a licensed clone
+      return new URL(originUrl).hostname !== new URL(LICENSE_SERVER).hostname;
+    } catch {
+      return false;
+    }
+  }
+
+  // Resolve the effective lock. Explicit pref wins; unset falls back to
+  // dev-install auto-detection.
+  function getUpdateLock() {
+    const pref = readAppPrefs().proUpdatesDisabled;
+    const dev = isDevInstall();
+    if (pref === true) return { disabled: true, reason: 'setting', devInstall: dev };
+    if (pref === false) return { disabled: false, reason: null, devInstall: dev };
+    if (dev) return { disabled: true, reason: 'dev-install', devInstall: true };
+    return { disabled: false, reason: null, devInstall: false };
+  }
+
+  function gitCommitInfo(cwd, ref) {
+    const { execSync } = require('child_process');
+    const out = execSync(`git log -1 --format=%h%x1f%cI%x1f%s ${ref}`, { cwd, encoding: 'utf-8', timeout: 10000 }).trim();
+    const [hash, date, subject] = out.split('\x1f');
+    return { hash, date, subject };
+  }
+
   function checkProUpdates() {
     if (!fs.existsSync(proDir)) return;
     try {
       const { execSync } = require('child_process');
       execSync('git fetch', { cwd: proDir, stdio: 'pipe', timeout: 30000 });
-      const local = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
-      const remote = execSync('git rev-parse @{u}', { cwd: proDir, encoding: 'utf-8' }).trim();
-      proUpdateAvailable = local !== remote;
-      if (proUpdateAvailable) console.log('[pro] Update available');
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
+      // left = commits only in upstream (behind), right = only in HEAD (ahead)
+      const counts = execSync('git rev-list --left-right --count @{u}...HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
+      const [behind, ahead] = counts.split(/\s+/).map(n => parseInt(n, 10) || 0);
+      const dirty = execSync('git status --porcelain', { cwd: proDir, encoding: 'utf-8' }).trim().length > 0;
+      proUpdateInfo = {
+        branch,
+        ahead,
+        behind,
+        dirty,
+        local: gitCommitInfo(proDir, 'HEAD'),
+        remote: gitCommitInfo(proDir, '@{u}'),
+        checkedAt: new Date().toISOString(),
+      };
+      // Only commits we don't have count as an update. Being ahead (unpushed
+      // dev work) or merely diverged in local-only commits is not an update.
+      proUpdateAvailable = behind > 0;
+      if (proUpdateAvailable) console.log(`[pro] Update available: ${behind} commit(s) behind${ahead ? `, ${ahead} ahead` : ''}`);
     } catch {}
   }
 
@@ -317,6 +384,15 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
       try {
         const { execSync } = require('child_process');
         if (!fs.existsSync(proDir)) return res.json({ ok: false, error: 'Pro not installed' });
+        const lock = getUpdateLock();
+        if (lock.disabled) {
+          return res.status(403).json({
+            ok: false,
+            error: lock.reason === 'dev-install'
+              ? 'Updates are disabled: this install is a development checkout (git origin is not the license server).'
+              : 'Updates are disabled by setting on this machine.',
+          });
+        }
         const before = execSync('git rev-parse HEAD', { cwd: proDir, encoding: 'utf-8' }).trim();
         try { execSync('git pull --ff-only', { cwd: proDir, stdio: 'pipe', timeout: 30000 }); }
         catch (err) { console.warn('  Pro: git pull failed during update:', err.message); }
@@ -325,10 +401,27 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
         if (pro?.update) await pro.update();
         const updated = before !== after;
         proUpdateAvailable = false;
+        checkProUpdates();
         res.json({ ok: true, updated, version: after.slice(0, 8) });
       } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
       }
+    });
+
+    router.post('/pro/update-lock', (req, res) => {
+      const { disabled } = req.body || {};
+      if (typeof disabled !== 'boolean') return res.status(400).json({ error: 'disabled (boolean) required' });
+      try {
+        setProUpdatesDisabled(disabled);
+        res.json({ ok: true, updateLock: getUpdateLock() });
+      } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+      }
+    });
+
+    router.post('/pro/update-check', (req, res) => {
+      checkProUpdates();
+      res.json({ ok: true, updateAvailable: proUpdateAvailable, updateInfo: proUpdateInfo, updateLock: getUpdateLock() });
     });
 
     router.get('/pro/status', async (req, res) => {
@@ -345,6 +438,8 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
         clientModules: loaded ? lifecycle.getProClientModules() : undefined,
         needsRestart: installed && proLicenseValid && !loaded,
         updateAvailable: proUpdateAvailable,
+        updateInfo: proUpdateInfo,
+        updateLock: installed ? getUpdateLock() : undefined,
         customerPortalUrl: proLicenseValid ? customerPortalUrl : undefined,
         licenseInfo: proLicenseValid ? licenseInfo : undefined,
         productInfo: (!loaded && !proLicenseValid) ? productInfo : undefined,
@@ -370,8 +465,10 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
     installPro,
     npmInstall,
     checkProUpdates,
+    getUpdateLock,
     createLicenseRouter,
     get proUpdateAvailable() { return proUpdateAvailable; },
+    get proUpdateInfo() { return proUpdateInfo; },
     get productInfo() { return productInfo; },
   };
 }
