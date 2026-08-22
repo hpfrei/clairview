@@ -2,9 +2,8 @@
 // Registered on the dashboard broadcaster under those prefixes. Initial lists are
 // sent by the broadcaster's connection bootstrap, so this handler is handleMessage-only.
 
-const path = require('path');
 const caps = require('../capabilities');
-const { buildClaudeArgs, spawnClaude, createStreamJsonParser, describeClaudeError, DATA_HOME } = require('../utils');
+const { buildClaudeArgs, spawnClaude, describeClaudeError, killGracefully, DATA_HOME } = require('../utils');
 
 const PROJECT_ROOT = DATA_HOME;
 
@@ -173,60 +172,215 @@ function claudeAuthState() {
   };
 }
 
-// Two-step model refresh: scan provider /models APIs, then have Claude update pricing.
+// --- Model refresh ---------------------------------------------------------
+//
+// Phase 1 scans every provider's /models API (no model in the loop). Phase 2
+// fans out one short-lived headless Claude per provider whose only job is to
+// look current pricing up on the web and return JSON — the server does every
+// write. The tasks are independent, so a provider that fails or times out costs
+// only its own result, and the whole phase takes as long as its slowest lookup
+// rather than the sum of all of them.
+
+// These tasks are fetch-a-page-and-emit-JSON work, so pin a fast model and low
+// effort instead of inheriting whatever the account default is.
+const REFRESH_TASK_MODEL = 'sonnet';
+const REFRESH_TASK_EFFORT = 'low';
+const REFRESH_TASK_TIMEOUT_MS = 240000;
+
+// Pull the first JSON object out of a blob of model output (bare or fenced).
+function parseJsonBlock(text) {
+  if (typeof text !== 'string') return null;
+  const candidates = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) candidates.push(fenced[1]);
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
+  for (const c of candidates) {
+    try {
+      const v = JSON.parse(c);
+      if (v && typeof v === 'object') return v;
+    } catch {}
+  }
+  return null;
+}
+
+// Run one lookup task. Web tools only — no filesystem or subagent access, since
+// everything it needs is inlined in the prompt and the server owns the writes.
+// Never rejects: failures come back as { ok: false, error }.
+function runRefreshTask({ prompt, instanceId, proxyPort, timeoutMs = REFRESH_TASK_TIMEOUT_MS }) {
+  return new Promise((resolve) => {
+    const args = buildClaudeArgs({
+      allowedTools: ['WebSearch', 'WebFetch'],
+      model: REFRESH_TASK_MODEL,
+      effort: REFRESH_TASK_EFFORT,
+    }, { outputFormat: 'json' });
+
+    let proc;
+    try {
+      proc = spawnClaude(args, {
+        cwd: PROJECT_ROOT,
+        proxyPort,
+        instanceId,
+        anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err.message || String(err) });
+      return;
+    }
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; killGracefully(proc); }, timeoutMs);
+
+    proc.stdout.on('data', (chunk) => { stdout += chunk.toString('utf-8'); });
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf-8'); });
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.message || String(err) });
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        resolve({ ok: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s` });
+        return;
+      }
+      const claudeErr = describeClaudeError(code, stderr);
+      if (claudeErr) {
+        resolve({ ok: false, error: claudeErr });
+        return;
+      }
+      // --output-format json wraps the final text in a result envelope.
+      const envelope = parseJsonBlock(stdout);
+      if (envelope?.is_error) {
+        resolve({ ok: false, error: String(envelope.result || 'task reported an error').slice(0, 300) });
+        return;
+      }
+      const data = typeof envelope?.result === 'string' ? parseJsonBlock(envelope.result) : envelope;
+      if (!data || typeof data.models !== 'object' || !data.models) {
+        resolve({ ok: false, error: 'no usable JSON in response' });
+        return;
+      }
+      resolve({ ok: true, data });
+    });
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
+}
+
+function providerPricingPrompt(label, models) {
+  const list = models.map(m => `- ${m.modelId}${m.label && m.label !== m.modelId ? ` (${m.label})` : ''}`).join('\n');
+  return `Look up the current public API pricing for the ${label} models below and return it as JSON.
+
+Use WebSearch and WebFetch to find ${label}'s own official pricing page or API docs (the vendor's site, not a third-party aggregator or blog), then read the per-model rates.
+
+Models (exact API model ids):
+${list}
+
+Return ONE JSON object and nothing else — no prose, no markdown fence:
+{"models":{"<model id exactly as listed above>":{"inputCostPerMTok":<number>,"outputCostPerMTok":<number>,"cacheReadCostPerMTok":<number|null>,"cacheCreateCostPerMTok":<number|null>}}}
+
+Rules:
+- Every figure is USD per MILLION tokens on the standard tier: not batch, not priority, not a discounted off-peak or promotional rate. Convert if the page quotes per 1K tokens.
+- A pricing table often labels a model with a marketing or version name rather than its API id. Match on the API model name the docs give for each row.
+- If the table separates cache-hit and cache-miss input prices, inputCostPerMTok is the cache-MISS price and cacheReadCostPerMTok is the cache-HIT price.
+- Use null for a rate the provider does not publish — most providers publish no cache-write price.
+- Price every model you can find. Omit one only if the provider genuinely does not list it, and never invent or extrapolate a number.`;
+}
+
+function anthropicCatalogPrompt(knownIds) {
+  return `Build the current Anthropic model catalog and return it as JSON.
+
+Read these pages with WebFetch before answering. Do not answer from memory: models released after your training cutoff are real, and their ids and prices are only on these pages.
+- https://platform.claude.com/docs/en/about-claude/models/overview.md (model ids, context windows, max output, current and legacy models)
+- https://platform.claude.com/docs/en/about-claude/pricing.md (full price table including cache read and cache write rates)
+- https://platform.claude.com/docs/en/about-claude/model-deprecations.md (deprecated and retired ids with retirement dates)
+- https://code.claude.com/docs/en/model-config (which model names the Claude Code CLI accepts with a [1m] suffix)
+
+Cover every Anthropic model id the CLI can still be pointed at — current models and legacy-but-still-served ones. The catalog currently knows about: ${knownIds.join(', ')}. Refresh those and add any others you find.
+
+Return ONE JSON object and nothing else — no prose, no markdown fence:
+{"models":{"<model id>":{"label":"<display name>","lifecycle":"current"|"deprecated"|"retired","retiresAt":"<ISO date, deprecated only>","context1m":true|false,"contextWindow":<number>,"maxOutputTokens":<number>,"inputCostPerMTok":<number>,"outputCostPerMTok":<number>,"cacheReadCostPerMTok":<number>,"cacheCreateCostPerMTok":<number>}}}
+
+Rules:
+- Keys are plain API model ids such as claude-opus-4-6. Never put a [1m] suffix or a date suffix in a key; 1M support is carried by the context1m flag.
+- context1m is true when the CLI accepts <id>[1m], i.e. the model can run with a 1M token context window.
+- lifecycle: "current" for supported models, "deprecated" for models announced for retirement but still served (include retiresAt), "retired" for models no longer served. Report retired ids too — they are kept and disabled, never deleted.
+- Prices are USD per MILLION tokens, standard tier, base (non-batch) rate. cacheCreateCostPerMTok is the 5-minute cache write rate.
+- Omit any field you cannot confirm from those pages rather than guessing.`;
+}
+
 function handleModelRefresh(ws, bc) {
-  const send = (data) => ws.send(JSON.stringify(data));
+  // A refresh outlives a page navigation, so tolerate the socket closing under us.
+  const send = (data) => { try { ws.send(JSON.stringify(data)); } catch {} };
+  const lines = [];
+  const pushStatus = (line) => {
+    lines.push(line);
+    send({ type: 'model:refresh:status', text: line, lines: [...lines] });
+  };
+
   send({ type: 'model:refresh:status', text: 'Scanning providers for new models...' });
-  caps.scanProviderModels(PROJECT_ROOT).then(scanResults => {
+  caps.scanProviderModels(PROJECT_ROOT).then(async (scanResults) => {
     send({ type: 'model:refresh:scanned', results: scanResults });
     bc.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
 
-    // Step 2: Refresh pricing via Claude
     const allModels = caps.listModels(PROJECT_ROOT);
-    const modelsPath = path.join(PROJECT_ROOT, 'capabilities', 'models.json');
-    const anthropicPath = path.join(PROJECT_ROOT, 'capabilities', 'anthropic-pricing.json');
-    const modelList = allModels.map(m => `${m.label || m.name} (modelId: ${m.modelId}, provider: ${m.providerKey})`).join('\n');
-    const prompt = `Maintain the Anthropic model catalog and AI model pricing by directly editing files on disk.\n\nSteps:\n1. Read ${modelsPath} to see the current model definitions.\n2. Read ${anthropicPath}. This is the authoritative Anthropic catalog: each key is a model prefix (e.g. claude-opus-4-8) and each value is an object that may contain "inputCostPerMTok", "outputCostPerMTok", "cacheReadCostPerMTok", "cacheCreateCostPerMTok", "label", "lifecycle" ("current" | "deprecated" | "retired"), and "retiresAt" (an ISO date string, only for deprecated models).\n3. You are a Claude model yourself — you know which models Anthropic currently offers and which are deprecated or decommissioned. Update ${anthropicPath} so it reflects reality:\n   - ADD an entry for every current Anthropic model that is missing (include label, lifecycle "current", and pricing). Add newly released models even if you only just learned of them.\n   - Set "lifecycle":"deprecated" and a "retiresAt" ISO date on models Anthropic has announced for retirement but not yet removed.\n   - Set "lifecycle":"retired" on models Anthropic has decommissioned (no longer served). Keep the entry; do not delete it.\n   - Set "lifecycle":"current" (and remove any "retiresAt") on models that are fully supported.\n   - Keep/update the four pricing fields (per million tokens, USD) on every entry.\n4. Look up and update the current official pricing for each THIRD-PARTY model in models.json (listed below). Spawn one parallel Agent task per provider (group the models by their provider, then launch all the provider tasks at once in a single message). Each task must use WebSearch/WebFetch to find that provider's current official pricing page and return the inputCostPerMTok, outputCostPerMTok, cacheReadCostPerMTok, and cacheCreateCostPerMTok (per million tokens, USD; null for cache fields if not available) for each of that provider's models. Once all tasks return, set those values directly in ${modelsPath}. Do not edit Anthropic entries in models.json — those are reconciled automatically from ${anthropicPath}.\n\nThe third-party models to look up pricing for:\n${modelList}\n\nIMPORTANT: You MUST directly edit the files using your Edit or Write tools — do not just output JSON. After updating, briefly summarize which Anthropic models you added, deprecated, or retired, and which third-party prices you changed.`;
+    const providers = caps.listProviders(PROJECT_ROOT);
+    const labelOf = (key) => providers.find(p => p.key === key)?.label || key;
 
-    const args = buildClaudeArgs({ permissionMode: 'bypassPermissions', allowedTools: [...caps.KNOWN_TOOLS] });
-    const proc = spawnClaude(args, {
-      cwd: PROJECT_ROOT,
-      proxyPort: bc._proxyPort,
-      instanceId: `pricing-${Date.now()}`,
-      anthropicApiKey: caps.resolveHeadlessAuth(PROJECT_ROOT),
-    });
+    // One task per third-party provider, each seeing only its own models.
+    const byProvider = new Map();
+    for (const m of allModels) {
+      if (m.providerKey === 'anthropic' || m.lifecycle === 'retired' || !m.modelId) continue;
+      if (!byProvider.has(m.providerKey)) byProvider.set(m.providerKey, []);
+      byProvider.get(m.providerKey).push(m);
+    }
 
-    let resultText = '';
-    let stderrBuf = '';
-    const parser = createStreamJsonParser((ev) => {
-      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-        resultText += ev.delta.text || '';
+    const anthropicIds = allModels.filter(m => m.providerKey === 'anthropic').map(m => m.name);
+    const tasks = [
+      { key: 'anthropic', label: 'Anthropic', prompt: anthropicCatalogPrompt(anthropicIds) },
+      ...[...byProvider].map(([key, list]) => ({
+        key, label: labelOf(key), prompt: providerPricingPrompt(labelOf(key), list),
+      })),
+    ];
+
+    pushStatus(`Looking up pricing for ${tasks.length} provider${tasks.length === 1 ? '' : 's'} in parallel...`);
+
+    const stamp = Date.now();
+    let recon = null;
+    await Promise.all(tasks.map(async (task) => {
+      const res = await runRefreshTask({
+        prompt: task.prompt,
+        instanceId: `pricing-${task.key}-${stamp}`,
+        proxyPort: bc._proxyPort,
+      });
+      if (!res.ok) {
+        pushStatus(`${task.label}: lookup failed — ${res.error}`);
+        return;
       }
-    });
-    proc.stdout.on('data', (chunk) => {
-      parser.write(chunk);
-      send({ type: 'model:refresh:status', text: 'Updating pricing...' });
-    });
-    proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf-8'); });
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-    proc.on('close', (code) => {
-      parser.flush();
-      // Re-reconcile so any models the subprocess added/deprecated/retired
-      // in anthropic-pricing.json are reflected in models.json.
-      let recon = null;
-      try { recon = caps.reconcileAnthropicCatalog(PROJECT_ROOT, { clearNew: false }); } catch {}
-      const lifecycleNote = recon
-        ? ` Anthropic catalog: +${recon.added.length} new, ${recon.deprecated.length} deprecated, ${recon.retired.length} retired.`
-        : '';
-      const claudeErr = describeClaudeError(code, stderrBuf);
-      if (claudeErr) {
-        send({ type: 'model:refresh:done', text: `Scan complete.${lifecycleNote} Pricing update failed: ${claudeErr}` });
-      } else {
-        send({ type: 'model:refresh:done', text: (resultText || 'Refresh complete.') + lifecycleNote });
+      try {
+        if (task.key === 'anthropic') {
+          recon = caps.applyAnthropicCatalog(PROJECT_ROOT, res.data.models);
+          pushStatus(`Anthropic: ${recon.touched.length} catalog entries refreshed`);
+        } else {
+          const applied = caps.applyProviderPricing(PROJECT_ROOT, task.key, res.data.models);
+          pushStatus(applied.updated.length
+            ? `${task.label}: repriced ${applied.updated.length} model${applied.updated.length === 1 ? '' : 's'}`
+            : `${task.label}: pricing already current`);
+        }
+      } catch (err) {
+        pushStatus(`${task.label}: could not apply pricing — ${err.message || err}`);
       }
       bc.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
-    });
+    }));
+
+    const lifecycleNote = recon
+      ? ` Anthropic catalog: +${recon.added.length} new, ${recon.deprecated.length} deprecated, ${recon.retired.length} retired.`
+      : '';
+    send({ type: 'model:refresh:done', text: `Refresh complete.${lifecycleNote}`, lines: [...lines] });
+    bc.broadcast({ type: 'model:list', models: caps.listModels(PROJECT_ROOT) });
   }).catch(err => {
     send({ type: 'model:refresh:error', error: err.message });
   });

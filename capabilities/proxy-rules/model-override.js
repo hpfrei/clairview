@@ -3,14 +3,14 @@
 // If a tab has already rewritten the model, this rule sees the rewritten value.
 module.exports = function(ctx) {
   if (ctx.body.model.indexOf('claude-opus') == 0) {
-    ctx.body.model = 'claude-fable-5'; 
-    //ctx.body.model = 'claude-opus-4-8';
-    if (ctx.body.output_config?.effort === 'xhigh') {
+    //ctx.body.model = 'claude-fable-5'; 
+    ctx.body.model = 'claude-opus-4-6';
+    /*if (ctx.body.output_config?.effort === 'xhigh') {
       ctx.body.output_config.effort = 'high';
-    }
+    }*/
   }
 
-  if (ctx.body.model.indexOf('claude-sonnet') == 0) {
+  /*if (ctx.body.model.indexOf('claude-sonnet') == 0) {
     ctx.body.model = 'claude-sonnet-5'; 
     //ctx.body.model = 'claude-opus-4-8';
   }
@@ -21,4 +21,5 @@ module.exports = function(ctx) {
   if (isCliTab && ctx.body.model?.includes('haiku')) {
     ctx.body.model = 'claude-sonnet-5';
   }
+  */
 };

@@ -120,7 +120,10 @@ const proxyServer = http.createServer(proxyApp);
 // --- Dashboard server (port 3457) ---
 const dashboardApp = express();
 dashboardApp.set('trust proxy', 'loopback')  // proxies (nginx/ngrok/cloudflared) all run on localhost
-dashboardApp.use(express.json({ limit: '50mb' }));
+// verify stashes the raw bytes so HMAC-authenticated webhooks (e.g. WhatsApp's
+// X-Hub-Signature-256) can validate against exactly what was sent, since this
+// global parser consumes the stream before per-route express.raw() can run.
+dashboardApp.use(express.json({ limit: '50mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
 // Auth: cookie parser helper

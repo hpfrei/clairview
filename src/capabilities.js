@@ -472,6 +472,7 @@ function resolveModel(model, providers, secrets) {
     systemPrompt,
     toolOverrides: model.toolOverrides || {},
     reasoning: !!model.reasoning,
+    context1m: !!model.context1m,
     disabled: !!model.disabled,
     contextWindow: typeof model.contextWindow === 'number' ? model.contextWindow : null,
     maxOutputTokens: typeof model.maxOutputTokens === 'number' ? model.maxOutputTokens : null,
@@ -642,16 +643,21 @@ function setClaudeAuthPref(baseDir, value) {
 }
 
 // Model aliases `claude --model` accepts in addition to full model names. The
-// `[1m]` variants request the 1M-context beta. Offered alongside the resolved
+// `[1m]` variants request the 1M context window. Offered alongside the resolved
 // catalog so the picker covers what the CLI understands, not just what
-// models.json happens to list.
+// models.json happens to list. Per-model `<name>[1m]` strings are derived from
+// the catalog's context1m flag by the picker, not listed here.
 const CLI_MODEL_ALIASES = [
+  { value: 'default', label: 'Default (account recommended)' },
+  { value: 'best', label: 'Best available' },
   { value: 'opus', label: 'Opus (latest)' },
   { value: 'opus[1m]', label: 'Opus (latest, 1M context)' },
   { value: 'sonnet', label: 'Sonnet (latest)' },
   { value: 'sonnet[1m]', label: 'Sonnet (latest, 1M context)' },
   { value: 'haiku', label: 'Haiku (latest)' },
   { value: 'fable', label: 'Fable (latest)' },
+  { value: 'opusplan', label: 'Opus in plan mode, Sonnet to execute' },
+  { value: 'opusplan[1m]', label: 'Opus plan / Sonnet execute (1M context)' },
 ];
 
 // Model every NEW CLI tab is pinned to at spawn. Existing tabs keep whatever
@@ -782,6 +788,10 @@ function validateModel(m) {
       ? m.systemPromptMode : 'replace',
     toolOverrides: (m.toolOverrides && typeof m.toolOverrides === 'object') ? m.toolOverrides : {},
     reasoning: !!m.reasoning,
+    // Accepts the Claude Code CLI's `[1m]` suffix (e.g. claude-opus-4-6[1m]).
+    // A capability flag only — never a routable modelId, since the Anthropic
+    // API does not accept the suffix.
+    context1m: !!m.context1m,
     disabled: !!m.disabled,
     contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
     maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : null,
@@ -1005,12 +1015,93 @@ function getModelPricing(baseDir, modelName) {
   return null;
 }
 
-function updateAnthropicPricing(baseDir, updates) {
+// --- Refresh merge (server side) ---
+//
+// The refresh subprocesses only look things up and return JSON; the writes below
+// are the server's. Everything arriving from a subprocess is untrusted model
+// output, so each field is copied by name and type — never spread wholesale.
+
+// Keys that would poison a plain object literal if copied from parsed JSON.
+const UNSAFE_KEY_RE = /^(__proto__|constructor|prototype)$/;
+
+function _price(v) {
+  if (v === null) return null;
+  return (typeof v === 'number' && Number.isFinite(v) && v >= 0) ? v : undefined;
+}
+
+// Apply looked-up pricing to one provider's models in models.json, keyed by
+// modelId. Unknown ids and non-numeric values are ignored.
+// Returns { updated: [names], unknown: [modelIds] }.
+function applyProviderPricing(baseDir, providerKey, models) {
+  const result = { updated: [], unknown: [] };
+  if (!providerKey || !models || typeof models !== 'object') return result;
+  const data = readModelsFile(baseDir);
+  for (const [modelId, meta] of Object.entries(models)) {
+    if (UNSAFE_KEY_RE.test(modelId) || !meta || typeof meta !== 'object') continue;
+    const entry = data.models.find(m => m.providerKey === providerKey && m.modelId === modelId);
+    if (!entry) { result.unknown.push(modelId); continue; }
+    let changed = false;
+    for (const f of PRICING_FIELDS) {
+      const v = _price(meta[f]);
+      if (v === undefined || entry[f] === v) continue;
+      entry[f] = v;
+      changed = true;
+    }
+    if (changed) result.updated.push(entry.label || entry.name);
+  }
+  if (result.updated.length) writeModelsFile(baseDir, data);
+  return result;
+}
+
+// Merge a looked-up Anthropic catalog into anthropic-pricing.json, then
+// reconcile models.json against it. Existing keys are updated field by field and
+// never deleted — a lookup that misses a model must not drop it from the catalog.
+// Returns the reconcile result, plus which catalog keys were touched.
+function applyAnthropicCatalog(baseDir, models) {
   const pricingPath = path.join(baseDir, 'capabilities', 'anthropic-pricing.json');
-  let pricing = {};
-  try { pricing = JSON.parse(fs.readFileSync(pricingPath, 'utf-8')); } catch {}
-  Object.assign(pricing, updates);
-  fs.writeFileSync(pricingPath, JSON.stringify(pricing, null, 2) + '\n');
+  let catalog = {};
+  try { catalog = JSON.parse(fs.readFileSync(pricingPath, 'utf-8')) || {}; } catch {}
+  const touched = [];
+
+  for (const [key, meta] of Object.entries(models || {})) {
+    // Only real Anthropic model ids; the CLI's `[1m]` suffix is not one.
+    if (!/^claude-[a-z0-9.-]+$/i.test(key) || UNSAFE_KEY_RE.test(key)) continue;
+    if (!meta || typeof meta !== 'object') continue;
+    const entry = { ...(catalog[key] || {}) };
+
+    if (typeof meta.label === 'string' && meta.label.trim()) entry.label = meta.label.trim().slice(0, 80);
+    if (['current', 'deprecated', 'retired'].includes(meta.lifecycle)) entry.lifecycle = meta.lifecycle;
+    if (entry.lifecycle === 'deprecated') {
+      if (typeof meta.retiresAt === 'string' && !Number.isNaN(Date.parse(meta.retiresAt))) {
+        entry.retiresAt = new Date(meta.retiresAt).toISOString();
+      }
+    } else {
+      delete entry.retiresAt;
+    }
+    if (typeof meta.context1m === 'boolean') entry.context1m = meta.context1m;
+    for (const f of ['contextWindow', 'maxOutputTokens']) {
+      if (typeof meta[f] === 'number' && Number.isFinite(meta[f]) && meta[f] > 0) entry[f] = Math.round(meta[f]);
+    }
+    for (const f of PRICING_FIELDS) {
+      const v = _price(meta[f]);
+      if (v !== undefined) entry[f] = v;
+    }
+
+    // A key we've never seen must arrive with something usable on it, or a
+    // hallucinated id would enter the catalog as an empty entry.
+    if (!catalog[key] && !entry.label && typeof entry.inputCostPerMTok !== 'number') continue;
+
+    catalog[key] = entry;
+    touched.push(key);
+  }
+
+  if (touched.length) {
+    const out = {};
+    for (const [k, v] of Object.entries(catalog)) if (!UNSAFE_KEY_RE.test(k)) out[k] = v;
+    fs.writeFileSync(pricingPath, JSON.stringify(out, null, 2) + '\n');
+  }
+  const recon = reconcileAnthropicCatalog(baseDir, { clearNew: false });
+  return { ...recon, touched };
 }
 
 // --- Provider model scanning ---
@@ -1031,12 +1122,16 @@ const PRICING_FIELDS = ['inputCostPerMTok', 'outputCostPerMTok', 'cacheReadCostP
 // (e.g. subscription-only auth with no Anthropic API key). To support a new
 // release, add it here (lifecycle 'current'); the refresh subprocess also adds
 // newly-released models automatically by editing anthropic-pricing.json.
+// `context1m` marks the models whose name the CLI accepts with a `[1m]` suffix.
 const ANTHROPIC_CATALOG_FALLBACK = {
-  'claude-opus-4-8': { label: 'Claude Opus 4.8', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current', description: "Anthropic's newest and most capable model — frontier reasoning, coding, and agentic tasks" },
-  'claude-opus-4-7': { label: 'Claude Opus 4.7', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current' },
-  'claude-opus-4-6': { label: 'Claude Opus 4.6', reasoning: true, contextWindow: 200000, maxOutputTokens: 32000, lifecycle: 'current' },
-  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', reasoning: true, contextWindow: 200000, maxOutputTokens: 16000, lifecycle: 'current' },
-  'claude-haiku-4-5': { label: 'Claude Haiku 4.5', reasoning: false, contextWindow: 200000, maxOutputTokens: 8192, lifecycle: 'current' },
+  'claude-fable-5': { label: 'Claude Fable 5', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current', description: "Anthropic's most capable model — hardest reasoning and longest-running agentic work" },
+  'claude-opus-5': { label: 'Claude Opus 5', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current', description: 'For complex agentic coding and enterprise work' },
+  'claude-opus-4-8': { label: 'Claude Opus 4.8', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current' },
+  'claude-opus-4-7': { label: 'Claude Opus 4.7', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current' },
+  'claude-opus-4-6': { label: 'Claude Opus 4.6', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current' },
+  'claude-sonnet-5': { label: 'Claude Sonnet 5', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current', description: 'The best combination of speed and intelligence' },
+  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', reasoning: true, context1m: true, contextWindow: 1000000, maxOutputTokens: 128000, lifecycle: 'current' },
+  'claude-haiku-4-5': { label: 'Claude Haiku 4.5', reasoning: false, context1m: false, contextWindow: 200000, maxOutputTokens: 64000, lifecycle: 'current' },
 };
 
 // Reconcile models.json against the Anthropic catalog (hardcoded fallback merged
@@ -1093,6 +1188,7 @@ function reconcileAnthropicCatalog(baseDir, opts = {}) {
         modelId: meta.modelId || key,
         systemPromptMode: 'passthrough',
         reasoning: !!meta.reasoning,
+        context1m: !!meta.context1m,
         disabled: false,
         lifecycle,
         retiresAt,
@@ -1109,6 +1205,9 @@ function reconcileAnthropicCatalog(baseDir, opts = {}) {
     } else {
       existing.lifecycle = lifecycle;
       existing.retiresAt = lifecycle === 'deprecated' ? retiresAt : null;
+      if (typeof meta.context1m === 'boolean') existing.context1m = meta.context1m;
+      if (typeof meta.contextWindow === 'number') existing.contextWindow = meta.contextWindow;
+      if (typeof meta.maxOutputTokens === 'number') existing.maxOutputTokens = meta.maxOutputTokens;
       for (const f of PRICING_FIELDS) if (typeof meta[f] === 'number') existing[f] = meta[f];
       if (lifecycle === 'deprecated') result.deprecated.push(existing.label || existing.name);
     }
@@ -1216,64 +1315,81 @@ async function scanProviderModels(baseDir) {
   const existingNames = new Set(data.models.map(m => m.name));
   const results = {};
 
-  // Scan keyed providers via their /models API. Anthropic is handled separately
-  // by reconcileAnthropicCatalog below (works without an API key).
-  for (const [key, prov] of Object.entries(data.providers)) {
-    if (key === 'anthropic') continue;
-    const apiKey = secrets.providerKeys?.[key] || '';
-    if (!apiKey) {
-      results[key] = { status: 'skipped', error: 'No API key configured', added: [] };
+  // Hit every keyed provider's /models API concurrently — this is pure network
+  // wait, and a serial loop made a refresh sit through each provider's timeout
+  // in turn. Anthropic is handled separately by reconcileAnthropicCatalog below
+  // (works without an API key).
+  const fetched = await Promise.all(
+    Object.entries(data.providers)
+      .filter(([key]) => key !== 'anthropic')
+      .map(async ([key, prov]) => {
+        const apiKey = secrets.providerKeys?.[key] || '';
+        if (!apiKey) return { key, skipped: 'No API key configured' };
+        const adapter = PROVIDER_ADAPTER_MAP[key] || 'openai';
+        try {
+          const raw = adapter === 'gemini'
+            ? await _fetchGeminiModels(prov.apiBaseUrl || '', apiKey)
+            : await _fetchOpenAICompatModels(prov.apiBaseUrl || '', apiKey);
+          return { key, adapter, raw };
+        } catch (err) {
+          return { key, error: err.message || String(err) };
+        }
+      })
+  );
+
+  // Merge serially: name sanitizing and dedup share mutable state across
+  // providers, so only the network half above is parallel.
+  for (const res of fetched) {
+    const { key, adapter, raw } = res;
+    if (res.skipped) {
+      results[key] = { status: 'skipped', error: res.skipped, added: [] };
       continue;
     }
-    const adapter = PROVIDER_ADAPTER_MAP[key] || 'openai';
-    const exclude = adapter === 'gemini' ? GEMINI_MODEL_EXCLUDE : OPENAI_MODEL_EXCLUDE;
-    try {
-      const raw = adapter === 'gemini'
-        ? await _fetchGeminiModels(prov.apiBaseUrl || '', apiKey)
-        : await _fetchOpenAICompatModels(prov.apiBaseUrl || '', apiKey);
-      const liveIds = new Set(raw.map(m => m.modelId));
-      const added = [];
-      const retired = [];
-      // Recompute isNew + retirement against the live list
-      for (const m of data.models) {
-        if (m.providerKey !== key) continue;
-        if (m.isNew) m.isNew = false;
-        // Decommission detection: a model we'd normally track but the API no
-        // longer returns. Guarded by the exclude regex so filtered-out models
-        // (embeddings, dated aliases, etc.) are never falsely retired.
-        if (m.modelId && !exclude.test(m.modelId) && !liveIds.has(m.modelId) && m.lifecycle !== 'retired') {
-          m.lifecycle = 'retired';
-          m.disabled = true;
-          retired.push(m.label || m.name);
-        }
-      }
-      for (const m of raw) {
-        if (existingModelIds.has(m.modelId)) continue;
-        const name = _sanitizeModelName(m.modelId, existingNames);
-        existingNames.add(name);
-        existingModelIds.add(m.modelId);
-        const entry = validateModel({
-          name,
-          label: m.displayName !== m.modelId ? m.displayName : name,
-          description: m.description || '',
-          providerKey: key,
-          provider: adapter,
-          modelId: m.modelId,
-          systemPromptMode: 'replace',
-          reasoning: false,
-          disabled: true,
-          lifecycle: 'current',
-          isNew: true,
-          contextWindow: m.contextWindow || null,
-          maxOutputTokens: m.maxOutputTokens || null,
-        });
-        data.models.push(entry);
-        added.push({ name, label: entry.label, modelId: m.modelId });
-      }
-      results[key] = { status: 'ok', total: raw.length, added, retired };
-    } catch (err) {
-      results[key] = { status: 'error', error: err.message || String(err), added: [] };
+    if (res.error) {
+      results[key] = { status: 'error', error: res.error, added: [] };
+      continue;
     }
+    const exclude = adapter === 'gemini' ? GEMINI_MODEL_EXCLUDE : OPENAI_MODEL_EXCLUDE;
+    const liveIds = new Set(raw.map(m => m.modelId));
+    const added = [];
+    const retired = [];
+    // Recompute isNew + retirement against the live list
+    for (const m of data.models) {
+      if (m.providerKey !== key) continue;
+      if (m.isNew) m.isNew = false;
+      // Decommission detection: a model we'd normally track but the API no
+      // longer returns. Guarded by the exclude regex so filtered-out models
+      // (embeddings, dated aliases, etc.) are never falsely retired.
+      if (m.modelId && !exclude.test(m.modelId) && !liveIds.has(m.modelId) && m.lifecycle !== 'retired') {
+        m.lifecycle = 'retired';
+        m.disabled = true;
+        retired.push(m.label || m.name);
+      }
+    }
+    for (const m of raw) {
+      if (existingModelIds.has(m.modelId)) continue;
+      const name = _sanitizeModelName(m.modelId, existingNames);
+      existingNames.add(name);
+      existingModelIds.add(m.modelId);
+      const entry = validateModel({
+        name,
+        label: m.displayName !== m.modelId ? m.displayName : name,
+        description: m.description || '',
+        providerKey: key,
+        provider: adapter,
+        modelId: m.modelId,
+        systemPromptMode: 'replace',
+        reasoning: false,
+        disabled: true,
+        lifecycle: 'current',
+        isNew: true,
+        contextWindow: m.contextWindow || null,
+        maxOutputTokens: m.maxOutputTokens || null,
+      });
+      data.models.push(entry);
+      added.push({ name, label: entry.label, modelId: m.modelId });
+    }
+    results[key] = { status: 'ok', total: raw.length, added, retired };
   }
 
   writeModelsFile(baseDir, data);
@@ -1308,6 +1424,8 @@ module.exports = {
   getModelPricing,
   scanProviderModels,
   reconcileAnthropicCatalog,
+  applyProviderPricing,
+  applyAnthropicCatalog,
   listProxyRules,
   addProxyRule,
   toggleProxyRule,

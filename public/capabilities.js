@@ -628,7 +628,12 @@ Available templates in this skill directory:
     const crCost = parseFloat(document.getElementById('mmCacheReadCost')?.value);
     const ccCost = parseFloat(document.getElementById('mmCacheCreateCost')?.value);
 
+    // Carry forward flags the form does not expose, so editing a model by hand
+    // does not silently drop its 1M-context capability.
+    const previous = (state.models || []).find(m => m.name === name);
+
     const model = {
+      context1m: !!previous?.context1m,
       name,
       label: document.getElementById('mmLabel')?.value?.trim() || name,
       description: document.getElementById('mmDescription')?.value?.trim() || '',
@@ -676,6 +681,18 @@ Available templates in this skill directory:
     sendWs({ type: 'model:refresh' });
   });
 
+  // Scan summary, kept so the per-provider pricing lines that arrive afterwards
+  // can be appended under it instead of replacing it.
+  let refreshScanHtml = '';
+
+  function renderRefreshStatus(pricingLines) {
+    const statusEl = document.getElementById('capRefreshStatus');
+    if (!statusEl) return;
+    statusEl.classList.remove('hidden');
+    const pricing = (pricingLines || []).map(l => escHtml(l)).join('<br>');
+    statusEl.innerHTML = refreshScanHtml + (pricing ? `<br><small>${pricing}</small>` : '');
+  }
+
   function showScanResults(results) {
     const btn = document.getElementById('capRefreshModels');
     const statusEl = document.getElementById('capRefreshStatus');
@@ -718,9 +735,10 @@ Available templates in this skill directory:
       if (totalDeprecated) changeParts.push(`flagged ${totalDeprecated} deprecated`);
       if (totalRetired) changeParts.push(`retired ${totalRetired}`);
       const summary = changeParts.length
-        ? `Scanned ${totalScanned} providers. ${changeParts.join(', ')}. Updating pricing...`
-        : `All models up to date. Updating pricing...`;
-      statusEl.innerHTML = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
+        ? `Scanned ${totalScanned} providers. ${changeParts.join(', ')}.`
+        : `All models up to date.`;
+      refreshScanHtml = escHtml(summary) + '<br><small>' + lines.map(escHtml).join('<br>') + '</small>';
+      statusEl.innerHTML = refreshScanHtml;
     }
     if (btn) btn.innerHTML = '<span class="busy-dot"></span> Updating pricing…';
 
@@ -849,8 +867,12 @@ Available templates in this skill directory:
         showScanResults(msg.results);
         break;
       case 'model:refresh:status': {
-        const statusEl = document.getElementById('capRefreshStatus');
-        if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = msg.text || 'Updating...'; }
+        if (msg.lines) {
+          renderRefreshStatus(msg.lines);
+        } else {
+          const statusEl = document.getElementById('capRefreshStatus');
+          if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = msg.text || 'Updating...'; }
+        }
         break;
       }
       case 'model:refresh:error': {
@@ -858,15 +880,17 @@ Available templates in this skill directory:
         const btn = document.getElementById('capRefreshModels');
         if (statusEl) { statusEl.classList.remove('hidden'); statusEl.textContent = 'Error: ' + (msg.error || 'unknown'); }
         if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+        refreshScanHtml = '';
         break;
       }
       case 'model:refresh:done': {
         const statusEl = document.getElementById('capRefreshStatus');
         const btn = document.getElementById('capRefreshModels');
-        const hasError = msg.text && /failed|error|not authenticated/i.test(msg.text);
-        if (statusEl) statusEl.textContent = hasError ? msg.text : 'Refresh complete.';
+        const failures = (msg.lines || []).filter(l => /failed|could not/i.test(l));
+        renderRefreshStatus([...(msg.lines || []), msg.text || 'Refresh complete.']);
         if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
-        if (!hasError) setTimeout(() => { if (statusEl) statusEl.classList.add('hidden'); }, 5000);
+        // Leave the panel up when something failed, so the reason stays readable.
+        if (!failures.length) setTimeout(() => { if (statusEl) statusEl.classList.add('hidden'); }, 8000);
         break;
       }
     }

@@ -458,23 +458,37 @@
   // --- Default model for new CLI tabs ---
 
   // Options for a model picker: the CLI's own aliases (which `--model` accepts
-  // but models.json does not list) followed by the resolved Anthropic catalog.
-  // The tab-strip cog and the per-tab settings modal both draw from this, so the
-  // two can never drift apart.
+  // but models.json does not list), then a `<model>[1m]` variant per catalog
+  // model that supports the 1M context window, then the resolved Anthropic
+  // catalog. The tab-strip cog and the per-tab settings modal both draw from
+  // this, so the two can never drift apart.
   function modelPickerOptions() {
     const aliases = (state.cliModelAliases || []).map(a => ({
-      value: a.value, label: a.label, group: 'Aliases', price: '',
+      value: a.value, label: a.label, group: a.group || 'Aliases', price: '',
     }));
     const catalog = (state.models || [])
       .filter(m => m.providerKey === 'anthropic' && m.lifecycle !== 'retired' && !m.disabled)
-      .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name))
+      .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name));
+    // The CLI takes `<full model name>[1m]`; the API does not, so these exist
+    // only here — never as routable models.json entries.
+    const extended = catalog
+      .filter(m => m.context1m)
       .map(m => ({
+        value: `${m.name}[1m]`,
+        label: `${m.label || m.name} (1M context)`,
+        group: '1M context',
+        price: fmtPrice(m),
+      }));
+    return [
+      ...aliases,
+      ...extended,
+      ...catalog.map(m => ({
         value: m.name,
         label: (m.label || m.name) + (m.isNew ? ' (new)' : ''),
         group: 'Catalog',
         price: fmtPrice(m),
-      }));
-    return [...aliases, ...catalog];
+      })),
+    ];
   }
 
   function updateModelCog() {
