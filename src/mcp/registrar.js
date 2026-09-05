@@ -70,13 +70,4 @@ function unregister(slug, scope, projectDir) {
   return { ok: true };
 }
 
-function getRegistered(projectDir) {
-  const userConfig = readConfig(resolveConfigPath('user'));
-  const projectConfig = projectDir ? readConfig(resolveConfigPath('project', projectDir)) : {};
-  const servers = {};
-  if (userConfig.mcpServers) Object.assign(servers, userConfig.mcpServers);
-  if (projectConfig.mcpServers) Object.assign(servers, projectConfig.mcpServers);
-  return Object.keys(servers);
-}
-
 module.exports = { register, unregister };

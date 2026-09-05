@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 function getLogDir(serverDir) {
   const dir = path.join(serverDir, 'logs');
@@ -11,17 +10,6 @@ function getLogDir(serverDir) {
 function todayFile(serverDir) {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   return path.join(getLogDir(serverDir), `${date}.jsonl`);
-}
-
-function appendLog(serverDir, entry) {
-  const logEntry = {
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-    ...entry,
-  };
-  const file = todayFile(serverDir);
-  fs.appendFileSync(file, JSON.stringify(logEntry) + '\n');
-  return logEntry;
 }
 
 function readLogs(serverDir, opts = {}) {
@@ -85,20 +73,6 @@ function clearLogs(serverDir) {
   if (!fs.existsSync(logDir)) return;
   for (const file of fs.readdirSync(logDir)) {
     if (file.endsWith('.jsonl')) {
-      fs.unlinkSync(path.join(logDir, file));
-    }
-  }
-}
-
-function rotateLogs(serverDir, maxDays = 30) {
-  const logDir = getLogDir(serverDir);
-  if (!fs.existsSync(logDir)) return;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - maxDays);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-  for (const file of fs.readdirSync(logDir)) {
-    if (file.endsWith('.jsonl') && file.slice(0, 10) < cutoffStr) {
       fs.unlinkSync(path.join(logDir, file));
     }
   }

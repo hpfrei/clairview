@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
+const caps = require('./capabilities');
 
 const OFFLINE_GRACE_DAYS = 7;
 
@@ -246,20 +247,15 @@ function createLicensing({ dataHome, isDev, env = process.env }) {
   // treated as a dev checkout (the maintained codebase) and is locked by
   // default — a stray click on Update must never overwrite the source of truth.
 
-  function appPrefsPath() { return path.join(dataHome, 'data', 'app-prefs.json'); }
-
-  function readAppPrefs() {
-    try {
-      const p = JSON.parse(fs.readFileSync(appPrefsPath(), 'utf-8'));
-      return (p && typeof p === 'object') ? p : {};
-    } catch { return {}; }
-  }
+  // data/app-prefs.json is owned by capabilities.js — one reader/writer pair
+  // for the file, not a second copy here.
+  const readAppPrefs = () => caps.readAppPrefs(dataHome);
 
   function setProUpdatesDisabled(disabled) {
     const prefs = readAppPrefs();
     prefs.proUpdatesDisabled = !!disabled;
     ensureDir(path.join(dataHome, 'data'));
-    fs.writeFileSync(appPrefsPath(), JSON.stringify(prefs, null, 2));
+    caps.writeAppPrefs(dataHome, prefs);
   }
 
   function isDevInstall() {

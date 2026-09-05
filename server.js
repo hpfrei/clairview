@@ -16,6 +16,8 @@ const caps = require('./src/capabilities');
 const mcp = require('./src/mcp');
 const { createLicensing } = require('./src/licensing');
 const addons = require('./src/addons');
+const { createAddonCtx } = require('./src/addon-host');
+const { createAuth } = require('./src/auth');
 let proModule = null;   // the loaded ./vistaclair-pro module (for licensing/update)
 let proAddon = null;    // its registered descriptor (null until init succeeds)
 let proLicenseValid = false;
@@ -126,44 +128,10 @@ dashboardApp.set('trust proxy', 'loopback')  // proxies (nginx/ngrok/cloudflared
 dashboardApp.use(express.json({ limit: '50mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 dashboardApp.use(express.urlencoded({ extended: false }));
 
-// Auth: cookie parser helper
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-// Truly-local: loopback socket AND not forwarded by a local proxy. Since nginx,
-// ngrok, and cloudflared all run on this host, the socket peer is always loopback;
-// the X-Forwarded-For header is what distinguishes proxied external traffic.
-function isLoopback(req) {
-  return LOOPBACK.has(req.socket?.remoteAddress) && !req.headers['x-forwarded-for'];
-}
-function isLoopbackSocket(socket, req) {
-  return LOOPBACK.has(socket.remoteAddress) && !req?.headers?.['x-forwarded-for'];
-}
-
-function safeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
-function getTokenFromCookies(cookieHeader) {
-  if (!cookieHeader) return null;
-  const match = cookieHeader.match(/(?:^|;\s*)token=([^;]+)/);
-  return match ? match[1] : null;
-}
-
-function getSidFromCookies(cookieHeader) {
-  if (!cookieHeader) return null;
-  const match = cookieHeader.match(/(?:^|;\s*)sid=([^;]+)/);
-  return match ? match[1] : null;
-}
-
-function sessionFromReq(req) {
-  return tgLogin.getSession(getSidFromCookies(req.headers.cookie));
-}
-
-// The static token is only a credential for truly-local callers once TG login
-// is configured; externally, TG-issued sessions are the only way in.
-function tokenLoginAllowed(req) {
-  return isLoopback(req) || !tgLogin.configured();
-}
+// Owner authentication — one definition (src/auth.js) shared by the HTTP
+// middleware, the WS upgrade, host-local endpoints, and the addon ctx.
+const auth = createAuth({ authToken: AUTH_TOKEN, tgLogin });
+const { isLoopback, safeEqual, getSidFromCookies, tokenLoginAllowed, isInternal } = auth;
 
 function authCookie(name, value, extra = '') {
   return `${name}=${value}; HttpOnly; SameSite=Lax; Path=/${SERVER_MODE ? '; Secure' : ''}${extra}`;
@@ -364,20 +332,11 @@ dashboardApp.use((req, res, next) => {
   // aren't sent on cross-site redirects, so these must bypass auth. Declarative
   // per-add-on list, no hardcoded product knowledge here.
   if (addons.isAuthExempt(req.path)) return next();
-  // Allow internal requests from MCP tools (localhost + internal header)
-  if (isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN)) return next();
   // App-tool-call uses ephemeral per-session tokens validated by its own handler
   if (isLoopback(req) && req.path === '/api/app-tool-call') return next();
-  // Telegram-issued session
-  if (sessionFromReq(req)) return next();
-  // Static token: local-only once TG login is configured (external raw-token
-  // acceptance is what made a single leak equal permanent host compromise).
-  if (tokenLoginAllowed(req)) {
-    const token = getTokenFromCookies(req.headers.cookie);
-    if (safeEqual(token, AUTH_TOKEN)) return next();
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith('Bearer ') && safeEqual(authHeader.slice(7), AUTH_TOKEN)) return next();
-  }
+  // Internal header (MCP tools), Telegram session, or the static token where
+  // tokenLoginAllowed — see src/auth.js.
+  if (auth.isOwnerRequest(req)) return next();
   // API routes get 401 JSON; browser routes get redirect
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
@@ -420,12 +379,8 @@ setProcessBroadcaster(broadcaster);
 store.setBroadcaster(broadcaster);
 
 dashboardServer.on('upgrade', (req, socket, head) => {
-  // Allow internal requests from MCP tools (localhost + internal header)
-  const internal = isLoopbackSocket(socket, req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN);
-  const session = tgLogin.getSession(getSidFromCookies(req.headers.cookie));
-  const token = getTokenFromCookies(req.headers.cookie);
-  const tokenOk = (isLoopbackSocket(socket, req) || !tgLogin.configured()) && safeEqual(token, AUTH_TOKEN);
-  if (!internal && !session && !tokenOk) {
+  // Same owner decision as the HTTP middleware, against the upgrade socket.
+  if (!auth.isOwnerUpgrade(req, socket)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
@@ -451,42 +406,21 @@ mcp.init({ broadcaster, store, authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_P
 // init() returns a versioned descriptor; core consumes it generically — routers
 // are mounted after auth (below), upgrades/clientModules/auth-exempt paths are
 // dispatched through the addon registry. No per-add-on branching here.
-const addonCtx = {
-  broadcaster, store, authToken: AUTH_TOKEN,
-  dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT,
-  cliSessionManager, spawnClaude, buildClaudeArgs,
-  // Inspector session lifecycle for headless ai.prompt spawns: registering an
-  // instanceId gives its interactions a persistent per-session timeline on disk
-  // (data/interactions/<sessId>/), exactly like CLI tabs.
-  registerAiSession: (instanceId) => {
-    const sessId = crypto.randomUUID();
-    store.registerSession(instanceId, sessId);
-    return sessId;
+// The ctx is built by the same factory the headless app-runner uses
+// (src/addon-host.js) — one definition, two profiles. Only the dashboard-process
+// services are supplied here.
+const addonCtx = createAddonCtx({
+  dataHome: DATA_HOME,
+  dashboard: {
+    authToken: AUTH_TOKEN, dashboardPort: DASHBOARD_PORT, proxyPort: PROXY_PORT,
+    broadcaster, store, cliSessionManager,
+    scheduleRestart: () => scheduleRestart(),
+    pendingQuestions,
+    clearPendingQuestionsForTab: createProxyRouter.clearPendingQuestionsForTab,
+    isOwnerRequest: auth.isOwnerRequest,
+    tgLoginConfigured: () => tgLogin.configured(),
   },
-  unregisterAiSession: (instanceId) => {
-    const sessId = store.sessionMap.get(instanceId);
-    store.unregisterSession(instanceId);
-    // A call that failed before any request leaves an empty session dir — drop it.
-    if (sessId && !store.hasSessionContent(sessId)) store.deleteSessionData(sessId);
-  },
-  secretStore: require('./src/secret-store'),
-  resolveHeadlessAuth: (authMode) => caps.resolveHeadlessAuth(DATA_HOME, authMode),
-  resolveProviderKey: (providerKey) => caps.getProviderKey(DATA_HOME, providerKey),
-  setProviderKey: (providerKey, apiKey) => caps.setProviderKey(DATA_HOME, providerKey, apiKey),
-  // Whole key + model registry, for Pro's master→slave sync. exportKeyBundle
-  // returns real API keys; only the peer control plane may carry it.
-  exportKeyBundle: () => caps.exportKeyBundle(DATA_HOME),
-  importKeyBundle: (bundle, opts) => caps.importKeyBundle(DATA_HOME, bundle, opts),
-  listModels: () => caps.listModels(DATA_HOME),
-  claudeAuthInfo: () => ({
-    hasSubscription: caps.hasClaudeSubscription(),
-    pref: caps.getClaudeAuthPref(DATA_HOME),
-    needsChoice: caps.needsClaudeAuthChoice(DATA_HOME),
-  }),
-  scheduleRestart: () => scheduleRestart(),
-  pendingQuestions,
-  clearPendingQuestionsForTab: createProxyRouter.clearPendingQuestionsForTab,
-};
+});
 if (proModule) {
   try {
     const descriptor = proModule.init(addonCtx);
@@ -541,7 +475,7 @@ function scheduleRestart() {
 // only via loopback + internal header (the auth middleware admits nothing else
 // here from outside, and this re-checks to be explicit).
 dashboardApp.post('/api/internal/broadcast', (req, res) => {
-  if (!(isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN))) {
+  if (!isInternal(req)) {
     return res.status(403).json({ error: 'Internal only' });
   }
   if (!req.body || typeof req.body.type !== 'string') {
@@ -596,7 +530,7 @@ dashboardApp.post('/api/logout', (req, res) => {
 // Break-glass: mint a one-time login URL. Loopback+internal-header only, so it
 // is reachable exclusively from the host itself (`vistaclair login-link`).
 dashboardApp.post('/api/tg-login/login-link', (req, res) => {
-  if (!(isLoopback(req) && safeEqual(req.headers['x-vistaclair-internal'], AUTH_TOKEN))) {
+  if (!isInternal(req)) {
     return res.status(403).json({ error: 'Host-local only' });
   }
   const key = tgLogin.createOneTimeLink();

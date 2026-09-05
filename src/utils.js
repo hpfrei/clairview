@@ -370,64 +370,9 @@ function runClaudeArtifactTask({
  * Calls onEvent(event) for valid JSON, onRaw(line) for non-JSON lines.
  * Returns { write(chunk), flush() → lastEvent? }.
  */
-function createStreamJsonParser(onEvent, onRaw) {
-  let buffer = '';
-  return {
-    write(chunk) {
-      buffer += chunk.toString('utf-8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          onEvent(JSON.parse(line));
-        } catch {
-          if (onRaw) onRaw(line);
-        }
-      }
-    },
-    flush() {
-      if (!buffer.trim()) return null;
-      const remaining = buffer;
-      buffer = '';
-      try {
-        const event = JSON.parse(remaining);
-        onEvent(event);
-        return event;
-      } catch {
-        if (onRaw) onRaw(remaining);
-        return null;
-      }
-    },
-  };
-}
-
 // --- Output directory sandboxing ---
 
 const OUTPUTS_DIR = path.join(DATA_HOME, 'outputs');
-
-/**
- * Resolve a user-provided path into the outputs sandbox.
- * Any path (absolute or relative) is treated as relative to OUTPUTS_DIR.
- * Path traversal (../) is stripped. The resolved directory is created if needed.
- * Returns the absolute path inside outputs/.
- */
-function resolveOutputDir(userPath) {
-  if (!userPath) { ensureDir(OUTPUTS_DIR); return OUTPUTS_DIR; }
-  // If already an absolute path inside outputs/, use it directly
-  const normalized = path.resolve(userPath);
-  if (normalized.startsWith(OUTPUTS_DIR)) {
-    ensureDir(normalized);
-    return normalized;
-  }
-  // Otherwise treat as relative to OUTPUTS_DIR (strip traversal and leading slashes)
-  const clean = userPath.replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
-  const stripped = clean.replace(/^[/\\]+/, '');
-  const resolved = stripped ? path.join(OUTPUTS_DIR, stripped) : OUTPUTS_DIR;
-  if (!resolved.startsWith(OUTPUTS_DIR)) return OUTPUTS_DIR;
-  ensureDir(resolved);
-  return resolved;
-}
 
 // --- File I/O utilities ---
 
@@ -587,21 +532,6 @@ function sanitizeForDashboard(interaction) {
   return clone;
 }
 
-function listFiles(dir) {
-  try {
-    if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
-      .filter(f => {
-        try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; }
-      })
-      .map(f => {
-        const full = path.join(dir, f);
-        const stat = fs.statSync(full);
-        return { name: f, path: full, size: stat.size, mtime: stat.mtimeMs };
-      });
-  } catch { return []; }
-}
-
 // --- AskUserQuestion file upload processing ---
 
 /**
@@ -654,50 +584,6 @@ function processUploadedFiles(toolUseId, files, answer) {
 
 // --- File placement for prompt attachments ---
 
-/**
- * Place uploaded files directly into a working directory for Claude to read.
- * @param {string} cwd - Target directory (must already exist)
- * @param {Array} files - Array of { name, data } where data is a base64 data URL
- * @returns {string[]} Array of placed filenames (basenames only)
- */
-function placeFilesInCwd(cwd, files) {
-  if (!files || !files.length) return [];
-  ensureDir(cwd);
-
-  const placed = [];
-  const prefix = Date.now();
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    // Sanitize filename
-    let safeName = (f.name || 'file').replace(/[/\\]/g, '_').replace(/[^a-zA-Z0-9._-]/g, '_');
-    if (safeName.length > 200) safeName = safeName.slice(0, 200);
-
-    const uniqueName = `upload-${prefix}-${i}-${safeName}`;
-
-    // Decode base64 data URL
-    const match = (f.data || '').match(/^data:[^;]*;base64,(.+)$/);
-    if (!match) continue;
-
-    const buffer = Buffer.from(match[1], 'base64');
-    const fullPath = path.join(cwd, uniqueName);
-    fs.writeFileSync(fullPath, buffer);
-    placed.push(fullPath);
-  }
-  return placed;
-}
-
-/**
- * Augment a prompt with instructions to read attached files.
- * @param {string} prompt - Original user prompt
- * @param {string[]} filenames - Array of filenames placed in CWD
- * @returns {string} Augmented prompt (or original if no files)
- */
-function augmentPromptWithFiles(prompt, filenames) {
-  if (!filenames || filenames.length === 0) return prompt;
-  const fileList = filenames.map(f => `- ${f}`).join('\n');
-  return `[Files have been placed in your working directory. You MUST read them using the Read tool before responding:\n${fileList}\n]\n\n${prompt}`;
-}
-
 module.exports = {
   generateId,
   filterRequestHeaders,
@@ -713,7 +599,6 @@ module.exports = {
   getInstanceContext,
   killInstance,
   removeInstances,
-  createStreamJsonParser,
   runClaudeArtifactTask,
   isClaudeAuthError,
   describeClaudeError,

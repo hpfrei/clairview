@@ -32,10 +32,6 @@ function registerAddon(descriptor) {
   return descriptor;
 }
 
-function getAddon(id) {
-  return addons.find(a => a.id === id) || null;
-}
-
 function removeAddon(id) {
   const i = addons.findIndex(a => a.id === id);
   if (i >= 0) addons.splice(i, 1);
@@ -90,12 +86,10 @@ function shutdownAll() {
 module.exports = {
   CONTRACT_VERSION,
   registerAddon,
-  getAddon,
   removeAddon,
   getClientModules,
   isAuthExempt,
   handleUpgrade,
   mountRouters,
   shutdownAll,
-  getAddons: () => addons,
 };

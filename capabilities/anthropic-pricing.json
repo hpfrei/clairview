@@ -4,16 +4,22 @@
     "lifecycle": "current",
     "inputCostPerMTok": 10,
     "outputCostPerMTok": 50,
-    "cacheReadCostPerMTok": 1.0,
-    "cacheCreateCostPerMTok": 12.5
+    "cacheReadCostPerMTok": 1,
+    "cacheCreateCostPerMTok": 12.5,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-mythos-5": {
     "label": "Claude Mythos 5",
     "lifecycle": "current",
     "inputCostPerMTok": 10,
     "outputCostPerMTok": 50,
-    "cacheReadCostPerMTok": 1.0,
-    "cacheCreateCostPerMTok": 12.5
+    "cacheReadCostPerMTok": 1,
+    "cacheCreateCostPerMTok": 12.5,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-opus-5": {
     "label": "Claude Opus 5",
@@ -21,7 +27,10 @@
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
-    "cacheCreateCostPerMTok": 6.25
+    "cacheCreateCostPerMTok": 6.25,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-opus-4-8": {
     "label": "Claude Opus 4.8",
@@ -29,7 +38,10 @@
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
-    "cacheCreateCostPerMTok": 6.25
+    "cacheCreateCostPerMTok": 6.25,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-opus-4-7": {
     "label": "Claude Opus 4.7",
@@ -37,7 +49,10 @@
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
-    "cacheCreateCostPerMTok": 6.25
+    "cacheCreateCostPerMTok": 6.25,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-opus-4-6": {
     "label": "Claude Opus 4.6",
@@ -45,24 +60,32 @@
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
-    "cacheCreateCostPerMTok": 6.25
+    "cacheCreateCostPerMTok": 6.25,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-opus-4-5": {
     "label": "Claude Opus 4.5",
-    "lifecycle": "deprecated",
-    "retiresAt": "2026-09-14T00:00:00Z",
+    "lifecycle": "current",
     "inputCostPerMTok": 5,
     "outputCostPerMTok": 25,
     "cacheReadCostPerMTok": 0.5,
-    "cacheCreateCostPerMTok": 6.25
+    "cacheCreateCostPerMTok": 6.25,
+    "context1m": false,
+    "contextWindow": 200000,
+    "maxOutputTokens": 64000
   },
   "claude-sonnet-5": {
     "label": "Claude Sonnet 5",
     "lifecycle": "current",
-    "inputCostPerMTok": 3,
-    "outputCostPerMTok": 15,
-    "cacheReadCostPerMTok": 0.3,
-    "cacheCreateCostPerMTok": 3.75
+    "inputCostPerMTok": 2,
+    "outputCostPerMTok": 10,
+    "cacheReadCostPerMTok": 0.2,
+    "cacheCreateCostPerMTok": 2.5,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-sonnet-4-6": {
     "label": "Claude Sonnet 4.6",
@@ -70,16 +93,21 @@
     "inputCostPerMTok": 3,
     "outputCostPerMTok": 15,
     "cacheReadCostPerMTok": 0.3,
-    "cacheCreateCostPerMTok": 3.75
+    "cacheCreateCostPerMTok": 3.75,
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000
   },
   "claude-sonnet-4-5": {
     "label": "Claude Sonnet 4.5",
-    "lifecycle": "deprecated",
-    "retiresAt": "2026-09-14T00:00:00Z",
+    "lifecycle": "current",
     "inputCostPerMTok": 3,
     "outputCostPerMTok": 15,
     "cacheReadCostPerMTok": 0.3,
-    "cacheCreateCostPerMTok": 3.75
+    "cacheCreateCostPerMTok": 3.75,
+    "context1m": false,
+    "contextWindow": 200000,
+    "maxOutputTokens": 64000
   },
   "claude-haiku-4-5": {
     "label": "Claude Haiku 4.5",
@@ -87,6 +115,77 @@
     "inputCostPerMTok": 1,
     "outputCostPerMTok": 5,
     "cacheReadCostPerMTok": 0.1,
-    "cacheCreateCostPerMTok": 1.25
+    "cacheCreateCostPerMTok": 1.25,
+    "context1m": false,
+    "contextWindow": 200000,
+    "maxOutputTokens": 64000
+  },
+  "claude-fable-5-1": {
+    "label": "Claude Fable 5.1",
+    "lifecycle": "current",
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000,
+    "inputCostPerMTok": 10,
+    "outputCostPerMTok": 50,
+    "cacheReadCostPerMTok": 0.25,
+    "cacheCreateCostPerMTok": 12.5
+  },
+  "claude-mythos-5-1": {
+    "label": "Claude Mythos 5.1",
+    "lifecycle": "current",
+    "context1m": true,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000,
+    "inputCostPerMTok": 10,
+    "outputCostPerMTok": 50,
+    "cacheReadCostPerMTok": 0.25,
+    "cacheCreateCostPerMTok": 12.5
+  },
+  "claude-opus-4-1": {
+    "label": "Claude Opus 4.1",
+    "lifecycle": "retired",
+    "context1m": false,
+    "inputCostPerMTok": 15,
+    "outputCostPerMTok": 75,
+    "cacheReadCostPerMTok": 1.5,
+    "cacheCreateCostPerMTok": 18.75
+  },
+  "claude-opus-4": {
+    "label": "Claude Opus 4",
+    "lifecycle": "retired",
+    "context1m": false,
+    "inputCostPerMTok": 15,
+    "outputCostPerMTok": 75,
+    "cacheReadCostPerMTok": 1.5,
+    "cacheCreateCostPerMTok": 18.75
+  },
+  "claude-sonnet-4": {
+    "label": "Claude Sonnet 4",
+    "lifecycle": "retired",
+    "context1m": false,
+    "inputCostPerMTok": 3,
+    "outputCostPerMTok": 15,
+    "cacheReadCostPerMTok": 0.3,
+    "cacheCreateCostPerMTok": 3.75
+  },
+  "claude-sonnet-3-7": {
+    "label": "Claude Sonnet 3.7",
+    "lifecycle": "retired",
+    "context1m": false
+  },
+  "claude-haiku-3-5": {
+    "label": "Claude Haiku 3.5",
+    "lifecycle": "retired",
+    "context1m": false,
+    "inputCostPerMTok": 0.8,
+    "outputCostPerMTok": 4,
+    "cacheReadCostPerMTok": 0.08,
+    "cacheCreateCostPerMTok": 1
+  },
+  "claude-haiku-3": {
+    "label": "Claude Haiku 3",
+    "lifecycle": "retired",
+    "context1m": false
   }
 }

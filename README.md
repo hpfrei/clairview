@@ -82,13 +82,11 @@ Open **http://localhost:3457** and log in with the auth token printed to the con
 
 **Proxy rules** — JavaScript middleware that intercepts every request. Swap models, strip tools, inject prompts, short-circuit responses. Describe in English, vistaclair generates the JS. Hot-reloaded, toggleable.
 
-**MCP tools** — Define custom tools in the browser with typed parameters and a JS handler. Claude gets the capability instantly. Built-in: `vista-AskUserQuestion` (routes questions to dashboard UI), `chat` (sub-session delegation).
+**MCP tools** — Define custom tools in the browser with typed parameters and a JS handler. Claude gets the capability instantly. Built-in: `vista-AskUserQuestion` (routes questions to dashboard UI).
 
 **File manager** — Browse, preview, and manage files on the remote machine. Monaco editor, multi-select, integrated shell.
 
 **Skills, agents, hooks** — Create and edit `.claude/` skills, agents, and hooks from the dashboard.
-
-**[External API](VISTACLAIR_CONNECT.md)** — REST and WebSocket interface for programmatic access.
 
 ---
 

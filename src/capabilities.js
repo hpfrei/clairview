@@ -57,9 +57,6 @@ const KNOWN_SKILLS = [
   { name: 'memory', description: "Manage Claude's project memory (CLAUDE.md)" },
 ];
 
-// Provider keys that support native web search (used by UI + adapter)
-const WEB_SEARCH_PROVIDERS = new Set(['openai', 'google', 'moonshot']);
-
 // Maps providerKey → adapter name (used for model scanning and auto-adding)
 const PROVIDER_ADAPTER_MAP = {
   anthropic: 'anthropic',
@@ -1443,6 +1440,7 @@ module.exports = {
   resolveHeadlessAuth,
   getInteractiveAuth,
   readAppPrefs,
+  writeAppPrefs,
   getClaudeAuthPref,
   setClaudeAuthPref,
   CLI_MODEL_ALIASES,
