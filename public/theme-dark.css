@@ -4,6 +4,7 @@
   --bg-surface: #24283b;
   --bg-hover: #2f3348;
   --bg-selected: #3b4261;
+  --bg-deep: #0a0e17;
   --border: #414868;
   --text: #c0caf5;
   --text-dim: #565f89;
@@ -43,4 +44,10 @@
   --ruler-text-major: #c09050;
   --ruler-line: #5a4428;
   --ruler-line-major: #7a5a30;
+}
+
+/* Surface-kit overrides: dark ground needs deeper, wider shadows */
+:root {
+  --vc-shadow:    0 1px 2px rgba(10, 11, 20, .10), 0 14px 36px -22px rgba(10, 11, 20, .45);
+  --vc-shadow-hi: 0 2px 4px rgba(10, 11, 20, .12), 0 24px 48px -24px rgba(10, 11, 20, .55);
 }

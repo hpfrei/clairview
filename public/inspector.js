@@ -744,8 +744,13 @@
   // inside the scrollable response panel, so we follow at the panel level.
   function _followResponse(scope) {
     if (!_liveMode) return;
-    const panel = (scope && scope !== document ? scope.querySelector('.response-panel') : document.querySelector('#detail-content .response-panel'))
-      || _scopeFind(scope, 'response-blocks');
+    const root = scope && scope !== document ? scope : document;
+    // In the .vc-detail frame the pane body has overflow:hidden and each open
+    // section scrolls itself, so follow the section holding #response-blocks.
+    const blocks = _scopeFind(scope, 'response-blocks');
+    const panel = blocks?.closest('.vc-sec-body')
+      || root.querySelector('.response-panel')
+      || blocks;
     if (panel) panel.scrollTop = panel.scrollHeight;
   }
 
@@ -759,6 +764,8 @@
     if (eventType === 'message_start') {
       const statusVal = _scopeFind(scope, 'resp-status');
       if (statusVal) { statusVal.textContent = '200'; statusVal.className = 'info-value status-ok'; }
+      const statusChip = _scopeFind(scope, 'resp-status-chip');
+      if (statusChip) { statusChip.textContent = '200'; statusChip.className = 'status-ok'; }
       if (data?.message?.usage) {
         if (scope === document) updateUsageDisplay(data.message.usage, interaction.pricing);
       }
@@ -914,6 +921,11 @@
       _sseDetails.hidden = false;
       const _sseCount = _scopeFind(scope, 'raw-sse-count');
       if (_sseCount) _sseCount.textContent = interaction.response.sseEvents.length;
+      const _sseChip = _scopeFind(scope, 'sse-chip-count');
+      if (_sseChip) {
+        _sseChip.textContent = interaction.response.sseEvents.length;
+        _sseChip.closest('.vc-chip')?.classList.remove('is-empty');
+      }
       const _ssePre = _scopeFind(scope, 'raw-sse-pre');
       if (_ssePre) {
         const _evtHtml = `<span class="json-key">event:</span> ${escHtml(event.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof event.data === 'string' ? event.data : JSON.stringify(event.data))}\n`;
@@ -2883,6 +2895,12 @@
       toggleFocusMode();
       return;
     }
+    if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!detailContent.querySelector('.vc-split')) return;
+      e.preventDefault();
+      toggleDetailLayout();
+      return;
+    }
     if (e.key === 'Escape' && _focusMode) {
       e.preventDefault();
       exitFocusMode();
@@ -3107,6 +3125,64 @@
     linkifyDetail(detailContent);
   }
 
+  /* ============================================================
+     Request / response detail frame
+     ------------------------------------------------------------
+     Both panes are always on screen. Each pane's chrome is a single
+     sticky row of chips; the body hands its height to whichever
+     sections are open, and each open section scrolls internally.
+     Opening a big section therefore fills its pane rather than
+     growing it and pushing the other pane off screen.
+     ============================================================ */
+
+  const VC_DETAIL_PREFS_KEY = 'inspectorDetailPrefs';
+
+  function _loadDetailPrefs() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(VC_DETAIL_PREFS_KEY)) || {}; } catch { /* corrupt or unavailable */ }
+    return {
+      layout: saved.layout === 'columns' ? 'columns' : 'stacked',
+      // fraction of the split taken by the request pane
+      ratio: typeof saved.ratio === 'number' && saved.ratio >= 0.2 && saved.ratio <= 0.8 ? saved.ratio : 0.5,
+      open: Array.isArray(saved.open) ? saved.open : ['req:info', 'req:messages', 'resp:info', 'resp:blocks'],
+      pinned: Array.isArray(saved.pinned) ? saved.pinned : ['req:info', 'resp:info', 'resp:blocks'],
+    };
+  }
+
+  let _detailPrefs = _loadDetailPrefs();
+
+  function _saveDetailPrefs() {
+    try { localStorage.setItem(VC_DETAIL_PREFS_KEY, JSON.stringify(_detailPrefs)); } catch { /* quota / private mode */ }
+  }
+
+  const _isSecOpen = key => _detailPrefs.open.includes(key);
+  const _isSecPinned = key => _detailPrefs.pinned.includes(key);
+
+  /* Build one chip + its section. `size:'compact'` marks the small info
+     grids, which take their natural height instead of an equal share. */
+  function _secHtml(key, label, body, opts = {}) {
+    const { count = '', size = 'elastic', empty = false, countId = '', placeholder = '' } = opts;
+    const open = !empty && _isSecOpen(key);
+    // An open section with nothing in it reads as a broken panel. Append a
+    // note rather than replacing the body: #response-blocks must survive so
+    // streaming can still fill it, and CSS hides the note once it does.
+    if (placeholder) {
+      body += `<div class="vc-sec-placeholder">${escHtml(placeholder)}</div>`;
+    }
+    const cls = ['vc-sec'];
+    if (open) cls.push('is-open');
+    return {
+      chip: `<button class="vc-chip${open ? ' is-open' : ''}${_isSecPinned(key) ? ' is-pinned' : ''}${empty ? ' is-empty' : ''}"
+               data-sec="${key}"${empty ? ' disabled' : ''}
+               title="${escHtml(label)}${empty ? ' — empty' : ' • click to toggle, alt-click to pin'}">
+               <span class="vc-chip-pin"></span>${escHtml(label)}${count || countId ? `<span class="vc-chip-count"${countId ? ` id="${countId}"` : ''}>${count}</span>` : ''}
+             </button>`,
+      sec: `<div class="${cls.join(' ')}" data-sec="${key}" data-size="${size}"${opts.lazyId ? ` data-lazy-detail="${opts.lazyId}"` : ''}>
+              <div class="vc-sec-body">${body}</div>
+            </div>`,
+    };
+  }
+
   function renderTurnDetail(interaction) {
     if (interaction.isMcp) {
       return renderMcpCallDetail(interaction);
@@ -3120,15 +3196,21 @@
     const timing = interaction.timing || {};
 
     const model = req.model || 'unknown';
+    const shortModel = model.replace('claude-', '').split('-202')[0];
     const maxTokens = req.max_tokens || '--';
     const temperature = req.temperature !== undefined ? req.temperature : '--';
     const stream = interaction.isStreaming ? 'yes' : 'no';
 
-    let html = '';
+    /* ---------------- request sections ---------------- */
+    const reqChips = [];
+    const reqSecs = [];
+    const pushReq = (key, label, body, opts) => {
+      const { chip, sec } = _secHtml(key, label, body, opts);
+      reqChips.push(chip);
+      reqSecs.push(sec);
+    };
 
-    html += `<div class="detail-panel request-panel">`;
-    html += `<div class="section-title">Request</div>`;
-    html += `<div class="info-grid">
+    let infoBody = `<div class="info-grid">
       <span class="info-label">Model</span><span class="info-value">${escHtml(model)}</span>
       <span class="info-label">Max tokens</span><span class="info-value">${maxTokens}</span>
       <span class="info-label">Temperature</span><span class="info-value">${temperature}</span>
@@ -3141,153 +3223,200 @@
 
     if (interaction.subagent && (interaction.subagent.agentType || interaction.subagent.agentId || interaction.subagent.description)) {
       const sa = interaction.subagent;
-      html += `<div class="info-grid subagent-info">
+      infoBody += `<div class="info-grid subagent-info">
         <span class="info-label">Agent</span><span class="info-value" style="color:var(--cyan)">${escHtml(sa.agentType || 'unknown')}</span>
         <span class="info-label">Agent ID</span><span class="info-value">${escHtml(sa.agentId || '--')}</span>
         <span class="info-label">Description</span><span class="info-value">${escHtml(sa.description || '--')}</span>
         <span class="info-label">Sidechain</span><span class="info-value">${sa.isSidechain ? 'yes' : 'no'}</span>
       </div>`;
     }
+    pushReq('req:info', 'Info', infoBody, { size: 'compact' });
 
     if (req.system) {
       const charLen = typeof req.system === 'string' ? req.system.length : JSON.stringify(req.system).length;
-      html += `<details>
-        <summary>System Prompt ${charGauge(charLen)}</summary>
-        ${jsonBlock(req.system)}</pre>
-      </details>`;
+      pushReq('req:system', 'System', jsonBlock(req.system), { count: charGauge(charLen) });
     } else if (req._systemChars) {
-      html += `<details data-lazy-detail="${interaction.id}">
-        <summary>System Prompt ${charGauge(req._systemChars)}</summary>
-        <div class="json-block" style="opacity:0.5">Loading...</div>
-      </details>`;
-    }
-
-    if (req.thinking) {
-      html += `<details>
-        <summary>Thinking Config</summary>
-        ${jsonBlock(req.thinking)}</pre>
-      </details>`;
+      pushReq('req:system', 'System', '<div class="json-block" style="opacity:0.5">Loading...</div>',
+        { count: charGauge(req._systemChars), lazyId: interaction.id });
+    } else {
+      pushReq('req:system', 'System', '', { empty: true });
     }
 
     if (req.messages?.length > 0) {
       const msgChars = JSON.stringify(req.messages).length;
-      html += `<details>
-        <summary>Messages ${req.messages.length} ${charGauge(msgChars)}</summary>
-        <div class="json-block">${renderMessages(req.messages)}</div>
-      </details>`;
+      pushReq('req:messages', 'Messages', `<div class="json-block">${renderMessages(req.messages)}</div>`,
+        { count: `${req.messages.length} ${charGauge(msgChars)}` });
     } else if (req._messageCount > 0) {
-      html += `<details data-lazy-detail="${interaction.id}">
-        <summary>Messages ${req._messageCount}</summary>
-        <div class="json-block" style="opacity:0.5">Loading...</div>
-      </details>`;
+      pushReq('req:messages', 'Messages', '<div class="json-block" style="opacity:0.5">Loading...</div>',
+        { count: String(req._messageCount), lazyId: interaction.id });
+    } else {
+      pushReq('req:messages', 'Messages', '', { empty: true });
     }
 
     if (req.tools?.length > 0) {
       const toolChars = JSON.stringify(req.tools).length;
-      html += `<details>
-        <summary>Tools ${req.tools.length} ${charGauge(toolChars)}</summary>
-        <div class="json-block">${renderTools(req.tools)}</div>
-      </details>`;
+      pushReq('req:tools', 'Tools', `<div class="json-block">${renderTools(req.tools)}</div>`,
+        { count: `${req.tools.length} ${charGauge(toolChars)}` });
     } else if (req._toolCount > 0) {
-      html += `<details data-lazy-detail="${interaction.id}">
-        <summary>Tools ${req._toolCount}</summary>
-        <div class="json-block" style="opacity:0.5">Loading...</div>
-      </details>`;
+      pushReq('req:tools', 'Tools', '<div class="json-block" style="opacity:0.5">Loading...</div>',
+        { count: String(req._toolCount), lazyId: interaction.id });
+    } else {
+      pushReq('req:tools', 'Tools', '', { empty: true });
     }
+
+    pushReq('req:thinking', 'Thinking', req.thinking ? jsonBlock(req.thinking) : '', { empty: !req.thinking });
 
     const knownKeys = new Set(['model', 'system', 'messages', 'tools', 'tool_choice', 'max_tokens', 'temperature', 'stream', 'thinking']);
     const otherParams = {};
     for (const [k, v] of Object.entries(req)) {
       if (!knownKeys.has(k)) otherParams[k] = v;
     }
-    if (Object.keys(otherParams).length > 0) {
-      html += `<details>
-        <summary>Other Parameters</summary>
-        ${jsonBlock(otherParams)}</pre>
-      </details>`;
-    }
+    const hasOther = Object.keys(otherParams).length > 0;
+    pushReq('req:other', 'Other', hasOther ? jsonBlock(otherParams) : '', { empty: !hasOther });
 
-    html += `<button class="curl-btn" data-interaction-id="${interaction.id}">cURL</button>`;
+    /* ---------------- response sections ---------------- */
+    const respChips = [];
+    const respSecs = [];
+    const pushResp = (key, label, body, opts) => {
+      const { chip, sec } = _secHtml(key, label, body, opts);
+      respChips.push(chip);
+      respSecs.push(sec);
+    };
 
-    html += `</div>`;
-
-    html += `<div class="detail-panel response-panel">`;
     const respChars = interaction._respChars || (resp.body ? JSON.stringify(resp.body).length : (resp.sseEvents ? resp.sseEvents.reduce((n, e) => n + JSON.stringify(e.data || '').length, 0) : 0));
-    html += `<div class="section-title">Response <span id="resp-char-gauge">${respChars ? charGauge(respChars) : ''}</span></div>`;
-
     const statusOk = resp.status >= 200 && resp.status < 300;
-    html += `<div class="info-grid">
+
+    pushResp('resp:info', 'Info', `<div class="info-grid">
       <span class="info-label">Status</span><span class="info-value ${statusOk ? 'status-ok' : 'status-err'}" id="resp-status">${resp.status || '--'}</span>
       <span class="info-label">TTFB</span><span class="info-value" id="resp-ttfb">${timing.ttfb ? formatDuration(timing.ttfb) : '--'}</span>
       <span class="info-label">Duration</span><span class="info-value" id="resp-duration">${timing.duration ? formatDuration(timing.duration) : '--'}</span>
-    </div>`;
+    </div>`, { size: 'compact' });
 
-    html += `<div id="response-blocks">`;
-
+    let blocksHtml = '';
     const stdLlmResp = isStandardLlm(interaction);
     const _isLive = interaction.status === 'pending' || interaction.status === 'streaming';
     if (_isLive) {
-      // Leave empty — replay via appendSSEToDetail after DOM insertion
+      // Left empty — replayed via appendSSEToDetail after DOM insertion
     } else if (interaction.isStreaming && resp.sseEvents?.length > 0) {
-      html += renderAccumulatedBlocks(resp.sseEvents);
+      blocksHtml += renderAccumulatedBlocks(resp.sseEvents);
     } else if (resp.body) {
       if (!stdLlmResp) {
-        html += `<div class="content-block">
+        blocksHtml += `<div class="content-block">
           <div class="content-block-header">Response Body</div>
           <pre class="content-block-body json-block">${escHtml(JSON.stringify(resp.body, null, 2))}</pre>
         </div>`;
       } else if (resp.body.content) {
         const merged = mergeConsecutiveTextBlocks(resp.body.content);
-        for (const block of merged) html += renderStaticBlock(block);
+        for (const block of merged) blocksHtml += renderStaticBlock(block);
       }
       if (resp.body.type === 'error') {
-        html += `<div class="content-block">
+        blocksHtml += `<div class="content-block">
           <div class="content-block-header" style="color:var(--red)">Error</div>
           <div class="content-block-body">${escHtml(JSON.stringify(resp.body.error, null, 2))}</div>
         </div>`;
       }
     }
-
     if (resp.error) {
-      html += `<div class="content-block">
+      blocksHtml += `<div class="content-block">
         <div class="content-block-header" style="color:var(--red)">Proxy Error</div>
         <div class="content-block-body">${escHtml(resp.error)}</div>
       </div>`;
     }
 
-    html += `</div>`;
+    // Blocks is the response's main content: never chip-disabled, since it
+    // fills in live while streaming.
+    const blocksPlaceholder = _isLive
+      ? 'Waiting for the first response block\u2026'
+      : (interaction._summary ? 'Loading response\u2026' : 'No response content.');
+    pushResp('resp:blocks', 'Blocks',
+      `<div id="response-blocks">${blocksHtml}</div>`,
+      { count: respChars ? charGauge(respChars) : '', countId: 'resp-char-gauge',
+        placeholder: blocksHtml.trim() ? '' : blocksPlaceholder });
 
-    if (_isLive) {
-      html += `<details id="raw-sse-details" hidden>
-        <summary>Raw SSE Events (<span id="raw-sse-count">0</span>)</summary>
-        <pre class="json-block no-linkify" id="raw-sse-pre"></pre>
-      </details>`;
-    } else {
-      html += `<details id="raw-sse-details"${resp.sseEvents?.length > 0 ? '' : ' hidden'}>
-        <summary>Raw SSE Events (<span id="raw-sse-count">${resp.sseEvents?.length || 0}</span>)</summary>
-        <pre class="json-block no-linkify" id="raw-sse-pre">${resp.sseEvents?.length > 0 ? resp.sseEvents.map(e =>
-          `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
-        ).join('\n') : ''}</pre>
-      </details>`;
-    }
+    const sseCount = resp.sseEvents?.length || 0;
+    const ssePre = sseCount > 0 ? resp.sseEvents.map(e =>
+      `<span class="json-key">event:</span> ${escHtml(e.eventType)}\n<span class="json-string">data:</span> ${escHtml(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))}\n`
+    ).join('\n') : '';
+    // Kept as <details open> so the existing streaming code that unhides it
+    // and appends to #raw-sse-pre keeps working unchanged.
+    pushResp('resp:sse', 'Raw SSE', `<details id="raw-sse-details" open>
+        <summary>Raw SSE Events (<span id="raw-sse-count">${sseCount}</span>)</summary>
+        <pre class="json-block no-linkify" id="raw-sse-pre">${ssePre}</pre>
+      </details>`, { count: sseCount ? String(sseCount) : '', countId: 'sse-chip-count', empty: !_isLive && sseCount === 0 });
 
-    html += `</div>`;
+    /* ---------------- frame ---------------- */
+    const layout = _detailPrefs.layout;
+    const pct = Math.round(_detailPrefs.ratio * 1000) / 10;
+
+    const html = `
+      <div class="vc-detail">
+        <div class="vc-detail-toolbar">
+          <span class="vc-detail-title">
+            <span class="vc-dot ${_isLive ? 'is-live' : (statusOk ? 'is-ok' : 'is-bad')}"></span>
+            ${escHtml(interaction.subagent ? (getSubagentLabel(interaction.subagent) || interaction.subagent.agentType || 'Agent') : 'Main Thread')}
+            <span class="vc-detail-model">${escHtml(shortModel)}</span>
+          </span>
+          <span class="vc-detail-tools">
+            <button class="vc-tool-btn" id="vc-layout-toggle"
+                    title="Switch to ${layout === 'stacked' ? 'side-by-side' : 'stacked'} layout (L)">
+              ${layout === 'stacked'
+                ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="1" width="12" height="12" rx="1.5"/><line x1="7" y1="1" x2="7" y2="13"/></svg>'
+                : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="1" width="12" height="12" rx="1.5"/><line x1="1" y1="7" x2="13" y2="7"/></svg>'}
+              ${layout === 'stacked' ? 'Columns' : 'Stacked'}
+            </button>
+            <button class="vc-tool-btn curl-btn" data-interaction-id="${interaction.id}">cURL</button>
+          </span>
+        </div>
+        <div class="vc-split" data-layout="${layout}">
+          <section class="vc-pane vc-pane-request">
+            <header class="vc-pane-head">
+              <span class="vc-pane-label">Request</span>
+              <nav class="vc-chips">${reqChips.join('')}</nav>
+            </header>
+            <div class="vc-pane-body request-panel">
+              <div class="vc-pane-empty">No request section open — pick one above.</div>
+              ${reqSecs.join('')}
+            </div>
+          </section>
+          <div class="vc-split-resizer" role="separator" tabindex="0"
+               title="Drag to resize · double-click to even out"></div>
+          <section class="vc-pane vc-pane-response">
+            <header class="vc-pane-head">
+              <span class="vc-pane-label">Response</span>
+              <span class="vc-pane-meta">
+                <span class="${statusOk ? 'status-ok' : 'status-err'}" id="resp-status-chip">${resp.status || '--'}</span>
+              </span>
+              <nav class="vc-chips">${respChips.join('')}</nav>
+            </header>
+            <div class="vc-pane-body response-panel">
+              <div class="vc-pane-empty">No response section open — pick one above.</div>
+              ${respSecs.join('')}
+            </div>
+          </section>
+        </div>
+      </div>`;
 
     detailContent.innerHTML = html;
+
+    const splitEl = detailContent.querySelector('.vc-split');
+    _applySplitRatio(splitEl, _detailPrefs.ratio);
+    _bindDetailFrame(detailContent, splitEl);
+
     autoExpandSmallJsonBlocks(detailContent);
     processMarkdownBlocks(detailContent);
     linkifyDetail(detailContent);
 
-    // Lazy-load: when a "Loading..." details is toggled open, re-request full data
-    for (const el of detailContent.querySelectorAll('details[data-lazy-detail]')) {
-      el.addEventListener('toggle', () => {
-        if (!el.open) return;
+    // Lazy-load: opening a section whose data was trimmed re-requests it
+    for (const el of detailContent.querySelectorAll('[data-lazy-detail]')) {
+      el.addEventListener('vc-sec-open', () => {
         const id = el.dataset.lazyDetail;
         if (!_pendingDetailRequests.has(id)) {
           _pendingDetailRequests.add(id);
           sendWs({ type: 'interaction:getDetail', id });
         }
       }, { once: true });
+      // Already open on render — fetch straight away
+      if (el.classList.contains('is-open')) el.dispatchEvent(new CustomEvent('vc-sec-open'));
     }
 
     if (_isLive && interaction.response?.sseEvents?.length > 0) {
@@ -3295,6 +3424,159 @@
         appendSSEToDetail(event, interaction);
       }
     }
+  }
+
+  /* A pane with every section closed stays blank for every interaction
+     selected afterwards — the state is persisted. If one ends up with
+     nothing open, open its first section that actually has content. */
+  function _ensurePanesNotBlank(root) {
+    let changed = false;
+    for (const pane of root.querySelectorAll('.vc-pane')) {
+      if (pane.querySelector('.vc-sec.is-open')) continue;
+      const open = (sec) => {
+        const key = sec.dataset.sec;
+        const chip = pane.querySelector(`.vc-chip[data-sec="${CSS.escape(key)}"]`);
+        if (!chip || chip.classList.contains('is-empty')) return false;
+        sec.classList.add('is-open');
+        chip.classList.add('is-open');
+        if (!_detailPrefs.open.includes(key)) _detailPrefs.open.push(key);
+        changed = true;
+        return true;
+      };
+      const secs = [...pane.querySelectorAll('.vc-sec')];
+      // The compact info grid plus the first real content section — an info
+      // row on its own would leave most of the pane blank.
+      secs.filter(x => x.dataset.size === 'compact').some(open);
+      secs.filter(x => x.dataset.size !== 'compact').some(open);
+    }
+    if (changed) _saveDetailPrefs();
+  }
+
+  /* Write the split ratio as flex-basis on both panes. */
+  function _applySplitRatio(splitEl, ratio) {
+    if (!splitEl) return;
+    const panes = splitEl.querySelectorAll(':scope > .vc-pane');
+    if (panes.length < 2) return;
+    panes[0].style.flex = `1 1 ${(ratio * 100).toFixed(2)}%`;
+    panes[1].style.flex = `1 1 ${((1 - ratio) * 100).toFixed(2)}%`;
+  }
+
+  /* Chip toggling, pinning, layout toggle and the drag resizer. */
+  function _bindDetailFrame(root, splitEl) {
+    _ensurePanesNotBlank(root);
+
+    for (const chip of root.querySelectorAll('.vc-chip')) {
+      chip.addEventListener('click', (e) => {
+        const key = chip.dataset.sec;
+        if (!key || chip.classList.contains('is-empty')) return;
+
+        // Alt-click (or clicking the pin dot) toggles pinning instead.
+        if (e.altKey || e.target.classList.contains('vc-chip-pin')) {
+          const i = _detailPrefs.pinned.indexOf(key);
+          if (i >= 0) _detailPrefs.pinned.splice(i, 1);
+          else _detailPrefs.pinned.push(key);
+          chip.classList.toggle('is-pinned');
+          _saveDetailPrefs();
+          return;
+        }
+
+        const pane = chip.closest('.vc-pane');
+        const sec = pane?.querySelector(`.vc-sec[data-sec="${CSS.escape(key)}"]`);
+        if (!sec) return;
+        const opening = !sec.classList.contains('is-open');
+
+        if (opening) {
+          // Solo: close every other unpinned section in this pane, so the
+          // one being opened gets the pane's height instead of a sliver.
+          for (const other of pane.querySelectorAll('.vc-sec.is-open')) {
+            const otherKey = other.dataset.sec;
+            if (otherKey === key || _isSecPinned(otherKey)) continue;
+            other.classList.remove('is-open');
+            pane.querySelector(`.vc-chip[data-sec="${CSS.escape(otherKey)}"]`)?.classList.remove('is-open');
+            const oi = _detailPrefs.open.indexOf(otherKey);
+            if (oi >= 0) _detailPrefs.open.splice(oi, 1);
+          }
+          sec.classList.add('is-open');
+          chip.classList.add('is-open');
+          if (!_detailPrefs.open.includes(key)) _detailPrefs.open.push(key);
+          sec.dispatchEvent(new CustomEvent('vc-sec-open'));
+        } else {
+          sec.classList.remove('is-open');
+          chip.classList.remove('is-open');
+          const i = _detailPrefs.open.indexOf(key);
+          if (i >= 0) _detailPrefs.open.splice(i, 1);
+        }
+        _saveDetailPrefs();
+      });
+    }
+
+    const layoutBtn = root.querySelector('#vc-layout-toggle');
+    if (layoutBtn) layoutBtn.addEventListener('click', toggleDetailLayout);
+
+    const resizer = root.querySelector('.vc-split-resizer');
+    if (resizer && splitEl) _bindSplitResizer(resizer, splitEl);
+  }
+
+  function toggleDetailLayout() {
+    _detailPrefs.layout = _detailPrefs.layout === 'stacked' ? 'columns' : 'stacked';
+    _saveDetailPrefs();
+    if (state.selection) select(state.selection);
+  }
+
+  function _bindSplitResizer(resizer, splitEl) {
+    let dragging = false;
+
+    const ratioFromEvent = (e) => {
+      const rect = splitEl.getBoundingClientRect();
+      const vertical = getComputedStyle(splitEl).flexDirection === 'column';
+      const raw = vertical
+        ? (e.clientY - rect.top) / rect.height
+        : (e.clientX - rect.left) / rect.width;
+      return Math.min(0.88, Math.max(0.12, raw));
+    };
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      _detailPrefs.ratio = ratioFromEvent(e);
+      _applySplitRatio(splitEl, _detailPrefs.ratio);
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      _saveDetailPrefs();
+    };
+
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      resizer.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    resizer.addEventListener('dblclick', () => {
+      _detailPrefs.ratio = 0.5;
+      _applySplitRatio(splitEl, 0.5);
+      _saveDetailPrefs();
+    });
+
+    // Keyboard: the separator is focusable, arrows nudge it 4% at a time.
+    resizer.addEventListener('keydown', (e) => {
+      const vertical = getComputedStyle(splitEl).flexDirection === 'column';
+      const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
+      const inc = vertical ? 'ArrowDown' : 'ArrowRight';
+      if (e.key !== dec && e.key !== inc) return;
+      e.preventDefault();
+      _detailPrefs.ratio = Math.min(0.88, Math.max(0.12, _detailPrefs.ratio + (e.key === inc ? 0.04 : -0.04)));
+      _applySplitRatio(splitEl, _detailPrefs.ratio);
+      _saveDetailPrefs();
+    });
   }
 
   function renderToolDetail(interaction, toolIndex) {
@@ -3918,7 +4200,7 @@
         } else if (dIdx >= 0 && !msg.interaction) {
           // Server couldn't find full data — clear _summary so we stop retrying
           delete state.interactions[dIdx]._summary;
-          for (const el of detailContent.querySelectorAll(`details[data-lazy-detail="${msg.id}"]`)) {
+          for (const el of detailContent.querySelectorAll(`[data-lazy-detail="${msg.id}"]`)) {
             const loader = el.querySelector('.json-block');
             if (loader) loader.textContent = '(data not available)';
           }

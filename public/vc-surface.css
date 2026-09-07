@@ -1,0 +1,181 @@
+/* ============================================================
+   VC SURFACE KIT
+   Shared token + primitive layer. This is the CANONICAL home of the
+   --vc-* tokens: vistaclair-pro consumes them and adds only its own
+   (--vc-display, --vc-signal, --vcp-*) — pro depends on this file,
+   never the other way around.
+
+   Load order: vc-surface.css -> theme-{bright,dark}.css -> style.css
+   This file derives its tokens from the palette vars and supplies
+   theme-agnostic defaults; the theme file that loads after it owns
+   the raw palette and overrides the few tokens (glows, shadows)
+   that need a per-theme value.
+
+   NOT touched here (the product's identity, kept on the gradient):
+     .header-gradient-bar, .view-nav, #timeline-resizer, nav-travel
+   ============================================================ */
+
+:root {
+  /* --- type scale: sans for chrome, mono for data --- */
+  --vc-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --vc-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --font: var(--vc-sans);
+  --font-mono: var(--vc-mono);
+
+  /* --- radius scale (Pro: 6 controls / 9-10 rails+modals / 18 cards) --- */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  /* --- hairlines: one or two strong lines, many faint ones --- */
+  --vc-hair: color-mix(in srgb, var(--border) 70%, var(--bg-surface));
+  --vc-hair-2: color-mix(in srgb, var(--border) 38%, var(--bg-surface));
+  --vc-hair-strong: var(--border);
+
+  /* --- glass / ink --- */
+  --vc-glass: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+  --vc-glass-2: color-mix(in srgb, var(--bg-surface) 96%, var(--bg));
+  --vc-ink: var(--text-bright);
+  --vc-ink-2: color-mix(in srgb, var(--text) 82%, var(--text-dim));
+  --vc-dim: var(--text-dim);
+  --vc-faint: color-mix(in srgb, var(--text-dim) 60%, var(--bg-surface));
+
+  /* --- semantic state pairs --- */
+  --vc-ok: var(--green);   --vc-ok-bg: color-mix(in srgb, var(--green) 14%, var(--bg-surface));
+  --vc-warn: var(--yellow); --vc-warn-bg: color-mix(in srgb, var(--yellow) 14%, var(--bg-surface));
+  --vc-bad: var(--red);    --vc-bad-bg: color-mix(in srgb, var(--red) 12%, var(--bg-surface));
+  --vc-info: var(--accent); --vc-info-bg: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+
+  /* --- glow tokens: a bright theme mutes every effect by zeroing these --- */
+  --glow-cyan: color-mix(in srgb, var(--cyan) 38%, transparent);
+  --glow-accent: color-mix(in srgb, var(--accent) 34%, transparent);
+  --glow-purple: color-mix(in srgb, var(--purple) 32%, transparent);
+  --glow-green: color-mix(in srgb, var(--green) 26%, transparent);
+  --glow-red: color-mix(in srgb, var(--red) 26%, transparent);
+
+  /* --- elevation --- */
+  --vc-shadow:    0 1px 2px rgba(20, 26, 40, .05), 0 14px 36px -22px rgba(20, 26, 40, .18);
+  --vc-shadow-hi: 0 2px 4px rgba(20, 26, 40, .06), 0 22px 46px -24px rgba(20, 26, 40, .26);
+  --vc-inset-hi:  inset 0 1px 0 color-mix(in srgb, var(--text-bright) 6%, transparent);
+}
+
+/* --bg-deep and the deeper dark shadows are set per-theme in
+   theme-dark.css / theme-bright.css; these are the safe fallbacks. */
+:root { --bg-deep: color-mix(in srgb, var(--bg) 85%, #000); }
+
+/* ============================================================
+   PRIMITIVES
+   ============================================================ */
+
+/* --- card: the Apps-tab surface --- */
+.vc-card {
+  position: relative;
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--bg-hover) 55%, var(--bg-surface)),
+    var(--bg-surface) 58%,
+    color-mix(in srgb, var(--bg-deep) 22%, var(--bg-surface))
+  );
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-xl);
+  padding: 18px;
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.vc-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow-hi);
+  transform: translateY(-2px);
+}
+/* top accent bar — transparent until a state class lights it up */
+.vc-card::before {
+  content: '';
+  position: absolute;
+  inset: 1px 1px auto 1px;
+  height: 3px;
+  border-radius: calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px) 0 0;
+  background: transparent;
+  transition: background .18s ease;
+  pointer-events: none;
+}
+.vc-card.is-ok::before   { background: linear-gradient(90deg, var(--green), color-mix(in srgb, var(--green) 25%, transparent)); }
+.vc-card.is-warn::before { background: linear-gradient(90deg, var(--yellow), color-mix(in srgb, var(--yellow) 25%, transparent)); }
+.vc-card.is-bad::before  { background: linear-gradient(90deg, var(--red), color-mix(in srgb, var(--red) 25%, transparent)); }
+.vc-card.is-info::before { background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 25%, transparent)); }
+
+/* --- panel: flat working surface --- */
+.vc-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--vc-hair);
+  border-radius: var(--radius);
+  box-shadow: var(--vc-shadow);
+}
+
+/* --- button scale --- */
+.vc-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--vc-hair);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.vc-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+.vc-btn:disabled { opacity: .5; cursor: not-allowed; }
+.vc-btn-sm { padding: 4px 10px; font-size: 11px; }
+.vc-btn-primary {
+  background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 70%, #000 12%), var(--purple) 135%);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 12px var(--glow-accent);
+}
+.vc-btn-primary:hover { filter: brightness(1.12); }
+.vc-btn-danger { border-color: var(--vc-hair); }
+.vc-btn-danger:hover { border-color: var(--red); color: var(--red); background: var(--vc-bad-bg); }
+
+/* --- badge + status dot --- */
+.vc-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  background: var(--bg);
+  border: 1px solid var(--vc-hair);
+}
+.vc-badge.is-ok   { background: var(--vc-ok-bg);   border-color: color-mix(in srgb, var(--green) 30%, var(--border)); color: var(--green); }
+.vc-badge.is-warn { background: var(--vc-warn-bg); border-color: color-mix(in srgb, var(--yellow) 30%, var(--border)); color: var(--yellow); }
+.vc-badge.is-bad  { background: var(--vc-bad-bg);  border-color: color-mix(in srgb, var(--red) 30%, var(--border)); color: var(--red); }
+.vc-badge.is-info { background: var(--vc-info-bg); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); color: var(--accent); }
+
+.vc-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+  opacity: .4;
+}
+.vc-dot.is-ok    { background: var(--green);  opacity: 1; box-shadow: 0 0 6px var(--glow-green); }
+.vc-dot.is-bad   { background: var(--red);    opacity: 1; box-shadow: 0 0 6px var(--glow-red); }
+.vc-dot.is-live  { background: var(--accent); opacity: 1; box-shadow: 0 0 6px var(--glow-accent); animation: vc-pulse 1.6s ease-in-out infinite; }
+@keyframes vc-pulse { 50% { opacity: .45; } }
+
+/* --- gradient hairline separator --- */
+.vc-rule {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glow-accent) 30%, var(--glow-purple) 70%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-dot.is-live, .vc-card { animation: none; transition: none; }
+  .vc-card:hover { transform: none; }
+}

@@ -6,9 +6,29 @@
 
 /* Variables are defined in theme-dark.css / theme-hpflabs.css */
 
+/* ============================================================
+   MONO DATA SURFACES
+   The chrome is sans; anything that is *data* — JSON, code, SSE,
+   payloads, identifiers — stays monospaced so columns line up and
+   whitespace is honest.
+   ============================================================ */
+pre, code, kbd, samp,
+.json-block, .jt-root, .jt-children, .jt-line,
+.info-value,
+.curl-modal-body,
+#raw-sse-pre,
+.entry-model-label,
+.content-block-body.tool-use .tool-name {
+  font-family: var(--vc-mono);
+}
+/* ...but a tool block's trailing summary line is prose, not data */
+.content-block-body.tool-use .tool-name::after { font-family: var(--vc-sans); }
+
+
 html, body {
   height: 100%;
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  /* Sans for chrome, mono for data (see "MONO DATA SURFACES" below). */
+  font-family: var(--vc-sans);
   font-size: 13px;
   background: var(--bg);
   color: var(--text);
@@ -993,13 +1013,12 @@ aside#timeline {
 
 section#detail {
   flex: 1;
-  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   position: relative;
-}
-section#detail:has(.split-active) {
-  overflow: hidden;
 }
 
 /* --- Focus mode: detail panel takes over full width --- */
@@ -1086,6 +1105,25 @@ section#detail:has(#empty-state:not(.hidden)) .detail-focus-btn {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Tool/MCP/hook details are a free-flowing document and scroll here.
+     The request/response inspector mounts a .vc-detail, which is a fixed
+     frame that manages its own scrolling — see VC DETAIL FRAME below. */
+  overflow-y: auto;
+}
+#detail-content:has(> .vc-detail),
+#detail-content.split-active {
+  overflow: hidden;
+}
+/* #detail-content is a bounded flex column now, so a free-flowing tool/MCP/
+   hook detail would have its blocks squashed to fit. Keep them at their
+   natural height and let the container scroll instead. */
+#detail-content:not(:has(> .vc-detail)):not(.split-active) > * {
+  flex-shrink: 0;
+}
+/* Tool/MCP/hook details render bare blocks with no panel wrapper — give the
+   scroll container the padding the old .detail-panel used to supply. */
+#detail-content:not(:has(> .vc-detail)):not(.split-active) {
+  padding: 14px 16px;
 }
 
 #detail-content.split-active {
@@ -5980,3 +6018,791 @@ aside#timeline.parallel-mode {
 .parallel-timeline-headers { display: none; }
 .parallel-timeline-grid { display: none; }
 .parallel-grid-separator { display: none; }
+
+/* ============================================================
+   VC DETAIL FRAME — request / response inspector
+   ------------------------------------------------------------
+   The old layout stacked a natural-height .request-panel above a
+   flex:1 .response-panel inside a scrolling #detail. Once the parent
+   scrolled, flex:1 never resolved, so expanding the request pushed
+   the response below the fold.
+
+   The frame below fixes that structurally:
+     .vc-detail        fixed height, never scrolls
+     .vc-split         two panes + a resizer, stacked or side-by-side
+     .vc-pane-head     sticky: label + chip row (constant height)
+     .vc-pane-body     overflow:hidden, distributes height to open
+                       sections; each section scrolls internally
+   Opening a section therefore FILLS its pane instead of growing it.
+   ============================================================ */
+
+.vc-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* --- toolbar ------------------------------------------------ */
+.vc-detail-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  /* room for the absolutely-positioned #detail-focus-btn on the right */
+  padding-right: 42px;
+  background: var(--vc-glass-2);
+  border-bottom: 1px solid var(--vc-hair);
+}
+.vc-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vc-ink);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vc-detail-title .vc-detail-model {
+  font-family: var(--vc-mono);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.vc-detail-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.vc-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--vc-hair);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.vc-tool-btn:hover { color: var(--accent); background: var(--bg-hover); border-color: var(--border); }
+.vc-tool-btn svg { flex-shrink: 0; }
+
+/* --- split container ---------------------------------------- */
+.vc-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.vc-split[data-layout="stacked"] { flex-direction: column; }
+.vc-split[data-layout="columns"] { flex-direction: row; }
+
+.vc-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Flex basis is written inline by the resizer; these are the defaults. */
+.vc-split[data-layout="stacked"] > .vc-pane { flex: 1 1 50%; }
+.vc-split[data-layout="columns"] > .vc-pane { flex: 1 1 50%; }
+
+.vc-pane-request  { background: var(--request-panel-bg); }
+.vc-pane-response { background: var(--response-panel-bg); }
+
+/* --- resizer (mirrors #timeline-resizer, minus the gradient) --- */
+.vc-split-resizer {
+  flex-shrink: 0;
+  background: var(--vc-hair-strong);
+  position: relative;
+  transition: background .15s;
+}
+.vc-split[data-layout="stacked"] > .vc-split-resizer { height: 4px; cursor: row-resize; }
+.vc-split[data-layout="columns"] > .vc-split-resizer { width: 4px; cursor: col-resize; }
+.vc-split-resizer::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+}
+.vc-split-resizer:hover,
+.vc-split-resizer.dragging { background: var(--accent); box-shadow: 0 0 8px var(--glow-accent); }
+.vc-split-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* centred grip so the divider reads as draggable */
+.vc-split-resizer::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  border-radius: 999px;
+  /* --text-dim is lighter than --border on dark and darker on light, so the
+     grip stays visible in both themes without a per-theme override. */
+  background: var(--text-dim);
+  transition: background .15s;
+}
+.vc-split[data-layout="stacked"] > .vc-split-resizer::before { width: 36px; height: 2px; }
+.vc-split[data-layout="columns"] > .vc-split-resizer::before { width: 2px; height: 36px; }
+.vc-split-resizer:hover::before,
+.vc-split-resizer.dragging::before { background: var(--bg-surface); }
+
+/* --- pane head: label + chips, always one row tall ----------- */
+.vc-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  background: var(--vc-glass-2);
+  border-bottom: 1px solid var(--vc-hair);
+}
+.vc-pane-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--accent);
+}
+.vc-pane-response .vc-pane-label { color: var(--green); }
+
+.vc-pane-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--vc-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.vc-pane-meta .status-ok  { color: var(--green); }
+.vc-pane-meta .status-err { color: var(--red); }
+
+/* Chip row scrolls horizontally rather than wrapping, so the head
+   stays exactly one row tall no matter how many sections exist. */
+.vc-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* A hairline scrollbar, so an overflowing chip row admits it has more. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--vc-hair-strong) transparent;
+  padding-bottom: 2px;
+}
+.vc-chips::-webkit-scrollbar { height: 3px; }
+.vc-chips::-webkit-scrollbar-track { background: transparent; }
+.vc-chips::-webkit-scrollbar-thumb { background: var(--vc-hair-strong); border-radius: 3px; }
+
+.vc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.vc-chip:hover { color: var(--text); background: var(--bg-hover); }
+.vc-chip.is-open {
+  color: var(--vc-ink);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+.vc-pane-response .vc-chip.is-open {
+  background: color-mix(in srgb, var(--green) 14%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--green) 34%, var(--border));
+}
+.vc-chip.is-empty { opacity: .4; cursor: default; }
+.vc-chip.is-empty:hover { color: var(--text-dim); background: transparent; }
+
+/* Pin: alt-click the chip, or click the dot. A pinned section stays
+   open when another chip is opened. */
+.vc-chip-pin {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--vc-faint);
+  transition: background .15s, border-color .15s;
+}
+.vc-chip.is-pinned .vc-chip-pin { background: var(--accent); border-color: var(--accent); }
+.vc-pane-response .vc-chip.is-pinned .vc-chip-pin { background: var(--green); border-color: var(--green); }
+.vc-chip:not(.is-open) .vc-chip-pin { opacity: .35; }
+
+.vc-chip-count {
+  font-family: var(--vc-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.vc-chip.is-open .vc-chip-count { color: inherit; opacity: .75; }
+
+/* --- pane body: hands height to open sections, never scrolls --- */
+.vc-pane-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vc-sec {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--vc-hair-2);
+}
+.vc-sec:last-child { border-bottom: none; }
+.vc-sec.is-open { display: flex; }
+
+/* Elastic sections share the leftover height and scroll internally. */
+.vc-sec.is-open { flex: 1 1 0; }
+/* Compact sections (the info grids) take only what they need. */
+.vc-sec.is-open[data-size="compact"] { flex: 0 0 auto; max-height: 45%; }
+
+.vc-sec-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.vc-sec[data-size="compact"] > .vc-sec-body { padding: 9px 12px; }
+.vc-sec-body > .json-block { border-radius: var(--radius-sm); }
+
+/* Nothing open in a pane — say so instead of showing a void. */
+.vc-pane-empty {
+  display: none;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font-size: 11px;
+  color: var(--vc-faint);
+}
+.vc-pane-body:not(:has(.vc-sec.is-open)) > .vc-pane-empty { display: flex; }
+
+/* --- content inside the frame -------------------------------- */
+.vc-detail .info-grid { margin-bottom: 0; }
+.vc-detail .info-grid + .info-grid {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--vc-hair-2);
+}
+.vc-detail .section-title {
+  margin: 0 0 7px;
+  border-bottom: 1px solid var(--vc-hair-2);
+}
+.vc-detail #response-blocks { gap: 8px; }
+.vc-detail .content-block,
+.vc-detail .content-block-body.tool-use {
+  border-color: var(--vc-hair);
+  border-radius: var(--radius);
+}
+.vc-detail .content-block-body { max-height: none; }
+.vc-detail .content-block-body.tool-use > .json-block { max-height: none; }
+
+/* The raw-SSE section is a normal section now, not a bottom drawer. */
+.vc-detail #raw-sse-details {
+  display: block;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+.vc-detail #raw-sse-details > summary { display: none; }
+.vc-detail #raw-sse-details[open] #raw-sse-pre,
+.vc-detail #raw-sse-pre {
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+}
+
+/* Focus button sits in the toolbar strip rather than over the content. */
+.vc-detail ~ .detail-focus-btn,
+section#detail:has(.vc-detail) .detail-focus-btn {
+  top: 7px;
+  right: 10px;
+  opacity: .7;
+  background: var(--bg-surface);
+  border-color: var(--vc-hair);
+  border-radius: var(--radius);
+}
+
+/* --- narrow viewports: side-by-side is unreadable ------------- */
+@media (max-width: 1100px) {
+  .vc-split[data-layout="columns"] { flex-direction: column; }
+  .vc-split[data-layout="columns"] > .vc-pane { flex: 1 1 50%; }
+  .vc-split[data-layout="columns"] > .vc-split-resizer { height: 4px; width: auto; cursor: row-resize; }
+}
+
+/* --- frame-local overrides for shared widgets ----------------- */
+/* charGauge() positions itself absolutely for the old <summary> rows;
+   inside a chip it must flow inline. */
+.vc-chip .char-gauge {
+  position: static;
+  left: auto;
+  gap: 4px;
+}
+.vc-chip .char-gauge svg { display: block; }
+.vc-chip .char-count {
+  font-size: 10px;
+  /* --text-dim on a tinted chip is unreadable; inherit the chip's own ink */
+  color: inherit;
+  opacity: .8;
+}
+.vc-chip:not(.is-open) .char-count { color: var(--text-dim); opacity: 1; }
+
+/* cURL moved from a floating overlay into the toolbar. */
+.vc-detail-tools .curl-btn {
+  position: static;
+  top: auto;
+  right: auto;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+/* The legacy .request-panel / .response-panel rules still apply to the pane
+   bodies (the classes are kept so streaming/scroll code finds them). Strip
+   the bits that assumed the old stacked-document layout. */
+.vc-detail .vc-pane-body.request-panel {
+  border-bottom: none;
+  flex: 1;
+  padding: 0;
+}
+.vc-detail .vc-pane-body.response-panel {
+  flex: 1;
+  padding: 0;
+}
+
+/* ============================================================
+   TIMELINE — surface-kit polish
+   Hairline separators instead of relying on hover alone, and a left
+   accent bar on the selected entry rather than a flat fill.
+   ============================================================ */
+aside#timeline {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 4%, var(--bg-surface)),
+    var(--bg-surface) 40%);
+  border-right: 1px solid var(--vc-hair);
+}
+
+#timeline-header {
+  border-bottom: 1px solid var(--vc-hair-2);
+  background: var(--vc-glass-2);
+}
+
+.timeline-entry {
+  position: relative;
+  border-bottom: 1px solid var(--vc-hair-2);
+  transition: background .12s, box-shadow .12s;
+}
+.timeline-entry::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background .12s;
+}
+.timeline-entry.selected {
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg-surface));
+}
+.timeline-entry.selected::before {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--glow-accent);
+}
+
+#timeline-footer {
+  border-top: 1px solid var(--vc-hair);
+  background: var(--vc-glass-2);
+}
+#timeline-total-time,
+#timeline-total-cost { font-variant-numeric: tabular-nums; }
+
+/* Status badges pick up the surface kit's tinted-pill treatment. */
+.entry-badge {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.badge-complete { border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.badge-error    { border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+.badge-pending  { border-color: color-mix(in srgb, var(--yellow) 30%, transparent); }
+.badge-streaming {
+  border-color: color-mix(in srgb, var(--blue) 34%, transparent);
+  box-shadow: 0 0 8px var(--glow-accent);
+}
+
+/* A compact section capped at 45% leaves dead space when it is the only
+   thing open — let it take the whole pane in that case. */
+.vc-pane-body:not(:has(.vc-sec.is-open[data-size="elastic"])) > .vc-sec.is-open[data-size="compact"] {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+/* ============================================================
+   SURFACE-KIT MIGRATION — remaining tabs
+   ------------------------------------------------------------
+   Reference, Tools & MCP, Models, Rules, Directories, CLIs and the
+   Chat runner were all built on the same flat recipe:
+     background: var(--bg-surface); border: 1px solid var(--border);
+     border-radius: 4px;  /* no shadow, no hover, no hierarchy */
+   Rather than rewrite ~300 component rules, this layer retargets
+   them by *shape* onto the surface kit, exactly as the inspector
+   frame does above. Gradient chrome (.view-nav, .header-gradient-bar,
+   #timeline-resizer) is deliberately untouched.
+   ============================================================ */
+
+/* --- A. Elevated cards ---------------------------------------
+   Standalone, clickable surfaces: the Apps-tab treatment. */
+.ref-card,
+.mm-catalog-card {
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--bg-hover) 55%, var(--bg-surface)),
+    var(--bg-surface) 58%,
+    color-mix(in srgb, var(--bg-deep) 22%, var(--bg-surface))
+  );
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.ref-card:hover,
+.mm-catalog-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow-hi);
+  transform: translateY(-2px);
+}
+.ref-card.open {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  transform: none;
+}
+.ref-card.disabled { box-shadow: none; }
+.ref-card.disabled:hover { transform: none; box-shadow: none; }
+.ref-card-header { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.ref-card.open .ref-card-header { border-bottom: 1px solid var(--vc-hair-2); }
+
+/* --- B. Dense rows -------------------------------------------
+   List entries: hairline + a whisper of elevation, tinted on hover.
+   No lift — a lifting row in a long list reads as jitter. */
+.cap-list-item,
+.cli-new-menu-item {
+  border-color: var(--vc-hair);
+  border-radius: var(--radius);
+  box-shadow: var(--vc-shadow);
+  transition: background .15s, border-color .15s;
+}
+.cap-list-item:hover,
+.cli-new-menu-item:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+
+/* Models view: provider strip is a panel, each model is a card. */
+.provider-header {
+  background: var(--vc-glass-2);
+  border-color: var(--vc-hair);
+  border-radius: var(--radius);
+  box-shadow: var(--vc-shadow);
+}
+.model-card {
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--bg-hover) 55%, var(--bg-surface)),
+    var(--bg-surface) 58%,
+    color-mix(in srgb, var(--bg-deep) 22%, var(--bg-surface))
+  );
+  border-color: color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.model-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: var(--vc-inset-hi), var(--vc-shadow-hi);
+  transform: translateY(-2px);
+}
+.model-card.disabled,
+.model-card.disabled:hover { box-shadow: none; transform: none; }
+
+/* --- C. Static panels ----------------------------------------- */
+.cap-editor,
+.chat-files-panel,
+.dir-file-panel,
+.cli-container,
+.ref-lifecycle,
+.ref-params {
+  border-color: var(--vc-hair);
+  border-radius: var(--radius);
+  box-shadow: var(--vc-shadow);
+}
+
+/* --- D. Modals ------------------------------------------------
+   One shape for every dialog: hairline shell, accent-tinted edge,
+   the kit's high elevation, and a blurred backdrop. */
+.cap-modal,
+.confirm-modal,
+.modal-box,
+.alert-modal,
+.claude-auth-modal,
+.curl-modal,
+.dir-search-modal {
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--vc-shadow-hi), 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.cap-modal-backdrop,
+.confirm-modal-backdrop,
+.alert-modal-backdrop,
+.curl-modal-overlay,
+.modal-backdrop {
+  background: color-mix(in srgb, var(--bg-deep) 62%, transparent);
+  backdrop-filter: blur(3px);
+}
+.cap-modal-header,
+.modal-header,
+.curl-modal-header {
+  border-bottom: 1px solid var(--vc-hair);
+  background: var(--vc-glass-2);
+}
+.cap-modal-footer,
+.modal-footer { border-top: 1px solid var(--vc-hair); }
+
+/* --- E. Buttons -----------------------------------------------
+   The kit's .btn scale. .view-tab / .view-tab-new / .cli-model-cog
+   live on the gradient and beat this on specificity, so they keep
+   their translucent-on-gradient treatment. */
+button,
+.cap-action-btn,
+.cap-new-btn,
+.cap-edit-btn,
+.cap-dup-btn,
+.cap-cancel-btn,
+.dir-cmd-btn,
+.dir-close-btn,
+.dir-download-btn,
+.dir-search-btn,
+.model-toggle-btn,
+.confirm-modal-cancel {
+  background: var(--bg-surface);
+  border: 1px solid var(--vc-hair);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+button:hover,
+.cap-action-btn:hover,
+.cap-new-btn:hover,
+.cap-edit-btn:hover,
+.cap-dup-btn:hover,
+.cap-cancel-btn:hover,
+.dir-cmd-btn:hover,
+.dir-close-btn:hover,
+.dir-download-btn:hover,
+.dir-search-btn:hover,
+.model-toggle-btn:hover,
+.confirm-modal-cancel:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Primary: the one affirmative action on a surface. */
+.cap-save-btn,
+.ask-confirm-yes {
+  background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 70%, #000 12%), var(--purple) 135%);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 12px var(--glow-accent);
+}
+.cap-save-btn:hover,
+.ask-confirm-yes:hover { filter: brightness(1.12); background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 70%, #000 12%), var(--purple) 135%); border-color: transparent; color: #fff; }
+
+/* Destructive: outlined until hovered, then committed. */
+.cap-del-btn,
+.confirm-modal-delete,
+.cap-modal-file-remove,
+.dir-listing-delete-bar button {
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+  background: var(--vc-bad-bg);
+  color: var(--red);
+}
+.cap-del-btn:hover,
+.confirm-modal-delete:hover,
+.cap-modal-file-remove:hover,
+.dir-listing-delete-bar button:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+/* --- F. Form controls ----------------------------------------- */
+.cap-form input,
+.cap-form textarea,
+.cap-form select,
+.cap-modal-form-row input,
+.cap-modal-form-row textarea,
+.cap-modal-form-row select,
+.dir-search-field input,
+.dir-search-field select,
+.pm-field-row input,
+.pm-field-row select,
+.provider-key-input {
+  background: var(--bg);
+  border: 1px solid var(--vc-hair);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color .15s, box-shadow .15s;
+}
+.cap-form input:focus,
+.cap-form textarea:focus,
+.cap-form select:focus,
+.cap-modal-form-row input:focus,
+.cap-modal-form-row textarea:focus,
+.cap-modal-form-row select:focus,
+.dir-search-field input:focus,
+.dir-search-field select:focus,
+.pm-field-row input:focus,
+.pm-field-row select:focus,
+.provider-key-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* --- G. Micro-labels ------------------------------------------
+   Section headers become the kit's uppercase hairline label. */
+.cap-section-header,
+.ref-category-title,
+.dir-listing-col-header,
+.chat-files-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+}
+.ref-category-title { border-bottom: 1px solid var(--vc-hair-2); padding-bottom: 5px; }
+
+/* --- H. Badges ------------------------------------------------- */
+.ref-tag,
+.cap-model-new-badge,
+.cap-model-deprecated-badge,
+.cap-model-disabled-badge,
+.cap-model-retired-badge {
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 600;
+}
+.view-tab-count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- I. Hairlines ----------------------------------------------
+   Internal dividers drop to a hairline so the strong --border is
+   reserved for the edges that actually separate regions. */
+.cap-list-actions,
+.cap-modal-file-entry,
+.cap-modal-file-header,
+.dir-listing-entry,
+.dir-entry,
+.dir-breadcrumbs,
+.ref-lc-step,
+.chat-files-header {
+  border-color: var(--vc-hair-2);
+}
+.dir-listing-entry:hover,
+.dir-entry:hover { background: var(--bg-hover); }
+
+/* --- J. Resizers ----------------------------------------------- */
+.dir-h-resizer { background: var(--vc-hair-strong); transition: background .15s; }
+.dir-h-resizer:hover, .dir-h-resizer.dragging { background: var(--accent); box-shadow: 0 0 8px var(--glow-accent); }
+
+/* --- K. Actions hosted on the gradient nav ---------------------
+   A solid surface chip on the rainbow reads as a foreign object.
+   Match the translucent treatment .view-tab already uses there. */
+.view-nav .view-nav-action,
+.view-nav button.cap-action-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.85);
+  border-radius: var(--radius);
+}
+.view-nav .view-nav-action:hover,
+.view-nav button.cap-action-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+/* --- Empty-section notes ---------------------------------------
+   A section that is open but has nothing in it yet (a summary whose
+   detail is still in flight, a stream before its first block) would
+   otherwise be a large blank panel. */
+.vc-sec-placeholder {
+  padding: 14px 2px;
+  font-size: 11px;
+  color: var(--vc-faint);
+  font-style: italic;
+}
+/* Once the stream fills #response-blocks, the note removes itself. */
+.vc-sec-body:has(> #response-blocks:not(:empty)) > .vc-sec-placeholder {
+  display: none;
+}
+
+/* --- Compact sections must not clip ----------------------------
+   The request info grid is 8 label/value pairs; at 45% of a short
+   pane it was cut off mid-row. Pair it two-up so it is half as tall,
+   and raise the cap so the last row always lands. */
+.vc-detail .vc-pane-request .info-grid {
+  grid-template-columns: auto 1fr auto 1fr;
+  gap: 4px 14px;
+}
+.vc-split[data-layout="columns"] .vc-pane-request .info-grid,
+.vc-pane-request .info-grid.subagent-info {
+  grid-template-columns: auto 1fr;
+}
+.vc-sec.is-open[data-size="compact"] { max-height: 62%; }
+
+/* --- A pane can never collapse to just its head ----------------
+   A stored split ratio at the extreme used to leave one pane as a
+   bare header strip with no visible content. */
+.vc-split[data-layout="stacked"] > .vc-pane { min-height: 104px; }
+.vc-split[data-layout="columns"] > .vc-pane { min-width: 240px; }

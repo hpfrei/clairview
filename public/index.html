@@ -4,6 +4,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>vistaclair</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- The kit faces. Every rule declares a system fallback stack, so offline
+       hosts just look plainer. (vistaclair-pro adds only its display face.) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <!-- Order matters: vc-surface derives its tokens from the palette, so it
+       loads first and the theme file overrides its glow/shadow tokens. -->
+  <link rel="stylesheet" href="vc-surface.css">
   <link rel="stylesheet" id="themeLink" href="theme-bright.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="mcp.css">

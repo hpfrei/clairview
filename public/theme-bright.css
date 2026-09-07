@@ -4,6 +4,7 @@
   --bg-surface: #ffffff;
   --bg-hover: #eeeee8;
   --bg-selected: #dde4f0;
+  --bg-deep: #d8d8d0;
   --border: #c0c0b8;
   --text: #2c2c2c;
   --text-dim: #777770;
@@ -64,7 +65,15 @@ details {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-/* Scrollbar for light theme */
-::-webkit-scrollbar-track { background: var(--scrollbar-track); }
-::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
-::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+/* Surface-kit overrides: on paper, glow reads as smudge — mute it hard
+   and lighten the elevation so cards float rather than bruise. */
+:root {
+  --glow-cyan:   color-mix(in srgb, var(--cyan) 14%, transparent);
+  --glow-accent: color-mix(in srgb, var(--accent) 13%, transparent);
+  --glow-purple: color-mix(in srgb, var(--purple) 12%, transparent);
+  --glow-green:  color-mix(in srgb, var(--green) 11%, transparent);
+  --glow-red:    color-mix(in srgb, var(--red) 11%, transparent);
+  --vc-shadow:    0 1px 2px rgba(40, 44, 58, .05), 0 12px 30px -20px rgba(40, 44, 58, .16);
+  --vc-shadow-hi: 0 2px 5px rgba(40, 44, 58, .07), 0 20px 40px -22px rgba(40, 44, 58, .22);
+  --vc-inset-hi:  inset 0 1px 0 rgba(255, 255, 255, .7);
+}
